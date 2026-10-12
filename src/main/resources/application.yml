@@ -1,0 +1,44 @@
+# Local MySQL account. Credentials are fixed here so a leftover
+# NSURE_DB_PASSWORD in the terminal cannot override them.
+spring:
+  application:
+    name: nsure-be
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/nsure?createDatabaseIfNotExists=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8
+    username: nsure
+    password: nsure
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+        timezone:
+          default_storage: NORMALIZE_UTC
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: 8080
+  error:
+    include-message: never
+    include-stacktrace: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+nsure:
+  audit:
+    system-user-id: 1
+    max-command-json-length: 8000
+  maker-checker:
+    allow-same-user: false

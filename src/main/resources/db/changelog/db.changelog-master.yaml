@@ -1,0 +1,710 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001-create-app-office
+      author: nsure
+      comment: Offices carry a hierarchy prefix. Head office is "." so it matches every child.
+      changes:
+        - createTable:
+            tableName: app_office
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                    primaryKeyName: pk_app_office
+              - column:
+                  name: name
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uk_app_office_name
+              - column:
+                  name: hierarchy
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_by
+                  type: bigint
+              - column:
+                  name: created_date
+                  type: datetime
+              - column:
+                  name: last_modified_by
+                  type: bigint
+              - column:
+                  name: last_modified_date
+                  type: datetime
+
+  - changeSet:
+      id: 002-create-app-user
+      author: nsure
+      changes:
+        - createTable:
+            tableName: app_user
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                    primaryKeyName: pk_app_user
+              - column:
+                  name: username
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uk_app_user_username
+              - column:
+                  name: password
+                  type: varchar(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: enabled
+                  type: boolean
+                  defaultValueBoolean: true
+                  constraints:
+                    nullable: false
+              - column:
+                  name: office_id
+                  type: bigint
+              - column:
+                  name: created_by
+                  type: bigint
+              - column:
+                  name: created_date
+                  type: datetime
+              - column:
+                  name: last_modified_by
+                  type: bigint
+              - column:
+                  name: last_modified_date
+                  type: datetime
+
+  - changeSet:
+      id: 003-create-app-role
+      author: nsure
+      changes:
+        - createTable:
+            tableName: app_role
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                    primaryKeyName: pk_app_role
+              - column:
+                  name: name
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uk_app_role_name
+              - column:
+                  name: description
+                  type: varchar(500)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: disabled
+                  type: boolean
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_by
+                  type: bigint
+              - column:
+                  name: created_date
+                  type: datetime
+              - column:
+                  name: last_modified_by
+                  type: bigint
+              - column:
+                  name: last_modified_date
+                  type: datetime
+
+  - changeSet:
+      id: 004-create-app-permission
+      author: nsure
+      changes:
+        - createTable:
+            tableName: app_permission
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                    primaryKeyName: pk_app_permission
+              - column:
+                  name: grouping
+                  type: varchar(45)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: code
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uk_app_permission_code
+              - column:
+                  name: entity_name
+                  type: varchar(100)
+              - column:
+                  name: action_name
+                  type: varchar(100)
+              - column:
+                  name: can_maker_checker
+                  type: boolean
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+
+  - changeSet:
+      id: 005-create-app-user-role
+      author: nsure
+      changes:
+        - createTable:
+            tableName: app_user_role
+            columns:
+              - column:
+                  name: user_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+                    primaryKeyName: pk_app_user_role
+              - column:
+                  name: role_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+                    primaryKeyName: pk_app_user_role
+
+  - changeSet:
+      id: 006-create-app-role-permission
+      author: nsure
+      changes:
+        - createTable:
+            tableName: app_role_permission
+            columns:
+              - column:
+                  name: role_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+                    primaryKeyName: pk_app_role_permission
+              - column:
+                  name: permission_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+                    primaryKeyName: pk_app_role_permission
+
+  - changeSet:
+      id: 007-create-command-source
+      author: nsure
+      changes:
+        - createTable:
+            tableName: command_source
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                    primaryKeyName: pk_command_source
+              - column:
+                  name: action_name
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: entity_name
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: resource_id
+                  type: bigint
+              - column:
+                  name: office_id
+                  type: bigint
+              - column:
+                  name: command_as_json
+                  type: clob
+              - column:
+                  name: result_json
+                  type: clob
+              - column:
+                  name: result_status
+                  type: int
+              - column:
+                  name: maker_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: made_on
+                  type: datetime
+                  constraints:
+                    nullable: false
+              - column:
+                  name: checker_id
+                  type: bigint
+              - column:
+                  name: checked_on
+                  type: datetime
+              - column:
+                  name: status
+                  type: varchar(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: idempotency_key
+                  type: varchar(64)
+        - addUniqueConstraint:
+            constraintName: uk_command_idem
+            tableName: command_source
+            columnNames: action_name, entity_name, idempotency_key
+
+  - changeSet:
+      id: 008-add-foreign-keys
+      author: nsure
+      changes:
+        - addForeignKeyConstraint:
+            constraintName: fk_app_user_office
+            baseTableName: app_user
+            baseColumnNames: office_id
+            referencedTableName: app_office
+            referencedColumnNames: id
+        - addForeignKeyConstraint:
+            constraintName: fk_app_user_role_user
+            baseTableName: app_user_role
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+        - addForeignKeyConstraint:
+            constraintName: fk_app_user_role_role
+            baseTableName: app_user_role
+            baseColumnNames: role_id
+            referencedTableName: app_role
+            referencedColumnNames: id
+        - addForeignKeyConstraint:
+            constraintName: fk_app_role_permission_role
+            baseTableName: app_role_permission
+            baseColumnNames: role_id
+            referencedTableName: app_role
+            referencedColumnNames: id
+        - addForeignKeyConstraint:
+            constraintName: fk_app_role_permission_permission
+            baseTableName: app_role_permission
+            baseColumnNames: permission_id
+            referencedTableName: app_permission
+            referencedColumnNames: id
+        - addForeignKeyConstraint:
+            constraintName: fk_command_source_office
+            baseTableName: command_source
+            baseColumnNames: office_id
+            referencedTableName: app_office
+            referencedColumnNames: id
+        - addForeignKeyConstraint:
+            constraintName: fk_command_source_maker
+            baseTableName: command_source
+            baseColumnNames: maker_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+        - addForeignKeyConstraint:
+            constraintName: fk_command_source_checker
+            baseTableName: command_source
+            baseColumnNames: checker_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+
+  - changeSet:
+      id: 009-add-indexes
+      author: nsure
+      changes:
+        - createIndex:
+            indexName: idx_app_user_office
+            tableName: app_user
+            columns:
+              - column:
+                  name: office_id
+        - createIndex:
+            indexName: idx_command_source_maker
+            tableName: command_source
+            columns:
+              - column:
+                  name: maker_id
+        - createIndex:
+            indexName: idx_command_source_made_on
+            tableName: command_source
+            columns:
+              - column:
+                  name: made_on
+        - createIndex:
+            indexName: idx_command_source_lookup
+            tableName: command_source
+            columns:
+              - column:
+                  name: entity_name
+              - column:
+                  name: action_name
+              - column:
+                  name: resource_id
+
+  - changeSet:
+      id: 010-seed-offices
+      author: nsure
+      changes:
+        - insert:
+            tableName: app_office
+            columns:
+              - column:
+                  name: name
+                  value: Head Office
+              - column:
+                  name: hierarchy
+                  value: "."
+        - insert:
+            tableName: app_office
+            columns:
+              - column:
+                  name: name
+                  value: Gaborone Branch
+              - column:
+                  name: hierarchy
+                  value: "."
+        - sql:
+            sql: UPDATE app_office SET hierarchy = CONCAT('.', id, '.') WHERE name = 'Gaborone Branch'
+
+  - changeSet:
+      id: 011-seed-permissions
+      author: nsure
+      comment: Permission codes are ACTION_ENTITY. Do not invent codes only in Java.
+      changes:
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: special}
+              - column: {name: code, value: ALL_FUNCTIONS}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: special}
+              - column: {name: code, value: ALL_FUNCTIONS_READ}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: special}
+              - column: {name: code, value: CHECKER_SUPER_USER}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: portfolio}
+              - column: {name: code, value: CREATE_CLIENT}
+              - column: {name: entity_name, value: CLIENT}
+              - column: {name: action_name, value: CREATE}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: portfolio}
+              - column: {name: code, value: READ_CLIENT}
+              - column: {name: entity_name, value: CLIENT}
+              - column: {name: action_name, value: READ}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: portfolio}
+              - column: {name: code, value: UPDATE_CLIENT}
+              - column: {name: entity_name, value: CLIENT}
+              - column: {name: action_name, value: UPDATE}
+              - column: {name: can_maker_checker, valueBoolean: true}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: portfolio}
+              - column: {name: code, value: CHECKER_UPDATE_CLIENT}
+              - column: {name: entity_name, value: CLIENT}
+              - column: {name: action_name, value: CHECKER_UPDATE}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: organisation}
+              - column: {name: code, value: READ_AUDIT}
+              - column: {name: entity_name, value: AUDIT}
+              - column: {name: action_name, value: READ}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: organisation}
+              - column: {name: code, value: CREATE_ROLE}
+              - column: {name: entity_name, value: ROLE}
+              - column: {name: action_name, value: CREATE}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: organisation}
+              - column: {name: code, value: READ_ROLE}
+              - column: {name: entity_name, value: ROLE}
+              - column: {name: action_name, value: READ}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: organisation}
+              - column: {name: code, value: UPDATE_ROLE}
+              - column: {name: entity_name, value: ROLE}
+              - column: {name: action_name, value: UPDATE}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: organisation}
+              - column: {name: code, value: PERMISSIONS_ROLE}
+              - column: {name: entity_name, value: ROLE}
+              - column: {name: action_name, value: PERMISSIONS}
+              - column: {name: can_maker_checker, valueBoolean: true}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: organisation}
+              - column: {name: code, value: CHECKER_PERMISSIONS_ROLE}
+              - column: {name: entity_name, value: ROLE}
+              - column: {name: action_name, value: CHECKER_PERMISSIONS}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: organisation}
+              - column: {name: code, value: CREATE_USER}
+              - column: {name: entity_name, value: USER}
+              - column: {name: action_name, value: CREATE}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: organisation}
+              - column: {name: code, value: READ_USER}
+              - column: {name: entity_name, value: USER}
+              - column: {name: action_name, value: READ}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: organisation}
+              - column: {name: code, value: UPDATE_USER}
+              - column: {name: entity_name, value: USER}
+              - column: {name: action_name, value: UPDATE}
+              - column: {name: can_maker_checker, valueBoolean: true}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: organisation}
+              - column: {name: code, value: CHECKER_UPDATE_USER}
+              - column: {name: entity_name, value: USER}
+              - column: {name: action_name, value: CHECKER_UPDATE}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: organisation}
+              - column: {name: code, value: READ_PERMISSION}
+              - column: {name: entity_name, value: PERMISSION}
+              - column: {name: action_name, value: READ}
+              - column: {name: can_maker_checker, valueBoolean: false}
+        - insert:
+            tableName: app_permission
+            columns:
+              - column: {name: grouping, value: organisation}
+              - column: {name: code, value: READ_OFFICE}
+              - column: {name: entity_name, value: OFFICE}
+              - column: {name: action_name, value: READ}
+              - column: {name: can_maker_checker, valueBoolean: false}
+
+  - changeSet:
+      id: 012-seed-roles
+      author: nsure
+      changes:
+        - insert:
+            tableName: app_role
+            columns:
+              - column:
+                  name: name
+                  value: Super user
+              - column:
+                  name: description
+                  value: Every permission, including writes, and checker approval.
+              - column:
+                  name: disabled
+                  valueBoolean: false
+
+  - changeSet:
+      id: 013-seed-users
+      author: nsure
+      comment: System user is inserted first so its id is 1. Dev admin password is "password"; change it before any shared environment.
+      changes:
+        - insert:
+            tableName: app_user
+            columns:
+              - column:
+                  name: username
+                  value: system
+              - column:
+                  name: password
+                  value: '$2a$10$Knn9.ZEh3YSGc3kcHsa2yuC/y6.P8ZnW3Pr5tuD0pQFMypM5Lxfsa'
+              - column:
+                  name: enabled
+                  valueBoolean: false
+              - column:
+                  name: office_id
+                  valueComputed: "(SELECT id FROM app_office WHERE name = 'Head Office')"
+        - insert:
+            tableName: app_user
+            columns:
+              - column:
+                  name: username
+                  value: admin
+              - column:
+                  name: password
+                  value: '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG'
+              - column:
+                  name: enabled
+                  valueBoolean: true
+              - column:
+                  name: office_id
+                  valueComputed: "(SELECT id FROM app_office WHERE name = 'Head Office')"
+
+  - changeSet:
+      id: 014-seed-user-roles
+      author: nsure
+      changes:
+        - insert:
+            tableName: app_user_role
+            columns:
+              - column:
+                  name: user_id
+                  valueComputed: "(SELECT id FROM app_user WHERE username = 'admin')"
+              - column:
+                  name: role_id
+                  valueComputed: "(SELECT id FROM app_role WHERE name = 'Super user')"
+
+  - changeSet:
+      id: 015-seed-role-permissions
+      author: nsure
+      changes:
+        - insert:
+            tableName: app_role_permission
+            columns:
+              - column:
+                  name: role_id
+                  valueComputed: "(SELECT id FROM app_role WHERE name = 'Super user')"
+              - column:
+                  name: permission_id
+                  valueComputed: "(SELECT id FROM app_permission WHERE code = 'ALL_FUNCTIONS')"
+        - insert:
+            tableName: app_role_permission
+            columns:
+              - column:
+                  name: role_id
+                  valueComputed: "(SELECT id FROM app_role WHERE name = 'Super user')"
+              - column:
+                  name: permission_id
+                  valueComputed: "(SELECT id FROM app_permission WHERE code = 'CHECKER_SUPER_USER')"
+
+  # MySQL stores Liquibase boolean as tinyint and datetime without fractional seconds.
+  # Hibernate validates those as bit and datetime(6).
+  - changeSet:
+      id: 016-mysql-hibernate-column-types
+      author: nsure
+      dbms: mysql
+      changes:
+        - modifyDataType:
+            tableName: app_user
+            columnName: enabled
+            newDataType: bit
+        - modifyDataType:
+            tableName: app_role
+            columnName: disabled
+            newDataType: bit
+        - modifyDataType:
+            tableName: app_permission
+            columnName: can_maker_checker
+            newDataType: bit
+        - modifyDataType:
+            tableName: app_office
+            columnName: created_date
+            newDataType: datetime(6)
+        - modifyDataType:
+            tableName: app_office
+            columnName: last_modified_date
+            newDataType: datetime(6)
+        - modifyDataType:
+            tableName: app_user
+            columnName: created_date
+            newDataType: datetime(6)
+        - modifyDataType:
+            tableName: app_user
+            columnName: last_modified_date
+            newDataType: datetime(6)
+        - modifyDataType:
+            tableName: app_role
+            columnName: created_date
+            newDataType: datetime(6)
+        - modifyDataType:
+            tableName: app_role
+            columnName: last_modified_date
+            newDataType: datetime(6)
+        - modifyDataType:
+            tableName: command_source
+            columnName: made_on
+            newDataType: datetime(6)
+        - modifyDataType:
+            tableName: command_source
+            columnName: checked_on
+            newDataType: datetime(6)
+
+  # H2 reports Liquibase clob as CLOB. The entity maps these columns as LONGVARCHAR,
+  # which is what MySQL longtext already is.
+  - changeSet:
+      id: 017-h2-command-json-longvarchar
+      author: nsure
+      dbms: h2
+      changes:
+        - modifyDataType:
+            tableName: command_source
+            columnName: command_as_json
+            newDataType: longvarchar
+        - modifyDataType:
+            tableName: command_source
+            columnName: result_json
+            newDataType: longvarchar
