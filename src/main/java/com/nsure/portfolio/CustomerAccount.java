@@ -42,6 +42,20 @@ public class CustomerAccount {
     @Column(name = "display_order", nullable = false)
     private int displayOrder;
 
+    // A politically exposed person needs an enhanced due diligence review (demo server pip_pep_status).
+    @Column(nullable = false)
+    private boolean pep;
+
+    @Column(name = "edd_status", length = 20)
+    private String eddStatus;
+
+    // Why staff rejected the KYC or EDD review; shown to the customer, cleared on approval.
+    @Column(name = "kyc_rejection_reason", length = 500)
+    private String kycRejectionReason;
+
+    @Column(name = "edd_rejection_reason", length = 500)
+    private String eddRejectionReason;
+
     protected CustomerAccount() {
     }
 
@@ -119,5 +133,37 @@ public class CustomerAccount {
 
     public void setDisplayOrder(int displayOrder) {
         this.displayOrder = displayOrder;
+    }
+
+    public boolean isPep() {
+        return pep;
+    }
+
+    public void setPep(boolean pep) {
+        this.pep = pep;
+    }
+
+    public String getEddStatus() {
+        return eddStatus;
+    }
+
+    public void setEddStatus(String eddStatus) {
+        this.eddStatus = eddStatus;
+    }
+
+    public String getKycRejectionReason() {
+        return kycRejectionReason;
+    }
+
+    public void setKycRejectionReason(String kycRejectionReason) {
+        this.kycRejectionReason = kycRejectionReason;
+    }
+
+    public String getEddRejectionReason() {
+        return eddRejectionReason;
+    }
+
+    public void setEddRejectionReason(String eddRejectionReason) {
+        this.eddRejectionReason = eddRejectionReason;
     }
 }

@@ -39,6 +39,14 @@ public class InsuranceProduct {
     @Column(name = "display_order", nullable = false)
     private int displayOrder;
 
+    /** Days after cover starts before a claim's waiting-period check passes (demo server default 30). */
+    @Column(name = "waiting_period_days", nullable = false)
+    private int waitingPeriodDays = 30;
+
+    /** Days after a missed premium before the policy lapses (demo server default 14). */
+    @Column(name = "grace_period_days", nullable = false)
+    private int gracePeriodDays = 14;
+
     public String getName() {
         return name;
     }
@@ -65,6 +73,18 @@ public class InsuranceProduct {
 
     public int getLiveCount() {
         return liveCount;
+    }
+
+    public void setLiveCount(int liveCount) {
+        this.liveCount = liveCount;
+    }
+
+    public int getWaitingPeriodDays() {
+        return waitingPeriodDays;
+    }
+
+    public int getGracePeriodDays() {
+        return gracePeriodDays;
     }
 
     public int getDisplayOrder() {

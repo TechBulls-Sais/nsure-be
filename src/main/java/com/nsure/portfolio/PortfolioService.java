@@ -1,6 +1,10 @@
 package com.nsure.portfolio;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.NullNode;
+import com.nsure.mipas.capability.Capability;
+import com.nsure.mipas.capability.CapabilityService;
+import com.nsure.security.domain.AppUser;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.service.PlatformSecurityContext;
 import com.nsure.web.ResourceNotFoundException;
@@ -10,6 +14,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,38 +23,52 @@ import org.springframework.transaction.annotation.Transactional;
 public class PortfolioService {
 
     private static final DateTimeFormatter DISPLAY = DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.ENGLISH);
-    private static final Set<String> CUSTOMER_STATUSES = Set.of("Pending KYC", "Verified");
+    static final String KYC_PENDING = "Pending KYC";
+    static final String KYC_VERIFIED = "Verified";
+    static final String KYC_FAILED = "KYC failed";
 
     private final EntityManager em;
     private final PlatformSecurityContext security;
+    private final CapabilityService capabilities;
+    private final PolicyWorkflow policyWorkflow;
+    private final ClaimWorkflow claimWorkflow;
+    private final WorkflowHistory history;
+    private final PortfolioMapper mapper;
 
-    public PortfolioService(EntityManager em, PlatformSecurityContext security) {
+    public PortfolioService(EntityManager em, PlatformSecurityContext security, CapabilityService capabilities,
+            PolicyWorkflow policyWorkflow, ClaimWorkflow claimWorkflow, WorkflowHistory history,
+            PortfolioMapper mapper) {
         this.em = em;
         this.security = security;
+        this.capabilities = capabilities;
+        this.policyWorkflow = policyWorkflow;
+        this.claimWorkflow = claimWorkflow;
+        this.history = history;
+        this.mapper = mapper;
     }
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.CustomerView> customers() {
         requireStaff();
-        return list(CustomerAccount.class).stream().map(this::customer).toList();
+        return list(CustomerAccount.class).stream().map(mapper::customer).toList();
     }
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.CoverView> applications() {
         requireStaff();
-        return list(InsuranceApplication.class).stream().map(this::cover).toList();
+        return list(InsuranceApplication.class).stream().map(mapper::cover).toList();
     }
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.CoverView> policies() {
         requireStaff();
-        return list(InsurancePolicy.class).stream().map(this::cover).toList();
+        return mapper.covers(list(InsurancePolicy.class));
     }
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.ClaimView> claims() {
         requireStaff();
-        return list(InsuranceClaim.class).stream().map(this::claim).toList();
+        return list(InsuranceClaim.class).stream().map(mapper::claim).toList();
     }
 
     @Transactional(readOnly = true)
@@ -75,7 +94,7 @@ public class PortfolioService {
     @Transactional(readOnly = true)
     public List<PortfolioViews.CoverView> receipts() {
         requireStaff();
-        return list(PremiumReceipt.class).stream().map(this::cover).toList();
+        return list(PremiumReceipt.class).stream().map(mapper::cover).toList();
     }
 
     @Transactional(readOnly = true)
@@ -94,23 +113,26 @@ public class PortfolioService {
         row.setPhone(text(body, "phone"));
         row.setProduct("");
         row.setPolicyCount(0);
-        row.setStatus("Pending KYC");
+        row.setStatus(KYC_PENDING);
         row.setColor("green");
         row.setDisplayOrder(0);
+        // A politically exposed person needs enhanced due diligence before choosing cover (demo server: the
+        // PEP → EDD-pending rule lives on the customer, so no path can skip it).
+        if (body.path("pep").asBoolean(false)) {
+            row.setPep(true);
+            row.setEddStatus("PENDING");
+        }
         em.persist(row);
-        return customer(row);
+        return mapper.customer(row);
     }
 
+    /** Contact details only; verification goes through the KYC review so it is always recorded. */
     @Transactional
     public PortfolioViews.CustomerView updateCustomer(String ref, JsonNode body) {
         requireStaff();
         CustomerAccount row = one(CustomerAccount.class, ref, "Customer");
-        if (body.hasNonNull("status")) {
-            String status = body.get("status").asText().trim();
-            if (!CUSTOMER_STATUSES.contains(status)) {
-                throw new IllegalArgumentException("status must be Pending KYC or Verified");
-            }
-            row.setStatus(status);
+        if (body.hasNonNull("status") && !body.get("status").asText().trim().equals(row.getStatus())) {
+            throw new IllegalArgumentException("Change verification with the KYC review, not by editing the status.");
         }
         if (body.hasNonNull("name")) {
             row.setName(body.get("name").asText().trim());
@@ -121,7 +143,68 @@ public class PortfolioService {
         if (body.hasNonNull("phone")) {
             row.setPhone(body.get("phone").asText().trim());
         }
-        return customer(row);
+        return mapper.customer(row);
+    }
+
+    // ── customer reviews (demo server admin_review_customer_status) ───────────────────────────────
+
+    /** KYC review: VERIFIED (the default) or FAILED with a reason the customer sees. */
+    @Transactional
+    public PortfolioViews.CustomerView reviewKyc(String ref, JsonNode body) {
+        AppUser reviewer = staffWith(Capability.CUSTOMER_WRITE);
+        CustomerAccount row = one(CustomerAccount.class, ref, "Customer");
+        String decision = decision(body, "KYC");
+        String reason = reviewReason(body, decision);
+        String previous = row.getStatus();
+        row.setStatus("VERIFIED".equals(decision) ? KYC_VERIFIED : KYC_FAILED);
+        row.setKycRejectionReason(reason);
+        history.record(WorkflowHistory.KYC_REVIEW, row.getRef(), row.getName(),
+                "VERIFIED".equals(decision) ? "Approved" : "Rejected", previous, row.getStatus(), reason,
+                reviewer.getUsername());
+        return mapper.customer(row);
+    }
+
+    /** EDD review of a politically exposed customer, after KYC; rejecting needs a reason the customer sees. */
+    @Transactional
+    public PortfolioViews.CustomerView reviewEdd(String ref, JsonNode body) {
+        AppUser reviewer = staffWith(Capability.CUSTOMER_WRITE);
+        CustomerAccount row = one(CustomerAccount.class, ref, "Customer");
+        if (!row.isPep()) {
+            throw new IllegalArgumentException("EDD review does not apply to this customer");
+        }
+        if (!KYC_VERIFIED.equals(row.getStatus())) {
+            throw new IllegalArgumentException("Verify KYC before recording the EDD review.");
+        }
+        String decision = decision(body, "EDD");
+        String reason = reviewReason(body, decision);
+        String previous = row.getEddStatus();
+        row.setEddStatus(decision);
+        row.setEddRejectionReason(reason);
+        history.record(WorkflowHistory.EDD_REVIEW, row.getRef(), row.getName(),
+                "VERIFIED".equals(decision) ? "Approved" : "Rejected", previous, decision, reason, reviewer.getUsername());
+        return mapper.customer(row);
+    }
+
+    private static String decision(JsonNode body, String review) {
+        String decision = defaultText(body, "decision", "VERIFIED").toUpperCase(Locale.ROOT);
+        if (!Set.of("VERIFIED", "FAILED").contains(decision)) {
+            throw new IllegalArgumentException(review + " decision must be VERIFIED or FAILED.");
+        }
+        return decision;
+    }
+
+    private static String reviewReason(JsonNode body, String decision) {
+        if ("VERIFIED".equals(decision)) {
+            return null;
+        }
+        String reason = blank(optional(body, "reason")).trim();
+        if (reason.isEmpty()) {
+            throw new IllegalArgumentException("Please enter a reason for rejecting this record");
+        }
+        if (reason.length() > 500) {
+            throw new IllegalArgumentException("Keep the reason to 500 characters.");
+        }
+        return reason;
     }
 
     @Transactional
@@ -130,7 +213,7 @@ public class PortfolioService {
         InsuranceApplication row = new InsuranceApplication();
         fillCover(row, body, "APP-", 4, "Under review");
         em.persist(row);
-        return cover(row);
+        return mapper.cover(row);
     }
 
     @Transactional
@@ -140,15 +223,21 @@ public class PortfolioService {
         if (body.hasNonNull("status")) {
             row.setStatus(body.get("status").asText());
         }
-        return cover(row);
+        return mapper.cover(row);
     }
 
+    // ── policy workflow (staff) ───────────────────────────────────────────────────────────────────
+
+    /** Staff-issued cover needs no online payment: it starts Active today (demo server admin_create_policy). */
     @Transactional
     public PortfolioViews.CoverView createPolicy(JsonNode body) {
-        requireStaff();
+        AppUser staff = staffWith(Capability.POLICY_CREATE);
         InsurancePolicy row = new InsurancePolicy();
-        fillCover(row, body, "POL-", 5, "In force");
+        fillCover(row, body, "POL-", 5, PolicyWorkflow.ACTIVE);
+        row.setStatus(PolicyWorkflow.ACTIVE);
+        policyWorkflow.startActive(row);
         em.persist(row);
+        policyWorkflow.logOpened(row, staff.getUsername());
         List<CustomerAccount> matches = em.createQuery(
                         "select c from CustomerAccount c where c.name = :name order by c.displayOrder asc",
                         CustomerAccount.class)
@@ -159,30 +248,119 @@ public class PortfolioService {
             CustomerAccount account = matches.get(0);
             account.setPolicyCount(account.getPolicyCount() + 1);
         }
-        return cover(row);
+        return mapper.cover(row);
     }
 
+    /** Staff record a premium: a Pending Payment policy goes Active; an Active one is paid a period ahead. */
+    @Transactional(noRollbackFor = IllegalArgumentException.class)
+    public PortfolioViews.CoverView recordPayment(String ref, JsonNode body) {
+        AppUser staff = staffWith(Capability.POLICY_WRITE);
+        InsurancePolicy policy = one(InsurancePolicy.class, ref, "Policy");
+        requireEddClear(accountFor(policy.getCustomerName()));
+        return mapper.cover(policyWorkflow.pay(ref, defaultText(body, "method", "Bank EFT"), staff.getUsername()));
+    }
+
+    @Transactional(noRollbackFor = IllegalArgumentException.class)
+    public PortfolioViews.CoverView cancelPolicy(String ref, JsonNode body) {
+        AppUser staff = staffWith(Capability.POLICY_WRITE);
+        return mapper.cover(policyWorkflow.cancel(ref, optional(body, "reason"), staff.getUsername()));
+    }
+
+    @Transactional
+    public PortfolioViews.CoverView addBeneficiary(String ref, JsonNode body) {
+        AppUser staff = staffWith(Capability.POLICY_WRITE);
+        policyWorkflow.addBeneficiary(ref, beneficiaryInput(body), staff.getUsername());
+        return mapper.cover(one(InsurancePolicy.class, ref, "Policy"));
+    }
+
+    @Transactional
+    public PortfolioViews.CoverView removeBeneficiary(String ref, Long id) {
+        AppUser staff = staffWith(Capability.POLICY_WRITE);
+        policyWorkflow.removeBeneficiary(ref, id, staff.getUsername());
+        return mapper.cover(one(InsurancePolicy.class, ref, "Policy"));
+    }
+
+    /** Runs the scheduled sweeps now: expire unpaid policies, lapse those past their grace period. */
+    @Transactional
+    public Map<String, List<String>> runPolicySweep() {
+        staffWith(Capability.POLICY_WRITE);
+        return Map.of("expired", policyWorkflow.expireUnpaid(), "lapsed", policyWorkflow.lapseOverdue());
+    }
+
+    public static PolicyWorkflow.BeneficiaryInput beneficiaryInput(JsonNode body) {
+        return new PolicyWorkflow.BeneficiaryInput(
+                optional(body, "fullName"), optional(body, "relationship"), optional(body, "nationalId"),
+                optional(body, "mobile"), optional(body, "payoutMethod"), optional(body, "accountRef"),
+                body.path("primary").asBoolean(false));
+    }
+
+    /** Demo server _check_edd_gate: no plan selection or payment while EDD is open or failed. */
+    public static void requireEddClear(CustomerAccount account) {
+        String edd = blank(account.getEddStatus());
+        if (account.isPep() && !"VERIFIED".equals(edd)) {
+            throw new IllegalArgumentException(account.getName() + "'s enhanced due diligence review is "
+                    + (edd.isEmpty() ? "pending" : edd.toLowerCase(Locale.ROOT))
+                    + ". It must be verified before cover can be chosen or paid for.");
+        }
+    }
+
+    // ── claim workflow (staff) ────────────────────────────────────────────────────────────────────
+
+    /** Staff lodge a claim for someone who cannot file it themselves (demo server admin_create_claim). */
     @Transactional
     public PortfolioViews.ClaimView createClaim(JsonNode body) {
-        requireStaff();
-        InsuranceClaim row = new InsuranceClaim();
-        fillCover(row, body, "CLM-", 4, "Evidence needed");
-        row.setPremium(0);
-        row.setClaimType(text(body, "type"));
-        row.setDescription(optional(body, "description"));
-        row.setEventDate(optional(body, "eventDate"));
-        em.persist(row);
-        return claim(row);
+        AppUser staff = staffWith(Capability.CLAIM_CREATE);
+        return mapper.claim(claimWorkflow.lodge(lodgement(text(body, "policy"), body), staff.getUsername()));
+    }
+
+    public static ClaimWorkflow.Lodgement lodgement(String policyRef, JsonNode body) {
+        return new ClaimWorkflow.Lodgement(policyRef, optional(body, "claimantName"), optional(body, "claimantMobile"),
+                optional(body, "claimantRelationship"), optional(body, "eventDate"), optional(body, "description"),
+                optional(body, "type"));
     }
 
     @Transactional
-    public PortfolioViews.ClaimView updateClaim(String ref, JsonNode body) {
+    public PortfolioViews.ClaimView setClaimPayee(String ref, JsonNode body) {
+        AppUser staff = requireStaff();
+        return mapper.claim(claimWorkflow.setPayee(ref, new ClaimWorkflow.Payee(
+                optional(body, "name"), optional(body, "relationship"), optional(body, "mobile"),
+                optional(body, "payoutMethod"), optional(body, "accountRef"), body.path("verified").asBoolean(false)),
+                staff));
+    }
+
+    @Transactional
+    public PortfolioViews.ClaimView rerunClaimChecks(String ref) {
+        return mapper.claim(claimWorkflow.rerunChecks(ref, requireStaff()));
+    }
+
+    /** One of the person actions: assess, approve, reject or pay. */
+    @Transactional
+    public PortfolioViews.ClaimView claimAction(String ref, String action, JsonNode body) {
+        AppUser actor = requireStaff();
+        JsonNode input = body == null ? NullNode.getInstance() : body;
+        InsuranceClaim claim = switch (action) {
+            case "assess" -> claimWorkflow.assess(ref, optional(input, "note"), actor);
+            case "approve" -> claimWorkflow.approve(ref,
+                    input.hasNonNull("payoutAmount") ? Integer.valueOf(input.get("payoutAmount").asInt()) : null,
+                    optional(input, "overrideReason"), actor);
+            case "reject" -> claimWorkflow.reject(ref, optional(input, "reason"), actor);
+            case "pay" -> claimWorkflow.pay(ref, actor);
+            default -> throw new IllegalArgumentException("Unknown claim action: " + action);
+        };
+        return mapper.claim(claim);
+    }
+
+    @Transactional(readOnly = true)
+    public List<PortfolioViews.HistoryView> history(String type, String ref) {
         requireStaff();
-        InsuranceClaim row = one(InsuranceClaim.class, ref, "Claim");
-        if (body.hasNonNull("status")) {
-            row.setStatus(body.get("status").asText());
-        }
-        return claim(row);
+        String entity = switch (type) {
+            case "policy" -> WorkflowHistory.POLICY;
+            case "claim" -> WorkflowHistory.CLAIM;
+            case "kyc" -> WorkflowHistory.KYC_REVIEW;
+            case "edd" -> WorkflowHistory.EDD_REVIEW;
+            default -> throw new IllegalArgumentException("History type must be policy, claim, kyc or edd.");
+        };
+        return history.of(entity, ref);
     }
 
     @Transactional
@@ -192,7 +370,7 @@ public class PortfolioService {
         if (body.hasNonNull("status")) {
             row.setStatus(body.get("status").asText());
         }
-        return cover(row);
+        return mapper.cover(row);
     }
 
     @Transactional
@@ -244,6 +422,17 @@ public class PortfolioService {
         row.setDisplayOrder(0);
     }
 
+    private CustomerAccount accountFor(String customerName) {
+        return em.createQuery(
+                        "select c from CustomerAccount c where c.name = :name order by c.displayOrder asc",
+                        CustomerAccount.class)
+                .setParameter("name", customerName)
+                .setMaxResults(1)
+                .getResultStream()
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("Customer " + customerName + " not found"));
+    }
+
     private <T> String nextRef(String prefix, int width, Class<T> type) {
         int max = 0;
         for (String ref : em.createQuery("select e.ref from " + type.getSimpleName() + " e", String.class).getResultList()) {
@@ -267,24 +456,6 @@ public class PortfolioService {
             throw new ResourceNotFoundException(label + " " + ref + " not found");
         }
         return rows.get(0);
-    }
-
-    private PortfolioViews.CustomerView customer(CustomerAccount row) {
-        return new PortfolioViews.CustomerView(
-                row.getRef(), row.getName(), row.getEmail(), row.getPhone(),
-                row.getProduct() == null ? "" : row.getProduct(), row.getPolicyCount(), row.getStatus(), row.getColor());
-    }
-
-    private PortfolioViews.CoverView cover(CoverRecord row) {
-        return new PortfolioViews.CoverView(
-                row.getRef(), row.getCustomerName(), row.getProduct(), row.getAmount(),
-                row.getPremium(), row.getStatus(), row.getRecordDate());
-    }
-
-    private PortfolioViews.ClaimView claim(InsuranceClaim row) {
-        return new PortfolioViews.ClaimView(
-                row.getRef(), row.getCustomerName(), row.getProduct(), row.getAmount(), row.getPremium(),
-                row.getStatus(), row.getRecordDate(), row.getClaimType(), row.getDescription(), row.getEventDate());
     }
 
     private PortfolioViews.ConfigView config(ProductConfiguration row) {
@@ -326,7 +497,7 @@ public class PortfolioService {
     }
 
     private static String optional(JsonNode body, String field) {
-        JsonNode node = body.get(field);
+        JsonNode node = body == null ? null : body.get(field);
         if (node == null || node.isNull()) {
             return null;
         }
@@ -334,16 +505,28 @@ public class PortfolioService {
     }
 
     private static String defaultText(JsonNode body, String field, String fallback) {
-        JsonNode node = body.get(field);
+        JsonNode node = body == null ? null : body.get(field);
         if (node == null || node.isNull() || !node.isTextual() || node.asText().isBlank()) {
             return fallback;
         }
         return node.asText().trim();
     }
 
-    private void requireStaff() {
-        if (security.authenticatedUser().isCustomerPortal()) {
+    private static String blank(String value) {
+        return value == null ? "" : value;
+    }
+
+    private AppUser requireStaff() {
+        AppUser user = security.authenticatedUser();
+        if (user.isCustomerPortal()) {
             throw new NoAuthorizationException("Customer portal accounts cannot use operations APIs.");
         }
+        return user;
+    }
+
+    private AppUser staffWith(Capability capability) {
+        AppUser user = requireStaff();
+        capabilities.require(capability);
+        return user;
     }
 }

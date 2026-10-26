@@ -1286,3 +1286,7 @@ databaseChangeLog:
   - include:
       file: 025-portal-and-roles.yaml
       relativeToChangelogFile: true
+
+  - include:
+      file: 026-workflows.yaml
+      relativeToChangelogFile: true

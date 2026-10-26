@@ -15,7 +15,12 @@ public final class PortfolioViews {
             String product,
             int policies,
             String status,
-            String color
+            String color,
+            // KYC and EDD review (demo server admin_review_customer_status); reasons are empty unless rejected.
+            boolean pep,
+            String eddStatus,
+            String kycRejectionReason,
+            String eddRejectionReason
     ) {
     }
 
@@ -26,7 +31,31 @@ public final class PortfolioViews {
             int amount,
             int premium,
             String status,
-            String date
+            String date,
+            // Policy workflow (PolicyWorkflow); empty on applications and receipts.
+            String coverStartDate,
+            String nextPremiumDue,
+            String gracePeriodEnd,
+            String paymentDueBy,
+            String lapseDate,
+            String paymentMethod,
+            // Active, past its due date and still within the grace period.
+            boolean inGrace,
+            String statusChangedBy,
+            String statusNote,
+            List<BeneficiaryView> beneficiaries
+    ) {
+    }
+
+    public record BeneficiaryView(
+            Long id,
+            String fullName,
+            String relationship,
+            String nationalId,
+            String mobile,
+            String payoutMethod,
+            String accountRef,
+            boolean primary
     ) {
     }
 
@@ -40,7 +69,51 @@ public final class PortfolioViews {
             String date,
             String type,
             String description,
-            String eventDate
+            String eventDate,
+            String policy,
+            String claimant,
+            String claimantMobile,
+            String claimantRelationship,
+            // STP or Manual Review, and why a claim whose checks all passed was not approved straight through.
+            String processingType,
+            String stpIneligibleReason,
+            List<CheckView> checks,
+            PayeeView payee,
+            String recommendedBy,
+            String adjudicatedBy,
+            Boolean fourEyesApplied,
+            String rejectionReason,
+            Integer payoutAmount,
+            String payoutReference,
+            String paidAt,
+            // Workflow actions legal from the current state (assess, approve, reject, pay), before capabilities.
+            List<String> actions
+    ) {
+    }
+
+    public record CheckView(String name, String result) {
+    }
+
+    public record PayeeView(
+            String name,
+            String relationship,
+            String mobile,
+            String payoutMethod,
+            String accountRef,
+            String source,
+            boolean verified,
+            String verifiedBy
+    ) {
+    }
+
+    /** One workflow transition, oldest first. */
+    public record HistoryView(
+            String action,
+            String previousState,
+            String newState,
+            String details,
+            String performedBy,
+            String performedAt
     ) {
     }
 

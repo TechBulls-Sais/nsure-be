@@ -1,5 +1,7 @@
 package com.nsure.security.web;
 
+import com.nsure.mipas.capability.Capability;
+import com.nsure.mipas.capability.CapabilityService;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.domain.Role;
 import com.nsure.security.service.PlatformSecurityContext;
@@ -12,9 +14,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class MeController {
 
     private final PlatformSecurityContext security;
+    private final CapabilityService capabilities;
 
-    public MeController(PlatformSecurityContext security) {
+    public MeController(PlatformSecurityContext security, CapabilityService capabilities) {
         this.security = security;
+        this.capabilities = capabilities;
     }
 
     @GetMapping("/me")
@@ -26,13 +30,20 @@ public class MeController {
                         .map(Role::getName)
                         .sorted(Comparator.naturalOrder())
                         .toList();
+        boolean staff = !user.isCustomerPortal();
         return new MeResponse(
                 user.getId(),
                 user.getUsername(),
                 user.isSuperAdmin(),
                 user.isCustomerPortal(),
                 user.getCustomerRef(),
-                roles);
+                roles,
+                staff && capabilities.has(Capability.CUSTOMER_WRITE),
+                staff && capabilities.has(Capability.POLICY_WRITE),
+                staff && capabilities.has(Capability.CLAIM_CREATE),
+                staff && capabilities.has(Capability.CLAIM_ASSESS),
+                staff && capabilities.has(Capability.CLAIM_APPROVE),
+                staff && capabilities.has(Capability.CLAIM_REJECT));
     }
 
     public record MeResponse(
@@ -41,7 +52,14 @@ public class MeController {
             boolean superAdmin,
             boolean customerPortal,
             String customerRef,
-            List<String> roles
+            List<String> roles,
+            // Workflow actions this user may take (capabilities, as on the demo server).
+            boolean canReviewCustomers,
+            boolean canManagePolicies,
+            boolean canLodgeClaims,
+            boolean canAssessClaims,
+            boolean canApproveClaims,
+            boolean canRejectClaims
     ) {
     }
 }

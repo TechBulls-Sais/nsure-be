@@ -2,6 +2,8 @@ package com.nsure.portfolio;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
+import java.util.Map;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -33,6 +35,50 @@ public class PortfolioController {
     @PutMapping("/customers/{ref}")
     public PortfolioViews.CustomerView updateCustomer(@PathVariable String ref, @RequestBody JsonNode body) {
         return portfolio.updateCustomer(ref, body);
+    }
+
+    /** KYC review: no body (or decision VERIFIED) approves; decision FAILED needs a reason. */
+    @PostMapping("/customers/{ref}/kyc")
+    public PortfolioViews.CustomerView reviewKyc(@PathVariable String ref, @RequestBody(required = false) JsonNode body) {
+        return portfolio.reviewKyc(ref, body);
+    }
+
+    @PostMapping("/customers/{ref}/edd")
+    public PortfolioViews.CustomerView reviewEdd(@PathVariable String ref, @RequestBody(required = false) JsonNode body) {
+        return portfolio.reviewEdd(ref, body);
+    }
+
+    // ── policy workflow ───────────────────────────────────────────────────────────────────────────
+
+    @PostMapping("/policies/{ref}/payments")
+    public PortfolioViews.CoverView recordPayment(@PathVariable String ref, @RequestBody(required = false) JsonNode body) {
+        return portfolio.recordPayment(ref, body);
+    }
+
+    @PostMapping("/policies/{ref}/cancel")
+    public PortfolioViews.CoverView cancelPolicy(@PathVariable String ref, @RequestBody JsonNode body) {
+        return portfolio.cancelPolicy(ref, body);
+    }
+
+    @PostMapping("/policies/{ref}/beneficiaries")
+    public PortfolioViews.CoverView addBeneficiary(@PathVariable String ref, @RequestBody JsonNode body) {
+        return portfolio.addBeneficiary(ref, body);
+    }
+
+    @DeleteMapping("/policies/{ref}/beneficiaries/{id}")
+    public PortfolioViews.CoverView removeBeneficiary(@PathVariable String ref, @PathVariable Long id) {
+        return portfolio.removeBeneficiary(ref, id);
+    }
+
+    /** Runs the hourly expiry and daily lapse sweeps now. */
+    @PostMapping("/policies/sweep")
+    public Map<String, List<String>> runPolicySweep() {
+        return portfolio.runPolicySweep();
+    }
+
+    @GetMapping("/history/{type}/{ref}")
+    public List<PortfolioViews.HistoryView> history(@PathVariable String type, @PathVariable String ref) {
+        return portfolio.history(type, ref);
     }
 
     @GetMapping("/applications")
@@ -70,9 +116,23 @@ public class PortfolioController {
         return portfolio.createClaim(body);
     }
 
-    @PutMapping("/claims/{ref}")
-    public PortfolioViews.ClaimView updateClaim(@PathVariable String ref, @RequestBody JsonNode body) {
-        return portfolio.updateClaim(ref, body);
+    // ── claim workflow ────────────────────────────────────────────────────────────────────────────
+
+    @PutMapping("/claims/{ref}/payee")
+    public PortfolioViews.ClaimView setClaimPayee(@PathVariable String ref, @RequestBody JsonNode body) {
+        return portfolio.setClaimPayee(ref, body);
+    }
+
+    @PostMapping("/claims/{ref}/checks")
+    public PortfolioViews.ClaimView rerunClaimChecks(@PathVariable String ref) {
+        return portfolio.rerunClaimChecks(ref);
+    }
+
+    /** assess, approve ({payoutAmount}), reject ({reason}) or pay. */
+    @PostMapping("/claims/{ref}/{action:assess|approve|reject|pay}")
+    public PortfolioViews.ClaimView claimAction(
+            @PathVariable String ref, @PathVariable String action, @RequestBody(required = false) JsonNode body) {
+        return portfolio.claimAction(ref, action, body);
     }
 
     @GetMapping("/products")
