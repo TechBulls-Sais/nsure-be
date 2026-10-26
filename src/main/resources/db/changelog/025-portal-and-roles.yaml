@@ -1,0 +1,21 @@
+databaseChangeLog:
+  - changeSet:
+      id: 025-app-user-customer-ref
+      author: nsure
+      comment: Link portal users to an insurance customer for self-serve purchase.
+      changes:
+        - addColumn:
+            tableName: app_user
+            columns:
+              - column:
+                  name: customer_ref
+                  type: varchar(20)
+
+  - changeSet:
+      id: 025-seed-role-users-and-portal
+      author: nsure
+      comment: Seed ops users for each MiPAS role and policyholder logins for customers.
+      changes:
+        - sqlFile:
+            path: seed/025-role-users.sql
+            relativeToChangelogFile: true

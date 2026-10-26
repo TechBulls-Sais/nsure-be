@@ -1,6 +1,8 @@
 package com.nsure.portfolio;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.nsure.security.exception.NoAuthorizationException;
+import com.nsure.security.service.PlatformSecurityContext;
 import com.nsure.web.ResourceNotFoundException;
 import jakarta.persistence.EntityManager;
 import java.time.LocalDate;
@@ -8,6 +10,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,35 +18,43 @@ import org.springframework.transaction.annotation.Transactional;
 public class PortfolioService {
 
     private static final DateTimeFormatter DISPLAY = DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.ENGLISH);
+    private static final Set<String> CUSTOMER_STATUSES = Set.of("Pending KYC", "Verified");
 
     private final EntityManager em;
+    private final PlatformSecurityContext security;
 
-    public PortfolioService(EntityManager em) {
+    public PortfolioService(EntityManager em, PlatformSecurityContext security) {
         this.em = em;
+        this.security = security;
     }
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.CustomerView> customers() {
+        requireStaff();
         return list(CustomerAccount.class).stream().map(this::customer).toList();
     }
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.CoverView> applications() {
+        requireStaff();
         return list(InsuranceApplication.class).stream().map(this::cover).toList();
     }
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.CoverView> policies() {
+        requireStaff();
         return list(InsurancePolicy.class).stream().map(this::cover).toList();
     }
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.ClaimView> claims() {
+        requireStaff();
         return list(InsuranceClaim.class).stream().map(this::claim).toList();
     }
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.ProductView> products() {
+        requireStaff();
         return list(InsuranceProduct.class).stream()
                 .map(product -> new PortfolioViews.ProductView(
                         product.getName(), product.getIcon(), product.getColor(), product.getDescription(),
@@ -53,6 +64,7 @@ public class PortfolioService {
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.SchemeView> schemes() {
+        requireStaff();
         return list(GroupScheme.class).stream()
                 .map(scheme -> new PortfolioViews.SchemeView(
                         scheme.getRef(), scheme.getName(), scheme.getSector(), scheme.getInitials(),
@@ -62,16 +74,19 @@ public class PortfolioService {
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.CoverView> receipts() {
+        requireStaff();
         return list(PremiumReceipt.class).stream().map(this::cover).toList();
     }
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.ConfigView> productConfigs() {
+        requireStaff();
         return list(ProductConfiguration.class).stream().map(this::config).toList();
     }
 
     @Transactional
     public PortfolioViews.CustomerView createCustomer(JsonNode body) {
+        requireStaff();
         CustomerAccount row = new CustomerAccount();
         row.setRef(nextRef("CUS-", 4, CustomerAccount.class));
         row.setName(text(body, "name"));
@@ -87,7 +102,31 @@ public class PortfolioService {
     }
 
     @Transactional
+    public PortfolioViews.CustomerView updateCustomer(String ref, JsonNode body) {
+        requireStaff();
+        CustomerAccount row = one(CustomerAccount.class, ref, "Customer");
+        if (body.hasNonNull("status")) {
+            String status = body.get("status").asText().trim();
+            if (!CUSTOMER_STATUSES.contains(status)) {
+                throw new IllegalArgumentException("status must be Pending KYC or Verified");
+            }
+            row.setStatus(status);
+        }
+        if (body.hasNonNull("name")) {
+            row.setName(body.get("name").asText().trim());
+        }
+        if (body.hasNonNull("email")) {
+            row.setEmail(body.get("email").asText().trim());
+        }
+        if (body.hasNonNull("phone")) {
+            row.setPhone(body.get("phone").asText().trim());
+        }
+        return customer(row);
+    }
+
+    @Transactional
     public PortfolioViews.CoverView createApplication(JsonNode body) {
+        requireStaff();
         InsuranceApplication row = new InsuranceApplication();
         fillCover(row, body, "APP-", 4, "Under review");
         em.persist(row);
@@ -96,6 +135,7 @@ public class PortfolioService {
 
     @Transactional
     public PortfolioViews.CoverView updateApplication(String ref, JsonNode body) {
+        requireStaff();
         InsuranceApplication row = one(InsuranceApplication.class, ref, "Application");
         if (body.hasNonNull("status")) {
             row.setStatus(body.get("status").asText());
@@ -105,6 +145,7 @@ public class PortfolioService {
 
     @Transactional
     public PortfolioViews.CoverView createPolicy(JsonNode body) {
+        requireStaff();
         InsurancePolicy row = new InsurancePolicy();
         fillCover(row, body, "POL-", 5, "In force");
         em.persist(row);
@@ -123,6 +164,7 @@ public class PortfolioService {
 
     @Transactional
     public PortfolioViews.ClaimView createClaim(JsonNode body) {
+        requireStaff();
         InsuranceClaim row = new InsuranceClaim();
         fillCover(row, body, "CLM-", 4, "Evidence needed");
         row.setPremium(0);
@@ -135,6 +177,7 @@ public class PortfolioService {
 
     @Transactional
     public PortfolioViews.ClaimView updateClaim(String ref, JsonNode body) {
+        requireStaff();
         InsuranceClaim row = one(InsuranceClaim.class, ref, "Claim");
         if (body.hasNonNull("status")) {
             row.setStatus(body.get("status").asText());
@@ -144,6 +187,7 @@ public class PortfolioService {
 
     @Transactional
     public PortfolioViews.CoverView updateReceipt(String ref, JsonNode body) {
+        requireStaff();
         PremiumReceipt row = one(PremiumReceipt.class, ref, "Receipt");
         if (body.hasNonNull("status")) {
             row.setStatus(body.get("status").asText());
@@ -153,6 +197,7 @@ public class PortfolioService {
 
     @Transactional
     public PortfolioViews.ConfigView saveConfig(String ref, JsonNode body) {
+        requireStaff();
         ProductConfiguration row = ref == null
                 ? new ProductConfiguration()
                 : one(ProductConfiguration.class, ref, "Product configuration");
@@ -294,5 +339,11 @@ public class PortfolioService {
             return fallback;
         }
         return node.asText().trim();
+    }
+
+    private void requireStaff() {
+        if (security.authenticatedUser().isCustomerPortal()) {
+            throw new NoAuthorizationException("Customer portal accounts cannot use operations APIs.");
+        }
     }
 }

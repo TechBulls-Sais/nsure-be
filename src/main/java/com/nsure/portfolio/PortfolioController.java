@@ -30,6 +30,11 @@ public class PortfolioController {
         return portfolio.createCustomer(body);
     }
 
+    @PutMapping("/customers/{ref}")
+    public PortfolioViews.CustomerView updateCustomer(@PathVariable String ref, @RequestBody JsonNode body) {
+        return portfolio.updateCustomer(ref, body);
+    }
+
     @GetMapping("/applications")
     public List<PortfolioViews.CoverView> applications() {
         return portfolio.applications();

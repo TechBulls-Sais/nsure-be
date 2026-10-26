@@ -1282,3 +1282,7 @@ databaseChangeLog:
   - include:
       file: 020-mipas-foundation.yaml
       relativeToChangelogFile: true
+
+  - include:
+      file: 025-portal-and-roles.yaml
+      relativeToChangelogFile: true

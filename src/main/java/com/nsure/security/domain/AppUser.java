@@ -41,6 +41,9 @@ public class AppUser extends AuditableEntity implements UserDetails {
     @Column(name = "office_id")
     private Long officeId;
 
+    @Column(name = "customer_ref", length = 20)
+    private String customerRef;
+
     @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(
             name = "app_user_role",
@@ -201,5 +204,35 @@ public class AppUser extends AuditableEntity implements UserDetails {
 
     public Set<Role> getRoles() {
         return roles;
+    }
+
+    public String getCustomerRef() {
+        return customerRef;
+    }
+
+    public void setCustomerRef(String customerRef) {
+        this.customerRef = customerRef;
+    }
+
+    public boolean isSuperAdmin() {
+        for (Role role : roles) {
+            if (!role.isDisabled() && "Super user".equals(role.getName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean isCustomerPortal() {
+        if (isSuperAdmin()) {
+            return false;
+        }
+        for (Role role : roles) {
+            if (!role.isDisabled() && role.getName() != null
+                    && role.getName().startsWith("Policyholder")) {
+                return true;
+            }
+        }
+        return false;
     }
 }
