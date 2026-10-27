@@ -922,7 +922,8 @@ public class PortfolioService {
         return REQUEST_STATES.contains(status);
     }
 
-    private CustomerAccount customerForLogin() {
+    /** The signed-in customer's own profile; staff logins are refused. */
+    public CustomerAccount customerForLogin() {
         AppUser user = security.authenticatedUser();
         if (!user.hasRole("Policyholder")) {
             throw new NoAuthorizationException("Only a customer can use the policy shop.");
@@ -1055,7 +1056,8 @@ public class PortfolioService {
                 blank(row.getRecommendedBy()), blank(row.getAdjudicatedBy()), row.getFourEyesApplied(),
                 blank(row.getRejectionReason()), row.getPayoutAmount(), blank(row.getPayoutReference()),
                 row.getPaidAt() == null ? "" : row.getPaidAt().withNano(0).toString(),
-                ClaimWorkflow.allowedActions(row.getStatus()));
+                ClaimWorkflow.allowedActions(row.getStatus()),
+                ClaimDocumentService.views(em, row.getId()));
     }
 
     private PortfolioViews.ConfigView config(ProductConfiguration row) {

@@ -52,6 +52,8 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/shop", customer()),
             rule(POST, "/portfolio/shop/quote", customer()),
             rule(POST, "/portfolio/shop/claims", customer()),
+            rule(POST, "/portfolio/shop/claims/*/documents", customer()),
+            rule(GET, "/portfolio/shop/claims/*/documents/*", customer()),
             rule(POST, "/portfolio/shop/policies/*/pay", customer()),
             rule(POST, "/portfolio/shop/policies/*/beneficiaries", customer()),
             rule(DELETE, "/portfolio/shop/policies/*/beneficiaries/*", customer()),
@@ -93,6 +95,10 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/claims/*/approve", anyOf("APPROVE_CLAIM")),
             rule(POST, "/portfolio/claims/*/reject", anyOf("REJECT_CLAIM")),
             rule(POST, "/portfolio/claims/*/pay", anyOf("SETTLE_CLAIM")),
+            rule(GET, "/portfolio/claims/*/documents", anyOf("READ_CLAIM")),
+            rule(GET, "/portfolio/claims/*/documents/*", anyOf("READ_CLAIM")),
+            rule(POST, "/portfolio/claims/*/documents", anyOf("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM")),
+            rule(POST, "/portfolio/claims/*/documents/summary", anyOf("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM")),
 
             // ── product catalogue (Product Configurator, Actuary) ──────────────────────────────────────
             // The catalogue is already public on the landing page; staff forms need it to pick a product.

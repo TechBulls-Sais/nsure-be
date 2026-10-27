@@ -80,3 +80,6 @@ databaseChangeLog:
   - include:
       file: changes/027-api-access.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/028-claim-documents.yaml
+      relativeToChangelogFile: true

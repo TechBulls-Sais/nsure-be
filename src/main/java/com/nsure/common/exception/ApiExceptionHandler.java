@@ -85,6 +85,18 @@ public class ApiExceptionHandler {
         return problem(HttpStatus.BAD_REQUEST, "Request body is not valid JSON");
     }
 
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiError> tooLarge(org.springframework.web.multipart.MaxUploadSizeExceededException ex) {
+        return problem(HttpStatus.PAYLOAD_TOO_LARGE, "Files can be at most 10 MB.");
+    }
+
+    @ExceptionHandler({
+            org.springframework.web.multipart.support.MissingServletRequestPartException.class,
+            org.springframework.web.multipart.MultipartException.class})
+    public ResponseEntity<ApiError> missingFile(Exception ex) {
+        return problem(HttpStatus.BAD_REQUEST, "Choose a file to upload.");
+    }
+
     /** A path or method no endpoint serves is the caller's mistake, not a server fault. */
     @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
     public ResponseEntity<ApiError> noEndpoint(org.springframework.web.servlet.resource.NoResourceFoundException ex) {

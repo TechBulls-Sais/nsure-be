@@ -25,10 +25,18 @@ spring:
     time-zone: UTC
     serialization:
       write-dates-as-timestamps: false
+  # Claim documents: PDF, JPG or PNG up to 10 MB (ClaimDocumentService checks the same limit).
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 11MB
 
 server:
   # 8091, not 8080: MIPAS runs on 8080 on the same machine.
   port: 8091
+  tomcat:
+    # Read an oversized upload to the end so the client gets the 413 message, not a reset connection.
+    max-swallow-size: 20MB
   error:
     include-message: never
     include-binding-errors: never
@@ -38,6 +46,9 @@ nsure:
     same-user-allowed: false
   audit:
     max-payload-chars: 8000
+  # Where uploaded claim documents are kept, relative to the working directory (data/ is git-ignored).
+  documents:
+    dir: data/claim-documents
 
 management:
   endpoints:

@@ -1,0 +1,27 @@
+databaseChangeLog:
+  - changeSet:
+      id: 028-claim-documents
+      author: nsure
+      comment: >-
+        Evidence attached to a claim (identity document, declaration, hospital bill...). The file itself is on
+        local disk under nsure.documents.dir; this row records what it is, where it is and who uploaded it.
+        Rows are never updated or deleted: evidence that can be edited is not evidence.
+      changes:
+        - createTable:
+            tableName: ins_claim_document
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ins_claim_document}}
+              - column: {name: claim_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: document_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: file_name, type: varchar(255), constraints: {nullable: false}}
+              - column: {name: content_type, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: size_bytes, type: bigint, constraints: {nullable: false}}
+              - column: {name: storage_path, type: varchar(255), constraints: {nullable: false}}
+              - column: {name: uploaded_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: uploaded_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: ins_claim_document
+            baseColumnNames: claim_id
+            referencedTableName: ins_claim
+            referencedColumnNames: id
+            constraintName: fk_claim_document_claim

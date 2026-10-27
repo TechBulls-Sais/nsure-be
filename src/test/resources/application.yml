@@ -12,3 +12,6 @@ spring:
         jdbc:
           time_zone: UTC
         auto_quote_keyword: true
+nsure:
+  documents:
+    dir: target/test-claim-documents

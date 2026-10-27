@@ -145,7 +145,20 @@ public final class PortfolioViews {
             String payoutReference,
             String paidAt,
             // Workflow actions legal from the current state (assess, approve, reject, pay), before permissions.
-            List<String> actions
+            List<String> actions,
+            List<DocumentView> documents
+    ) {
+    }
+
+    /** One evidence file on a claim; download it from .../claims/{ref}/documents/{id}. */
+    public record DocumentView(
+            Long id,
+            String type,
+            String fileName,
+            String contentType,
+            long size,
+            String uploadedBy,
+            String uploadedAt
     ) {
     }
 
