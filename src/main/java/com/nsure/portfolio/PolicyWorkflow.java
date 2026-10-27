@@ -1,9 +1,11 @@
 package com.nsure.portfolio;
 
-import com.nsure.web.ResourceNotFoundException;
-import com.nsure.mipas.control.ControlKey;
-import com.nsure.mipas.control.ControlService;
+import com.nsure.common.exception.NotFoundException;
+import com.nsure.controls.ControlKey;
+import com.nsure.controls.ControlService;
 import jakarta.persistence.EntityManager;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -15,7 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Policy lifecycle, as on the demo server (policy_management/tasks.py, api.py create_pending_policy / pay_policy,
- * mipas_integrations/payments.activate_policy):
+ * nsure_integrations/payments.activate_policy):
  *
  * <pre>
  *   buy ─▶ PENDING PAYMENT ──paid──▶ ACTIVE ──grace period ends unpaid (daily)──▶ LAPSED
@@ -52,13 +54,13 @@ public class PolicyWorkflow {
     }
 
     /** A customer's purchase: reserved, unpaid, and confers no cover until paid within the payment window. */
-    public void openPending(InsurancePolicy policy) {
+    void openPending(InsurancePolicy policy) {
         policy.setStatus(PENDING_PAYMENT);
         policy.setPaymentDueBy(LocalDateTime.now().plusHours(paymentWindowHours()));
     }
 
     /** Logged once the new policy has its id and reference. */
-    public void logOpened(InsurancePolicy policy, String actor) {
+    void logOpened(InsurancePolicy policy, String actor) {
         history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Created", null,
                 policy.getStatus(), policy.getProduct() + tierSuffix(policy) + " · premium " + bwp(policy.getPremium())
                         + (policy.getPaymentDueBy() == null ? "" : " · pay by " + policy.getPaymentDueBy().withNano(0)),
@@ -66,7 +68,7 @@ public class PolicyWorkflow {
     }
 
     /** Staff-created cover needs no online payment and starts active today (demo server admin_create_policy). */
-    public void startActive(InsurancePolicy policy) {
+    void startActive(InsurancePolicy policy) {
         policy.setStatus(ACTIVE);
         setCoverDates(policy, LocalDate.now());
     }
@@ -139,7 +141,7 @@ public class PolicyWorkflow {
         }
         policy.setStatus(CANCELLED);
         policy.setPaymentDueBy(null);
-        policy.noteStatusChange(actor, note);
+        policy.review(actor, note);
         history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Cancelled", PENDING_PAYMENT,
                 CANCELLED, note, actor);
         return policy;
@@ -222,7 +224,7 @@ public class PolicyWorkflow {
         PolicyBeneficiary row = beneficiaries(policy).stream()
                 .filter(item -> item.getId().equals(beneficiaryId))
                 .findFirst()
-                .orElseThrow(() -> new ResourceNotFoundException("Beneficiary " + beneficiaryId + " is not on " + ref));
+                .orElseThrow(() -> new NotFoundException("Beneficiary " + beneficiaryId + " is not on " + ref));
         em.remove(row);
         if (row.isPrimary()) {
             beneficiaries(policy).stream().filter(item -> !item.getId().equals(beneficiaryId)).findFirst()
@@ -284,12 +286,12 @@ public class PolicyWorkflow {
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────
 
-    public InsurancePolicy policy(String ref) {
+    InsurancePolicy policy(String ref) {
         return em.createQuery("select p from InsurancePolicy p where p.ref = :ref", InsurancePolicy.class)
                 .setParameter("ref", ref)
                 .getResultStream()
                 .findFirst()
-                .orElseThrow(() -> new ResourceNotFoundException("Policy " + ref + " not found"));
+                .orElseThrow(() -> new NotFoundException("Policy " + ref + " not found"));
     }
 
     InsuranceProduct product(InsurancePolicy policy) {
@@ -297,25 +299,42 @@ public class PolicyWorkflow {
                 .setParameter("name", policy.getProduct())
                 .getResultStream()
                 .findFirst()
-                .orElseThrow(() -> new ResourceNotFoundException("Product " + policy.getProduct() + " not found"));
+                .orElseThrow(() -> new NotFoundException("Product " + policy.getProduct() + " not found"));
     }
 
-    /** Cover from `start`; next premium one month later (premiums are monthly); lapse after the grace days. */
+    /** Cover from `start`; next premium one premium period later; lapse after the product's grace days. */
     private void setCoverDates(InsurancePolicy policy, LocalDate start) {
-        LocalDate next = start.plusMonths(months(policy));
+        int months = months(policy);
+        LocalDate next = months > 0 ? start.plusMonths(months) : start.plusYears(1);
         policy.setCoverStartDate(start);
         policy.setNextPremiumDue(next);
         policy.setGracePeriodEnd(next.plusDays(product(policy).getGracePeriodDays()));
         policy.setLapseDate(null);
     }
 
-    /** Months one premium pays for. Every Nsure premium is monthly. */
+    /** Months one premium pays for, from the tier's premium frequency; monthly when the policy has no tier. */
     private int months(InsurancePolicy policy) {
-        return 1;
+        String frequency = policy.getTier() == null ? null : em.createQuery(
+                        "select t.premiumFrequency from CoverTier t where t.product.name = :product and t.name = :tier",
+                        String.class)
+                .setParameter("product", policy.getProduct())
+                .setParameter("tier", policy.getTier())
+                .getResultStream()
+                .findFirst()
+                .orElse(null);
+        if (frequency == null) {
+            return 1;
+        }
+        return em.createQuery(
+                        "select f.months from PremiumFrequency f where f.frequencyName = :name", Integer.class)
+                .setParameter("name", frequency)
+                .getResultStream()
+                .findFirst()
+                .orElse(1);
     }
 
     private long paymentWindowHours() {
-        return controls.valueOf(ControlKey.POLICY_PAYMENT_WINDOW_HOURS).longValue();
+        return controls.valueOf(ControlKey.POLICY_PAYMENT_WINDOW_HOURS.key()).longValue();
     }
 
     private void receipt(InsurancePolicy policy, String method) {
@@ -327,8 +346,8 @@ public class PolicyWorkflow {
         row.setRef(String.format("INV-%04d", max + 1));
         row.setCustomerName(policy.getCustomerName());
         row.setProduct(policy.getProduct());
-        row.setAmount(policy.getPremium());
-        row.setPremium(0);
+        row.setAmount(policy.getPremium().setScale(0, RoundingMode.UP).intValue());
+        row.setPremium(BigDecimal.ZERO);
         row.setStatus("Paid");
         row.setRecordDate(LocalDate.now().format(DISPLAY));
         row.setDisplayOrder(0);
@@ -343,7 +362,7 @@ public class PolicyWorkflow {
                 .setMaxResults(1)
                 .getResultStream()
                 .findFirst()
-                .orElseThrow(() -> new ResourceNotFoundException("Customer " + customerName + " not found"));
+                .orElseThrow(() -> new NotFoundException("Customer " + customerName + " not found"));
     }
 
     static String paymentMethod(String method) {
@@ -355,10 +374,10 @@ public class PolicyWorkflow {
     }
 
     private static String tierSuffix(InsurancePolicy policy) {
-        return "";
+        return policy.getTier() == null ? "" : " " + policy.getTier();
     }
 
-    static String bwp(int amount) {
-        return String.format(Locale.ENGLISH, "BWP %,d", amount);
+    static String bwp(BigDecimal amount) {
+        return String.format(Locale.ENGLISH, "BWP %,.2f", amount);
     }
 }

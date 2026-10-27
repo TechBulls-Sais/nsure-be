@@ -1,0 +1,35 @@
+databaseChangeLog:
+  - changeSet:
+      id: 027-read-control-permission
+      author: nsure
+      comment: >-
+        READ_CONTROL opens GET /admin/controls for function-code roles, matching the controls.read capability
+        grants (Actuary, Claims Assessor). See ApiAccessRules for the full API access matrix.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT 'controls', 'READ_CONTROL', 'CONTROL', 'READ', FALSE, 'View operational controls'
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'READ_CONTROL');
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id
+              FROM app_role r
+              JOIN app_permission p ON p.code = 'READ_CONTROL'
+              WHERE r.name IN ('Actuary', 'Claims Assessor')
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+  - changeSet:
+      id: 027-super-roles-hold-everything
+      author: nsure
+      comment: >-
+        Super Admin and Super user hold every special permission. The code already lets both roles through every
+        check by name; these rows keep the Access screen honest about it.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id
+              FROM app_role r
+              JOIN app_permission p ON p.code IN ('ALL_FUNCTIONS', 'ALL_FUNCTIONS_READ', 'CHECKER_SUPER_USER')
+              WHERE r.name IN ('Super Admin', 'Super user')
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);

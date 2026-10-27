@@ -1,0 +1,36 @@
+databaseChangeLog:
+  - changeSet:
+      id: 025-review-permissions
+      author: nsure
+      comment: >-
+        EDD_CUSTOMER records the outcome of a customer's enhanced due diligence review; APPROVE_POLICY accepts or
+        declines a policy a customer bought in the portal before it goes in force. Super Admin has both through
+        ALL_FUNCTIONS; the Onboarding Specialist, who already marks KYC, also reviews EDD.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT 'customer', 'EDD_CUSTOMER', 'CUSTOMER', 'EDD', FALSE, 'Record customer EDD review outcome'
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'EDD_CUSTOMER');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT 'portfolio', 'APPROVE_POLICY', 'POLICY', 'APPROVE', FALSE, 'Accept or decline a policy bought by a customer'
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'APPROVE_POLICY');
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id
+              FROM app_role r
+              JOIN app_permission p ON p.code = 'EDD_CUSTOMER'
+              WHERE r.name = 'Onboarding Specialist'
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+  - changeSet:
+      id: 025-policy-review
+      author: nsure
+      comment: Who accepted or declined a customer-bought policy, when, and why (shown to the customer on a decline).
+      changes:
+        - addColumn:
+            tableName: ins_policy
+            columns:
+              - column: {name: reviewed_by, type: varchar(100)}
+              - column: {name: reviewed_at, type: datetime}
+              - column: {name: review_note, type: varchar(500)}

@@ -1,0 +1,135 @@
+databaseChangeLog:
+  - changeSet:
+      id: 008-reference-data
+      author: nsure
+      changes:
+        - createTable:
+            tableName: premium_frequency
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: frequency_name, type: varchar(50), constraints: {nullable: false, unique: true}}
+              - column: {name: months, type: int, constraints: {nullable: false}}
+              - column: {name: short_label, type: varchar(20)}
+              - column: {name: period_word, type: varchar(20)}
+              - column: {name: display_order, type: int, constraints: {nullable: false}}
+        - createTable:
+            tableName: relationship_type
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: relationship_name, type: varchar(80), constraints: {nullable: false, unique: true}}
+              - column: {name: display_order, type: int, constraints: {nullable: false}}
+              - column: {name: is_self_relationship, type: boolean, defaultValueBoolean: false, constraints: {nullable: false}}
+        - createTable:
+            tableName: courtesy
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: name, type: varchar(50), constraints: {nullable: false, unique: true}}
+        - createTable:
+            tableName: proof_of_identity
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: name, type: varchar(50), constraints: {nullable: false, unique: true}}
+        - createTable:
+            tableName: payout_method
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: name, type: varchar(50), constraints: {nullable: false, unique: true}}
+        - createTable:
+            tableName: gender
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: name, type: varchar(50), constraints: {nullable: false, unique: true}}
+        - insert:
+            tableName: premium_frequency
+            columns:
+              - column: {name: frequency_name, value: Monthly}
+              - column: {name: months, valueNumeric: 1}
+              - column: {name: short_label, value: /mo}
+              - column: {name: period_word, value: month}
+              - column: {name: display_order, valueNumeric: 1}
+        - insert:
+            tableName: premium_frequency
+            columns:
+              - column: {name: frequency_name, value: Quarterly}
+              - column: {name: months, valueNumeric: 3}
+              - column: {name: short_label, value: /qtr}
+              - column: {name: period_word, value: quarter}
+              - column: {name: display_order, valueNumeric: 2}
+        - insert:
+            tableName: premium_frequency
+            columns:
+              - column: {name: frequency_name, value: Semi-Annually}
+              - column: {name: months, valueNumeric: 6}
+              - column: {name: short_label, value: /6mo}
+              - column: {name: period_word, value: half-year}
+              - column: {name: display_order, valueNumeric: 3}
+        - insert:
+            tableName: premium_frequency
+            columns:
+              - column: {name: frequency_name, value: Annual}
+              - column: {name: months, valueNumeric: 12}
+              - column: {name: short_label, value: /yr}
+              - column: {name: period_word, value: year}
+              - column: {name: display_order, valueNumeric: 4}
+        - insert:
+            tableName: premium_frequency
+            columns:
+              - column: {name: frequency_name, value: One-time}
+              - column: {name: months, valueNumeric: 0}
+              - column: {name: short_label, value: " (once)"}
+              - column: {name: period_word, value: payment}
+              - column: {name: display_order, valueNumeric: 5}
+        - insert:
+            tableName: relationship_type
+            columns:
+              - column: {name: relationship_name, value: Main Insured}
+              - column: {name: display_order, valueNumeric: 1}
+              - column: {name: is_self_relationship, valueBoolean: true}
+        - insert:
+            tableName: relationship_type
+            columns:
+              - column: {name: relationship_name, value: Spouse}
+              - column: {name: display_order, valueNumeric: 2}
+              - column: {name: is_self_relationship, valueBoolean: false}
+        - insert:
+            tableName: relationship_type
+            columns:
+              - column: {name: relationship_name, value: Child}
+              - column: {name: display_order, valueNumeric: 3}
+              - column: {name: is_self_relationship, valueBoolean: false}
+        - insert:
+            tableName: relationship_type
+            columns:
+              - column: {name: relationship_name, value: Parents}
+              - column: {name: display_order, valueNumeric: 4}
+              - column: {name: is_self_relationship, valueBoolean: false}
+        - insert:
+            tableName: relationship_type
+            columns:
+              - column: {name: relationship_name, value: Parents-In-Laws}
+              - column: {name: display_order, valueNumeric: 5}
+              - column: {name: is_self_relationship, valueBoolean: false}
+        - insert:
+            tableName: relationship_type
+            columns:
+              - column: {name: relationship_name, value: Grand Parents}
+              - column: {name: display_order, valueNumeric: 6}
+              - column: {name: is_self_relationship, valueBoolean: false}
+        - insert:
+            tableName: relationship_type
+            columns:
+              - column: {name: relationship_name, value: Sibling}
+              - column: {name: display_order, valueNumeric: 7}
+              - column: {name: is_self_relationship, valueBoolean: false}
+        - insert:
+            tableName: relationship_type
+            columns:
+              - column: {name: relationship_name, value: Other}
+              - column: {name: display_order, valueNumeric: 8}
+              - column: {name: is_self_relationship, valueBoolean: false}
+        - sql:
+            sql: |
+              INSERT INTO courtesy (name) VALUES ('Mr'), ('Mrs'), ('Ms'), ('Dr'), ('Prof'), ('Rev');
+              INSERT INTO proof_of_identity (name) VALUES ('Omang'), ('Passport');
+              INSERT INTO payout_method (name) VALUES ('Bank Account'), ('Mobile Wallet');
+              INSERT INTO gender (name) VALUES ('Male'), ('Female'), ('Other');

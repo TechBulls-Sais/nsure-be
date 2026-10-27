@@ -1,0 +1,21 @@
+databaseChangeLog:
+  - changeSet:
+      id: 017-customer-identity
+      author: nsure
+      comment: Proof of identity, date of birth and enhanced due diligence (EDD) review status for customers.
+      changes:
+        - addColumn:
+            tableName: ins_customer
+            columns:
+              - column: {name: poi_type, type: varchar(20)}
+              - column: {name: poi_number, type: varchar(40)}
+              - column: {name: date_of_birth, type: date}
+              - column: {name: edd_status, type: varchar(20)}
+        - sql:
+            sql: |
+              UPDATE ins_customer SET poi_type = 'Omang', poi_number = '880618404', date_of_birth = '1992-06-15', edd_status = 'VERIFIED' WHERE record_ref = 'CUS-1001';
+              UPDATE ins_customer SET poi_type = 'Passport', poi_number = 'BW0950122', date_of_birth = '1995-01-22', edd_status = 'PENDING' WHERE record_ref = 'CUS-1002';
+              UPDATE ins_customer SET poi_type = 'Omang', poi_number = '770305202', date_of_birth = '1985-11-02' WHERE record_ref = 'CUS-1003';
+              UPDATE ins_customer SET poi_type = 'Omang', poi_number = '830712101', date_of_birth = '1990-04-12' WHERE record_ref = 'CUS-1004';
+              UPDATE ins_customer SET poi_type = 'Omang', poi_number = '654783920', date_of_birth = '1988-06-08' WHERE record_ref = 'CUS-1005';
+              UPDATE ins_customer SET poi_type = 'Passport', poi_number = 'BW0730515', date_of_birth = '1973-05-15', edd_status = 'VERIFIED' WHERE record_ref = 'CUS-1006';

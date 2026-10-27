@@ -1,0 +1,8 @@
+databaseChangeLog:
+  - changeSet:
+      id: 019-product-config-active-status
+      author: nsure
+      comment: Product studio status "Demo active" is now simply "Active".
+      changes:
+        - sql:
+            sql: UPDATE ins_product_config SET status = 'Active' WHERE status = 'Demo active';

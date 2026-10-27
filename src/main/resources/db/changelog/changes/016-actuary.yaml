@@ -1,0 +1,36 @@
+databaseChangeLog:
+  - changeSet:
+      id: 016-create-actuary
+      author: nsure
+      comment: Actuary profile, one row per actuary, optionally linked to their login user.
+      changes:
+        - createTable:
+            tableName: actuary
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_actuary}}
+              - column: {name: user_id, type: bigint, constraints: {unique: true, uniqueConstraintName: uk_actuary_user}}
+              - column: {name: full_name, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: registration_number, type: varchar(60), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_actuary_registration}}
+              - column: {name: qualification, type: varchar(120)}
+              - column: {name: professional_body, type: varchar(150)}
+              - column: {name: email, type: varchar(150)}
+              - column: {name: phone, type: varchar(30)}
+              - column: {name: active, type: boolean, defaultValueBoolean: true, constraints: {nullable: false}}
+              - column: {name: created_by, type: bigint}
+              - column: {name: created_date, type: timestamp(6)}
+              - column: {name: last_modified_by, type: bigint}
+              - column: {name: last_modified_date, type: timestamp(6)}
+        - addForeignKeyConstraint:
+            baseTableName: actuary
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_actuary_user
+  - changeSet:
+      id: 016-mysql-actuary-boolean
+      author: nsure
+      dbms: mysql
+      comment: Liquibase maps boolean to tinyint on MySQL; Hibernate validates booleans as bit.
+      changes:
+        - sql:
+            sql: ALTER TABLE actuary MODIFY active BIT(1) NOT NULL DEFAULT 1;

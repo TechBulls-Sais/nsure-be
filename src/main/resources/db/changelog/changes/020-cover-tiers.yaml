@@ -1,0 +1,95 @@
+databaseChangeLog:
+  - changeSet:
+      id: 020-create-cover-tier
+      author: nsure
+      comment: Cover tiers - each product offers levels of cover (Bronze / Silver / Gold), each with its own cover and premium.
+      changes:
+        - createTable:
+            tableName: ins_cover_tier
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ins_cover_tier}}
+              - column: {name: product_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: name, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: cover_amount, type: int, constraints: {nullable: false}}
+              - column: {name: premium, type: int, constraints: {nullable: false}}
+              - column: {name: premium_frequency, type: varchar(20), defaultValue: Monthly, constraints: {nullable: false}}
+              - column: {name: popular, type: boolean, defaultValueBoolean: false, constraints: {nullable: false}}
+              - column: {name: benefits, type: varchar(500)}
+              - column: {name: display_order, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: active, type: boolean, defaultValueBoolean: true, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: ins_cover_tier
+            baseColumnNames: product_id
+            referencedTableName: ins_product
+            referencedColumnNames: id
+            constraintName: fk_cover_tier_product
+        - addUniqueConstraint:
+            tableName: ins_cover_tier
+            columnNames: product_id, name
+            constraintName: uk_cover_tier_product_name
+  - changeSet:
+      id: 020-mysql-cover-tier-booleans
+      author: nsure
+      dbms: mysql
+      comment: Liquibase maps boolean to tinyint on MySQL; Hibernate validates booleans as bit.
+      changes:
+        - sql:
+            sql: |
+              ALTER TABLE ins_cover_tier MODIFY popular BIT(1) NOT NULL DEFAULT 0;
+              ALTER TABLE ins_cover_tier MODIFY active BIT(1) NOT NULL DEFAULT 1;
+  - changeSet:
+      id: 020-cover-tier-on-covers
+      author: nsure
+      comment: The tier chosen on an application, carried onto the policy it becomes.
+      changes:
+        - addColumn:
+            tableName: ins_application
+            columns:
+              - column: {name: tier, type: varchar(60)}
+        - addColumn:
+            tableName: ins_policy
+            columns:
+              - column: {name: tier, type: varchar(60)}
+  - changeSet:
+      id: 020-seed-cover-tiers
+      author: nsure
+      comment: Bronze / Silver / Gold for every product. Silver matches each product's existing headline cover and premium.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO ins_cover_tier (product_id, name, cover_amount, premium, premium_frequency, popular, benefits, display_order, active)
+              SELECT p.id, t.name, t.cover_amount, t.premium, 'Monthly', t.popular, t.benefits, t.display_order, TRUE
+              FROM ins_product p
+              JOIN (
+                SELECT 'Term Life' AS product, 'Bronze' AS name, 250000 AS cover_amount, 230 AS premium, FALSE AS popular, 'Essential cover for the people who depend on you' AS benefits, 1 AS display_order UNION ALL
+                SELECT 'Term Life', 'Silver', 500000, 420, TRUE, 'Our most chosen level of cover', 2 UNION ALL
+                SELECT 'Term Life', 'Gold', 1000000, 780, FALSE, 'Highest cover with priority claims handling', 3 UNION ALL
+                SELECT 'Whole of Life', 'Bronze', 375000, 360, FALSE, 'Essential lifelong cover', 1 UNION ALL
+                SELECT 'Whole of Life', 'Silver', 750000, 680, TRUE, 'Our most chosen level of cover', 2 UNION ALL
+                SELECT 'Whole of Life', 'Gold', 1500000, 1260, FALSE, 'Highest cover with priority claims handling', 3 UNION ALL
+                SELECT 'Family Funeral', 'Bronze', 25000, 105, FALSE, 'Essential funeral cover', 1 UNION ALL
+                SELECT 'Family Funeral', 'Silver', 50000, 185, TRUE, 'Our most chosen level of cover', 2 UNION ALL
+                SELECT 'Family Funeral', 'Gold', 100000, 330, FALSE, 'Highest cover with priority claims handling', 3 UNION ALL
+                SELECT 'Care Cash', 'Bronze', 500, 145, FALSE, 'Daily cash benefit during a hospital stay', 1 UNION ALL
+                SELECT 'Care Cash', 'Silver', 1000, 265, TRUE, 'Our most chosen level of cover', 2 UNION ALL
+                SELECT 'Care Cash', 'Gold', 2000, 480, FALSE, 'Highest daily benefit with priority claims handling', 3 UNION ALL
+                SELECT 'Individual Credit', 'Bronze', 90000, 120, FALSE, 'Essential loan protection', 1 UNION ALL
+                SELECT 'Individual Credit', 'Silver', 180000, 210, TRUE, 'Our most chosen level of cover', 2 UNION ALL
+                SELECT 'Individual Credit', 'Gold', 360000, 380, FALSE, 'Highest cover with priority claims handling', 3
+              ) t ON t.product = p.name
+              WHERE NOT EXISTS (SELECT 1 FROM ins_cover_tier x WHERE x.product_id = p.id AND x.name = t.name);
+  - changeSet:
+      id: 020-backfill-cover-tiers
+      author: nsure
+      comment: Existing applications and policies get the tier whose cover matches exactly; anything else stays blank.
+      changes:
+        - sql:
+            sql: |
+              UPDATE ins_application SET tier = (
+                SELECT t.name FROM ins_cover_tier t JOIN ins_product p ON p.id = t.product_id
+                WHERE p.name = ins_application.product AND t.cover_amount = ins_application.amount
+              ) WHERE tier IS NULL;
+              UPDATE ins_policy SET tier = (
+                SELECT t.name FROM ins_cover_tier t JOIN ins_product p ON p.id = t.product_id
+                WHERE p.name = ins_policy.product AND t.cover_amount = ins_policy.amount
+              ) WHERE tier IS NULL;

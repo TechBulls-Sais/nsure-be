@@ -1,0 +1,265 @@
+databaseChangeLog:
+  - changeSet:
+      id: 023-product-type
+      author: nsure
+      comment: Product type as on the demo server catalogue (Funeral / Life Cover / Health), spec 03 section 2.4.
+      changes:
+        - addColumn:
+            tableName: ins_product
+            columns:
+              - column: {name: product_type, type: varchar(40)}
+        - update:
+            tableName: ins_product
+            where: name IN ('Term Life', 'Whole of Life', 'Individual Credit')
+            columns:
+              - column: {name: product_type, value: Life Cover}
+        - update:
+            tableName: ins_product
+            where: name = 'Family Funeral'
+            columns:
+              - column: {name: product_type, value: Funeral}
+        - update:
+            tableName: ins_product
+            where: name = 'Care Cash'
+            columns:
+              - column: {name: product_type, value: Health}
+  - changeSet:
+      id: 023-create-life-assured-rule
+      author: nsure
+      comment: >-
+        Who a tier may cover (spec 03 section 2.6): relationship, age range and how many lives.
+        min_age / max_age replace the demo server's Below 18 / Above 18 enum (rule R-8).
+      changes:
+        - createTable:
+            tableName: ins_life_assured_rule
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ins_life_assured_rule}}
+              - column: {name: tier_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: relationship_type_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: min_age, type: int}
+              - column: {name: max_age, type: int}
+              - column: {name: max_count, type: int, constraints: {nullable: false}}
+              - column: {name: display_order, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: ins_life_assured_rule
+            baseColumnNames: tier_id
+            referencedTableName: ins_cover_tier
+            referencedColumnNames: id
+            constraintName: fk_life_rule_tier
+        - addForeignKeyConstraint:
+            baseTableName: ins_life_assured_rule
+            baseColumnNames: relationship_type_id
+            referencedTableName: relationship_type
+            referencedColumnNames: id
+            constraintName: fk_life_rule_relationship
+        - addUniqueConstraint:
+            tableName: ins_life_assured_rule
+            columnNames: tier_id, relationship_type_id
+            constraintName: uk_life_rule_tier_relationship
+  - changeSet:
+      id: 023-create-rate-table
+      author: nsure
+      comment: >-
+        Rate tables in the demo server's format (spec 03 section 3): one table per product plan, immutable
+        versions, and a grid of life type x age band -> cover amount and monthly premium.
+      changes:
+        - createTable:
+            tableName: ins_rate_table
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ins_rate_table}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_rate_table_ref}}
+              - column: {name: product_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: tier_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: active, type: boolean, defaultValueBoolean: true, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: ins_rate_table
+            baseColumnNames: product_id
+            referencedTableName: ins_product
+            referencedColumnNames: id
+            constraintName: fk_rate_table_product
+        - addForeignKeyConstraint:
+            baseTableName: ins_rate_table
+            baseColumnNames: tier_id
+            referencedTableName: ins_cover_tier
+            referencedColumnNames: id
+            constraintName: fk_rate_table_tier
+        - createTable:
+            tableName: ins_rate_table_version
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ins_rate_table_version}}
+              - column: {name: rate_table_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: version_no, type: int, constraints: {nullable: false}}
+              - column: {name: valid_from, type: date, constraints: {nullable: false}}
+              - column: {name: valid_to, type: date}
+              - column: {name: source, type: varchar(20), defaultValue: MANUAL, constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100)}
+              - column: {name: change_summary, type: varchar(4000)}
+        - addForeignKeyConstraint:
+            baseTableName: ins_rate_table_version
+            baseColumnNames: rate_table_id
+            referencedTableName: ins_rate_table
+            referencedColumnNames: id
+            constraintName: fk_rate_version_table
+        - addUniqueConstraint:
+            tableName: ins_rate_table_version
+            columnNames: rate_table_id, version_no
+            constraintName: uk_rate_version_no
+        - createTable:
+            tableName: ins_rate_table_item
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ins_rate_table_item}}
+              - column: {name: version_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: relationship_type_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: age_from, type: int, constraints: {nullable: false}}
+              - column: {name: age_to, type: int, constraints: {nullable: false}}
+              - column: {name: cover_amount, type: "decimal(12,2)", constraints: {nullable: false}}
+              - column: {name: monthly_premium, type: "decimal(10,2)", constraints: {nullable: false}}
+              - column: {name: display_order, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: ins_rate_table_item
+            baseColumnNames: version_id
+            referencedTableName: ins_rate_table_version
+            referencedColumnNames: id
+            constraintName: fk_rate_item_version
+        - addForeignKeyConstraint:
+            baseTableName: ins_rate_table_item
+            baseColumnNames: relationship_type_id
+            referencedTableName: relationship_type
+            referencedColumnNames: id
+            constraintName: fk_rate_item_relationship
+        - addColumn:
+            tableName: ins_application
+            columns:
+              - column: {name: rate_table_version, type: varchar(30)}
+        - addColumn:
+            tableName: ins_policy
+            columns:
+              - column: {name: rate_table_version, type: varchar(30)}
+  - changeSet:
+      id: 023-mysql-rate-table-booleans
+      author: nsure
+      dbms: mysql
+      comment: Liquibase maps boolean to tinyint on MySQL; Hibernate validates booleans as bit.
+      changes:
+        - sql:
+            sql: ALTER TABLE ins_rate_table MODIFY active BIT(1) NOT NULL DEFAULT 1;
+  - changeSet:
+      id: 023-seed-life-assured-rules
+      author: nsure
+      comment: >-
+        Every tier covers the main insured. Family Funeral tiers also cover the family, with the demo
+        server's Boikanyo Standard rules (spec 03 section 2.6); Below 18 -> 0-17, Above 18 -> 18-65 (entry age).
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO ins_life_assured_rule (tier_id, relationship_type_id, min_age, max_age, max_count, display_order)
+              SELECT t.id, rt.id, s.min_age, s.max_age, s.max_count, s.display_order
+              FROM ins_cover_tier t
+              JOIN ins_product p ON p.id = t.product_id
+              JOIN (
+                SELECT 'Main Insured' AS life_type, 18 AS min_age, 65 AS max_age, 1 AS max_count, 1 AS display_order, 'all' AS scope UNION ALL
+                SELECT 'Spouse', 18, 65, 8, 2, 'funeral' UNION ALL
+                SELECT 'Child', 0, 17, 3, 3, 'funeral' UNION ALL
+                SELECT 'Parents', 18, 65, 6, 4, 'funeral' UNION ALL
+                SELECT 'Parents-In-Laws', 18, 65, 5, 5, 'funeral' UNION ALL
+                SELECT 'Grand Parents', 18, 65, 1, 6, 'funeral'
+              ) s ON s.scope = 'all' OR p.name = 'Family Funeral'
+              JOIN relationship_type rt ON rt.relationship_name = s.life_type
+              WHERE NOT EXISTS (
+                SELECT 1 FROM ins_life_assured_rule x WHERE x.tier_id = t.id AND x.relationship_type_id = rt.id);
+  - changeSet:
+      id: 023-seed-rate-tables
+      author: nsure
+      comment: >-
+        Mirrors the demo server, where every tier of the family funeral product (Boikanyo) and the basic
+        tier of credit life (Edu Care) are rate-table priced and the rest stay flat. The grid is the demo
+        server's Boikanyo - Standard curve (RT-00003-v2, spec 03 section 3.3, quoted per BWP 10,000 of cover)
+        scaled to each Nsure tier's own cover, which is how the demo's Premium table relates to its Standard
+        one. Credit life rates the borrower (Main Insured) only.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO ins_rate_table (record_ref, product_id, tier_id, active)
+              SELECT s.ref, p.id, t.id, TRUE
+              FROM (
+                SELECT 'RT-00001' AS ref, 'Family Funeral' AS product, 'Bronze' AS tier UNION ALL
+                SELECT 'RT-00002', 'Family Funeral', 'Silver' UNION ALL
+                SELECT 'RT-00003', 'Family Funeral', 'Gold' UNION ALL
+                SELECT 'RT-00004', 'Individual Credit', 'Bronze'
+              ) s
+              JOIN ins_product p ON p.name = s.product
+              JOIN ins_cover_tier t ON t.product_id = p.id AND t.name = s.tier
+              WHERE NOT EXISTS (SELECT 1 FROM ins_rate_table x WHERE x.record_ref = s.ref);
+
+              INSERT INTO ins_rate_table_version (rate_table_id, version_no, valid_from, source, created_by, change_summary)
+              SELECT r.id, 1, CURRENT_DATE, 'SEED', 'system',
+                     'Seeded from the demo server rate curve (Boikanyo - Standard, RT-00003-v2), scaled to this tier cover.'
+              FROM ins_rate_table r
+              WHERE NOT EXISTS (SELECT 1 FROM ins_rate_table_version x WHERE x.rate_table_id = r.id);
+
+              INSERT INTO ins_rate_table_item (version_id, relationship_type_id, age_from, age_to, cover_amount, monthly_premium, display_order)
+              SELECT v.id, rt.id, c.age_from, c.age_to, t.cover_amount * c.cover_factor,
+                     ROUND(c.rate * t.cover_amount / 10000, 2), c.display_order
+              FROM ins_rate_table r
+              JOIN ins_rate_table_version v ON v.rate_table_id = r.id AND v.version_no = 1
+              JOIN ins_cover_tier t ON t.id = r.tier_id
+              JOIN ins_product p ON p.id = r.product_id
+              JOIN (
+                SELECT 'Child' AS life_type, 0 AS age_from, 4 AS age_to, 1.05 AS rate, 0.20 AS cover_factor, 1 AS display_order UNION ALL
+                SELECT 'Child', 5, 9, 1.20, 0.20, 2 UNION ALL
+                SELECT 'Child', 10, 14, 1.50, 0.20, 3 UNION ALL
+                SELECT 'Child', 15, 19, 2.10, 0.20, 4 UNION ALL
+                SELECT 'Child', 20, 24, 2.10, 0.20, 5 UNION ALL
+                SELECT 'Main Insured', 18, 19, 6.00, 1.00, 6 UNION ALL
+                SELECT 'Main Insured', 20, 24, 6.00, 1.00, 7 UNION ALL
+                SELECT 'Main Insured', 25, 29, 6.00, 1.00, 8 UNION ALL
+                SELECT 'Main Insured', 30, 34, 7.00, 1.00, 9 UNION ALL
+                SELECT 'Main Insured', 35, 39, 9.65, 1.00, 10 UNION ALL
+                SELECT 'Main Insured', 40, 44, 12.95, 1.00, 11 UNION ALL
+                SELECT 'Main Insured', 45, 49, 18.10, 1.00, 12 UNION ALL
+                SELECT 'Main Insured', 50, 54, 26.10, 1.00, 13 UNION ALL
+                SELECT 'Main Insured', 55, 59, 32.45, 1.00, 14 UNION ALL
+                SELECT 'Main Insured', 60, 65, 39.35, 1.00, 15 UNION ALL
+                SELECT 'Spouse', 18, 19, 3.10, 1.00, 16 UNION ALL
+                SELECT 'Spouse', 20, 24, 3.10, 1.00, 17 UNION ALL
+                SELECT 'Spouse', 25, 29, 3.10, 1.00, 18 UNION ALL
+                SELECT 'Spouse', 30, 34, 5.60, 1.00, 19 UNION ALL
+                SELECT 'Spouse', 35, 39, 8.00, 1.00, 20 UNION ALL
+                SELECT 'Spouse', 40, 44, 10.70, 1.00, 21 UNION ALL
+                SELECT 'Spouse', 45, 49, 14.35, 1.00, 22 UNION ALL
+                SELECT 'Spouse', 50, 54, 19.70, 1.00, 23 UNION ALL
+                SELECT 'Spouse', 55, 59, 23.50, 1.00, 24 UNION ALL
+                SELECT 'Spouse', 60, 65, 28.90, 1.00, 25 UNION ALL
+                SELECT 'Parents', 18, 19, 59.25, 1.00, 26 UNION ALL
+                SELECT 'Parents', 20, 24, 59.25, 1.00, 27 UNION ALL
+                SELECT 'Parents', 25, 29, 59.25, 1.00, 28 UNION ALL
+                SELECT 'Parents', 30, 34, 69.13, 1.00, 29 UNION ALL
+                SELECT 'Parents', 35, 39, 95.29, 1.00, 30 UNION ALL
+                SELECT 'Parents', 40, 44, 127.88, 1.00, 31 UNION ALL
+                SELECT 'Parents', 45, 49, 178.74, 1.00, 32 UNION ALL
+                SELECT 'Parents', 50, 54, 257.74, 1.00, 33 UNION ALL
+                SELECT 'Parents', 55, 59, 320.44, 1.00, 34 UNION ALL
+                SELECT 'Parents', 60, 65, 388.58, 1.00, 35 UNION ALL
+                SELECT 'Parents-In-Laws', 18, 19, 59.25, 1.00, 36 UNION ALL
+                SELECT 'Parents-In-Laws', 20, 24, 59.25, 1.00, 37 UNION ALL
+                SELECT 'Parents-In-Laws', 25, 29, 59.25, 1.00, 38 UNION ALL
+                SELECT 'Parents-In-Laws', 30, 34, 69.13, 1.00, 39 UNION ALL
+                SELECT 'Parents-In-Laws', 35, 39, 95.29, 1.00, 40 UNION ALL
+                SELECT 'Parents-In-Laws', 40, 44, 127.88, 1.00, 41 UNION ALL
+                SELECT 'Parents-In-Laws', 45, 49, 178.74, 1.00, 42 UNION ALL
+                SELECT 'Parents-In-Laws', 50, 54, 257.74, 1.00, 43 UNION ALL
+                SELECT 'Parents-In-Laws', 55, 59, 320.44, 1.00, 44 UNION ALL
+                SELECT 'Parents-In-Laws', 60, 65, 388.58, 1.00, 45 UNION ALL
+                SELECT 'Grand Parents', 18, 19, 59.25, 1.00, 46 UNION ALL
+                SELECT 'Grand Parents', 20, 24, 59.25, 1.00, 47 UNION ALL
+                SELECT 'Grand Parents', 25, 29, 59.25, 1.00, 48 UNION ALL
+                SELECT 'Grand Parents', 30, 34, 69.13, 1.00, 49 UNION ALL
+                SELECT 'Grand Parents', 35, 39, 95.29, 1.00, 50 UNION ALL
+                SELECT 'Grand Parents', 40, 44, 127.88, 1.00, 51 UNION ALL
+                SELECT 'Grand Parents', 45, 49, 178.74, 1.00, 52 UNION ALL
+                SELECT 'Grand Parents', 50, 54, 257.74, 1.00, 53 UNION ALL
+                SELECT 'Grand Parents', 55, 59, 320.44, 1.00, 54 UNION ALL
+                SELECT 'Grand Parents', 60, 65, 388.58, 1.00, 55
+              ) c ON p.name = 'Family Funeral' OR c.life_type = 'Main Insured'
+              JOIN relationship_type rt ON rt.relationship_name = c.life_type
+              WHERE NOT EXISTS (SELECT 1 FROM ins_rate_table_item x WHERE x.version_id = v.id);

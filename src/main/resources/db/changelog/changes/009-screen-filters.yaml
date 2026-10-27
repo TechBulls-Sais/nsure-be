@@ -1,0 +1,50 @@
+databaseChangeLog:
+  - changeSet:
+      id: 009-screen-filters
+      author: nsure
+      changes:
+        - createTable:
+            tableName: relationship_screen_filter
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: screen, type: varchar(60), constraints: {nullable: false, unique: true}}
+              - column: {name: screen_label, type: varchar(120)}
+        - createTable:
+            tableName: relationship_screen_filter_item
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: filter_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: relationship_type_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: display_order, type: int, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: relationship_screen_filter_item
+            columnNames: filter_id, relationship_type_id
+            constraintName: uk_screen_filter_item
+        - addForeignKeyConstraint:
+            baseTableName: relationship_screen_filter_item
+            baseColumnNames: filter_id
+            referencedTableName: relationship_screen_filter
+            referencedColumnNames: id
+            constraintName: fk_screen_filter_item
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: relationship_screen_filter_item
+            baseColumnNames: relationship_type_id
+            referencedTableName: relationship_type
+            referencedColumnNames: id
+            constraintName: fk_screen_filter_relationship
+        - sql:
+            sql: |
+              INSERT INTO relationship_screen_filter (screen, screen_label) VALUES
+                ('life-assured', 'Life assured'),
+                ('beneficiary', 'Beneficiary');
+              INSERT INTO relationship_screen_filter_item (filter_id, relationship_type_id, display_order)
+              SELECT f.id, r.id, r.display_order
+              FROM relationship_screen_filter f
+              JOIN relationship_type r ON r.relationship_name IN ('Spouse', 'Child')
+              WHERE f.screen = 'life-assured';
+              INSERT INTO relationship_screen_filter_item (filter_id, relationship_type_id, display_order)
+              SELECT f.id, r.id, r.display_order
+              FROM relationship_screen_filter f
+              JOIN relationship_type r ON r.relationship_name = 'Main Insured'
+              WHERE f.screen = 'beneficiary';

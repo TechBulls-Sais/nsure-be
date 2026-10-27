@@ -1,39 +1,36 @@
 package com.nsure.security.service;
 
+import com.nsure.security.api.OfficeResponse;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.domain.Office;
-import com.nsure.security.repo.OfficeRepository;
-import com.nsure.security.web.OfficeResponse;
+import com.nsure.security.repository.OfficeRepository;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
+@Transactional(readOnly = true)
 public class OfficeQueryService {
 
-    private final PlatformSecurityContext security;
-    private final OfficeAccess officeAccess;
     private final OfficeRepository offices;
+    private final PlatformSecurityContext security;
+    private final OfficeAccessValidator access;
 
-    public OfficeQueryService(PlatformSecurityContext security, OfficeAccess officeAccess, OfficeRepository offices) {
-        this.security = security;
-        this.officeAccess = officeAccess;
+    public OfficeQueryService(
+            OfficeRepository offices, PlatformSecurityContext security, OfficeAccessValidator access) {
         this.offices = offices;
+        this.security = security;
+        this.access = access;
     }
 
-    @Transactional(readOnly = true)
     public List<OfficeResponse> list() {
-        AppUser actor = security.authenticatedUser();
-        if (!actor.hasPermissionTo("CREATE_USER") && !actor.hasPermissionTo("UPDATE_USER")) {
-            actor.validateHasReadPermission("OFFICE");
-        }
-        boolean headOffice = officeAccess.isHeadOffice(actor);
-        String hierarchy = officeAccess.hierarchyOf(actor.getOfficeId());
-        if (!headOffice && hierarchy == null) {
-            return List.of();
-        }
-        return offices.findVisible(headOffice, hierarchy == null ? "" : hierarchy).stream()
-                .map(office -> new OfficeResponse(office.getId(), office.getName(), office.getHierarchy()))
-                .toList();
+        AppUser caller = security.authenticatedUser();
+        caller.validateHasReadPermission("OFFICE");
+        return offices.findInHierarchy(access.hierarchyOf(caller)).stream().map(this::toResponse).toList();
+    }
+
+    private OfficeResponse toResponse(Office office) {
+        Long parentId = office.getParent() == null ? null : office.getParent().getId();
+        return new OfficeResponse(office.getId(), office.getName(), office.getHierarchy(), parentId);
     }
 }

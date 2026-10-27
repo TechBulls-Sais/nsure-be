@@ -1,0 +1,34 @@
+databaseChangeLog:
+  - changeSet:
+      id: 018-permission-function
+      author: nsure
+      comment: Plain-language function each permission code allows, shown next to group, entity and action.
+      changes:
+        - addColumn:
+            tableName: app_permission
+            columns:
+              - column: {name: function_name, type: varchar(150)}
+        - sql:
+            sql: |
+              UPDATE app_permission
+              SET function_name = CONCAT(
+                    UPPER(SUBSTRING(action_name, 1, 1)),
+                    LOWER(REPLACE(SUBSTRING(action_name, 2), '_', ' ')),
+                    ' ',
+                    LOWER(REPLACE(entity_name, '_', ' ')))
+              WHERE entity_name IS NOT NULL AND action_name IS NOT NULL;
+
+              UPDATE app_permission SET function_name = 'Perform every function' WHERE code = 'ALL_FUNCTIONS';
+              UPDATE app_permission SET function_name = 'View every record' WHERE code = 'ALL_FUNCTIONS_READ';
+              UPDATE app_permission SET function_name = 'Approve any maker-checker request' WHERE code = 'CHECKER_SUPER_USER';
+              UPDATE app_permission SET function_name = 'Change a role''s permissions' WHERE code = 'PERMISSIONS_ROLE';
+              UPDATE app_permission SET function_name = 'Approve user changes' WHERE code = 'CHECKER_UPDATE_USER';
+              UPDATE app_permission SET function_name = 'Approve role changes' WHERE code = 'CHECKER_UPDATE_ROLE';
+              UPDATE app_permission SET function_name = 'Approve role permission changes' WHERE code = 'CHECKER_PERMISSIONS_ROLE';
+              UPDATE app_permission SET function_name = 'View audit log' WHERE code = 'READ_AUDIT';
+              UPDATE app_permission SET function_name = 'Mark customer KYC successful' WHERE code = 'KYC_CUSTOMER';
+              UPDATE app_permission SET function_name = 'Publish a rate table as the live price' WHERE code = 'PUBLISH_RATE_TABLE';
+              UPDATE app_permission SET function_name = 'Create actuary profile' WHERE code = 'CREATE_ACTUARY';
+              UPDATE app_permission SET function_name = 'View actuary profiles' WHERE code = 'READ_ACTUARY';
+              UPDATE app_permission SET function_name = 'Update actuary profile' WHERE code = 'UPDATE_ACTUARY';
+              UPDATE app_permission SET function_name = 'Delete actuary profile' WHERE code = 'DELETE_ACTUARY';

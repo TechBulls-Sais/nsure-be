@@ -1,63 +1,77 @@
 package com.nsure.security.service;
 
+import com.nsure.common.exception.NotFoundException;
+import com.nsure.security.api.UserResponse;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.domain.Role;
-import com.nsure.security.repo.AppUserRepository;
-import com.nsure.security.web.UserResponse;
-import com.nsure.web.ResourceNotFoundException;
+import com.nsure.security.exception.NoAuthorizationException;
+import com.nsure.security.repository.AppUserRepository;
 import java.util.Comparator;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
+@Transactional(readOnly = true)
 public class UserQueryService {
 
-    private final PlatformSecurityContext security;
-    private final OfficeAccess officeAccess;
     private final AppUserRepository users;
+    private final PlatformSecurityContext security;
+    private final OfficeAccessValidator access;
+    private final SuperAdminGuard superAdmins;
 
-    public UserQueryService(PlatformSecurityContext security, OfficeAccess officeAccess, AppUserRepository users) {
-        this.security = security;
-        this.officeAccess = officeAccess;
+    public UserQueryService(
+            AppUserRepository users,
+            PlatformSecurityContext security,
+            OfficeAccessValidator access,
+            SuperAdminGuard superAdmins) {
         this.users = users;
+        this.security = security;
+        this.access = access;
+        this.superAdmins = superAdmins;
     }
 
-    @Transactional(readOnly = true)
     public List<UserResponse> list() {
-        AppUser actor = security.authenticatedUser();
-        actor.validateHasReadPermission("USER");
-        boolean headOffice = officeAccess.isHeadOffice(actor);
-        String hierarchy = officeAccess.hierarchyOf(actor.getOfficeId());
-        if (!headOffice && hierarchy == null) {
-            return List.of();
-        }
-        return users.findVisible(headOffice, hierarchy == null ? "" : hierarchy).stream()
-                .map(this::toResponse)
-                .toList();
+        superAdmins.require();
+        AppUser caller = security.authenticatedUser();
+        caller.validateHasReadPermission("USER");
+        return users.findInHierarchy(access.hierarchyOf(caller)).stream().map(this::toResponse).toList();
     }
 
-    @Transactional(readOnly = true)
     public UserResponse get(Long id) {
-        AppUser actor = security.authenticatedUser();
-        actor.validateHasReadPermission("USER");
-        AppUser user = users.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("User " + id + " not found"));
-        officeAccess.validateResourceOffice(user.getOfficeId(), actor);
+        superAdmins.require();
+        AppUser caller = security.authenticatedUser();
+        caller.validateHasReadPermission("USER");
+        AppUser user = users.findById(id).orElseThrow(() -> new NotFoundException("User not found"));
+        if (user.getOffice() == null) {
+            throw new NoAuthorizationException("The user doesn't have enough permissions to access the resource.");
+        }
+        access.validateAccess(user.getOffice().getHierarchy(), access.hierarchyOf(caller));
         return toResponse(user);
     }
 
+    public Long officeIdOf(Long userId) {
+        return users.findById(userId)
+                .map(user -> user.getOffice() == null ? null : user.getOffice().getId())
+                .orElse(null);
+    }
+
     private UserResponse toResponse(AppUser user) {
-        List<UserResponse.RoleSummary> roles = user.getRoles().stream()
-                .sorted(Comparator.comparing(Role::getName))
-                .map(role -> new UserResponse.RoleSummary(role.getId(), role.getName()))
-                .toList();
+        List<String> roleNames = user.getRoles() == null
+                ? List.of()
+                : user.getRoles().stream().map(Role::getName).sorted(Comparator.naturalOrder()).toList();
+        List<Long> roleIds = user.getRoles() == null
+                ? List.of()
+                : user.getRoles().stream().map(Role::getId).sorted(Comparator.naturalOrder()).toList();
         return new UserResponse(
                 user.getId(),
                 user.getUsername(),
                 user.isEnabled(),
-                user.getOfficeId(),
-                roles,
+                user.getOffice() == null ? null : user.getOffice().getId(),
+                user.getOffice() == null ? null : user.getOffice().getName(),
+                user.getOffice() == null ? null : user.getOffice().getHierarchy(),
+                roleNames,
+                roleIds,
                 user.getCreatedBy(),
                 user.getCreatedDate(),
                 user.getLastModifiedBy(),

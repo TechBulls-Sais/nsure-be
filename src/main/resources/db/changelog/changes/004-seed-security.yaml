@@ -1,0 +1,70 @@
+databaseChangeLog:
+  - changeSet:
+      id: 004-seed-offices
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO office (name, hierarchy, parent_id) VALUES ('Head Office', '.', NULL);
+              INSERT INTO office (name, hierarchy, parent_id)
+              SELECT 'Branch Office', '.2.', id FROM office WHERE name = 'Head Office';
+  - changeSet:
+      id: 004-seed-permissions
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker) VALUES
+              ('special', 'ALL_FUNCTIONS', NULL, NULL, FALSE),
+              ('special', 'ALL_FUNCTIONS_READ', NULL, NULL, FALSE),
+              ('special', 'CHECKER_SUPER_USER', NULL, NULL, FALSE),
+              ('authorisation', 'CREATE_USER', 'USER', 'CREATE', FALSE),
+              ('authorisation', 'READ_USER', 'USER', 'READ', FALSE),
+              ('authorisation', 'UPDATE_USER', 'USER', 'UPDATE', TRUE),
+              ('authorisation', 'CREATE_ROLE', 'ROLE', 'CREATE', FALSE),
+              ('authorisation', 'READ_ROLE', 'ROLE', 'READ', FALSE),
+              ('authorisation', 'UPDATE_ROLE', 'ROLE', 'UPDATE', TRUE),
+              ('authorisation', 'PERMISSIONS_ROLE', 'ROLE', 'PERMISSIONS', TRUE),
+              ('authorisation', 'READ_PERMISSION', 'PERMISSION', 'READ', FALSE),
+              ('authorisation', 'CHECKER_UPDATE_USER', 'USER', 'CHECKER_UPDATE', FALSE),
+              ('authorisation', 'CHECKER_UPDATE_ROLE', 'ROLE', 'CHECKER_UPDATE', FALSE),
+              ('authorisation', 'CHECKER_PERMISSIONS_ROLE', 'ROLE', 'CHECKER_PERMISSIONS', FALSE),
+              ('organisation', 'READ_AUDIT', 'AUDIT', 'READ', FALSE),
+              ('organisation', 'READ_OFFICE', 'OFFICE', 'READ', FALSE);
+  - changeSet:
+      id: 004-seed-roles
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_role (name, description, disabled)
+              VALUES ('Super user', 'Every permission, including writes.', FALSE);
+  - changeSet:
+      id: 004-seed-users
+      author: nsure
+      comment: "Dev admin username is admin and password is password. The system user is disabled and is the auditor fallback (id 1)."
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_user (username, password, enabled, office_id)
+              SELECT 'system', '$2a$10$N5F9nAglAK4NYHUhwNEgluiuOeJl66oeTtPJv5LK3x1kmNloJy/zO', FALSE, id
+              FROM office WHERE name = 'Head Office';
+              INSERT INTO app_user (username, password, enabled, office_id)
+              SELECT 'admin', '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG', TRUE, id
+              FROM office WHERE name = 'Head Office';
+  - changeSet:
+      id: 004-seed-grants
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id
+              FROM app_role r
+              JOIN app_permission p ON p.code IN ('ALL_FUNCTIONS', 'CHECKER_SUPER_USER')
+              WHERE r.name = 'Super user';
+              INSERT INTO app_user_role (user_id, role_id)
+              SELECT u.id, r.id
+              FROM app_user u
+              JOIN app_role r ON r.name = 'Super user'
+              WHERE u.username = 'admin';

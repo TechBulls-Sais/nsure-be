@@ -1,10 +1,11 @@
-# Local MySQL account. Credentials are fixed here so a leftover
-# NSURE_DB_PASSWORD in the terminal cannot override them.
+# Dev login seeded by Liquibase: username admin, password password.
+# Local MySQL account created for this app: database nsure, user nsure, password nsure.
+# Replace that hash in db/changelog/changes/004-seed-security.yaml before any shared environment.
 spring:
   application:
     name: nsure-be
   datasource:
-    url: jdbc:mysql://127.0.0.1:3306/nsure?createDatabaseIfNotExists=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8
+    url: jdbc:mysql://127.0.0.1:3306/nsure?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8
     username: nsure
     password: nsure
   jpa:
@@ -17,6 +18,7 @@ spring:
           time_zone: UTC
         timezone:
           default_storage: NORMALIZE_UTC
+        auto_quote_keyword: true
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
   jackson:
@@ -25,20 +27,20 @@ spring:
       write-dates-as-timestamps: false
 
 server:
-  port: 8080
+  # 8091, not 8080: MIPAS runs on 8080 on the same machine.
+  port: 8091
   error:
     include-message: never
-    include-stacktrace: never
+    include-binding-errors: never
+
+nsure:
+  maker-checker:
+    same-user-allowed: false
+  audit:
+    max-payload-chars: 8000
 
 management:
   endpoints:
     web:
       exposure:
         include: health
-
-nsure:
-  audit:
-    system-user-id: 1
-    max-command-json-length: 8000
-  maker-checker:
-    allow-same-user: false

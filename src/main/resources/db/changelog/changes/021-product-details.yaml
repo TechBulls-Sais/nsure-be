@@ -1,0 +1,93 @@
+databaseChangeLog:
+  - changeSet:
+      id: 021-product-details
+      author: nsure
+      comment: >-
+        Customer-facing product content that used to be hardcoded in the frontend: photo and crop,
+        the "need" it answers (portal filter), card highlight, summary, who it fits, benefit bullets,
+        and the unit the cover is paid in (e.g. per day).
+      changes:
+        - addColumn:
+            tableName: ins_product
+            columns:
+              - column: {name: image_url, type: varchar(255)}
+              - column: {name: image_focus, type: varchar(40)}
+              - column: {name: need_key, type: varchar(40)}
+              - column: {name: need_label, type: varchar(60)}
+              - column: {name: need_icon, type: varchar(40)}
+              - column: {name: highlight, type: varchar(40)}
+              - column: {name: summary, type: varchar(300)}
+              - column: {name: fits, type: varchar(300)}
+              - column: {name: benefits, type: varchar(1000)}
+              - column: {name: cover_unit, type: varchar(20)}
+  - changeSet:
+      id: 021-seed-product-details
+      author: nsure
+      comment: Same values the frontend hardcoded, so nothing changes visually. benefits is one bullet per line.
+      changes:
+        - update:
+            tableName: ins_product
+            where: name = 'Term Life'
+            columns:
+              - column: {name: image_url, value: "/products/term-life.jpg"}
+              - column: {name: image_focus, value: "center 32%"}
+              - column: {name: need_key, value: family}
+              - column: {name: need_label, value: "Family income"}
+              - column: {name: need_icon, value: Users}
+              - column: {name: highlight, value: "Life protection"}
+              - column: {name: summary, value: "Pays a lump sum to your family if you die during the cover period."}
+              - column: {name: fits, value: "Useful while children are growing or while a home loan is still active."}
+              - column: {name: benefits, value: "Fixed-term life cover\nSupports income and school costs\nClear monthly premium"}
+        - update:
+            tableName: ins_product
+            where: name = 'Whole of Life'
+            columns:
+              - column: {name: image_url, value: "/products/whole-of-life.jpg"}
+              - column: {name: image_focus, value: "center 30%"}
+              - column: {name: need_key, value: lifelong}
+              - column: {name: need_label, value: "Lifelong cover"}
+              - column: {name: need_icon, value: Infinity}
+              - column: {name: highlight, value: "Lifetime protection"}
+              - column: {name: summary, value: "Pays a lasting benefit whenever the claim happens."}
+              - column: {name: fits, value: "For people who want cover that does not stop after a set number of years."}
+              - column: {name: benefits, value: "Cover for life\nHelps with final and estate costs\nSteady monthly premium"}
+        - update:
+            tableName: ins_product
+            where: name = 'Family Funeral'
+            columns:
+              - column: {name: image_url, value: "/products/family-funeral.jpg?v=2"}
+              - column: {name: image_focus, value: "center 42%"}
+              - column: {name: need_key, value: funeral}
+              - column: {name: need_label, value: "Funeral help"}
+              - column: {name: need_icon, value: Heart}
+              - column: {name: highlight, value: "Family support"}
+              - column: {name: summary, value: "Helps your family with funeral and related costs."}
+              - column: {name: fits, value: "When the main need is dignified support at a difficult time."}
+              - column: {name: benefits, value: "Funeral support\nBuilt for family needs\nLower monthly premium"}
+        - update:
+            tableName: ins_product
+            where: name = 'Care Cash'
+            columns:
+              - column: {name: image_url, value: "/products/care-cash.jpg"}
+              - column: {name: image_focus, value: "center 42%"}
+              - column: {name: need_key, value: hospital}
+              - column: {name: need_label, value: "Hospital cash"}
+              - column: {name: need_icon, value: HeartPulse}
+              - column: {name: highlight, value: "Hospital cash"}
+              - column: {name: summary, value: "Gives cash help for day-to-day costs during a hospital stay."}
+              - column: {name: fits, value: "When medical aid helps with treatment, but living costs still continue."}
+              - column: {name: benefits, value: "Hospital cash\nHelps with transport and living costs\nWorks with medical aid"}
+              - column: {name: cover_unit, value: day}
+        - update:
+            tableName: ins_product
+            where: name = 'Individual Credit'
+            columns:
+              - column: {name: image_url, value: "/products/individual-credit.jpg"}
+              - column: {name: image_focus, value: "center 70%"}
+              - column: {name: need_key, value: loan}
+              - column: {name: need_label, value: "Loan protection"}
+              - column: {name: need_icon, value: Landmark}
+              - column: {name: highlight, value: "Credit protection"}
+              - column: {name: summary, value: "Helps cover an outstanding loan or credit balance."}
+              - column: {name: fits, value: "When you want to protect your family from that debt."}
+              - column: {name: benefits, value: "Credit balance protection\nSupports the remaining loan\nKeeps debt off your family"}

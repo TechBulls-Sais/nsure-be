@@ -1,0 +1,129 @@
+databaseChangeLog:
+  - changeSet:
+      id: 010-capabilities
+      author: nsure
+      changes:
+        - createTable:
+            tableName: nsure_role
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: name, type: varchar(80), constraints: {nullable: false, unique: true}}
+              - column: {name: desk_access, type: boolean, constraints: {nullable: false}}
+              - column: {name: enabled, type: boolean, defaultValueBoolean: true, constraints: {nullable: false}}
+              - column: {name: purpose, type: varchar(400), constraints: {nullable: false}}
+        - createTable:
+            tableName: capability_grant
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: role_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: capability, type: varchar(64), constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: capability_grant
+            columnNames: role_id, capability
+            constraintName: uk_capability_grant
+        - addForeignKeyConstraint:
+            baseTableName: capability_grant
+            baseColumnNames: role_id
+            referencedTableName: nsure_role
+            referencedColumnNames: id
+            constraintName: fk_capability_grant_role
+        - createTable:
+            tableName: nsure_user_role
+            columns:
+              - column: {name: user_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: role_id, type: bigint, constraints: {nullable: false}}
+        - addPrimaryKey:
+            tableName: nsure_user_role
+            columnNames: user_id, role_id
+            constraintName: pk_nsure_user_role
+        - addForeignKeyConstraint:
+            baseTableName: nsure_user_role
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_nsure_user_role_user
+        - addForeignKeyConstraint:
+            baseTableName: nsure_user_role
+            baseColumnNames: role_id
+            referencedTableName: nsure_role
+            referencedColumnNames: id
+            constraintName: fk_nsure_user_role_role
+        - createTable:
+            tableName: claim_approval_authority
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: role_id, type: bigint, constraints: {nullable: false, unique: true}}
+              - column: {name: max_payout_amount, type: "decimal(15,2)", constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: claim_approval_authority
+            baseColumnNames: role_id
+            referencedTableName: nsure_role
+            referencedColumnNames: id
+            constraintName: fk_claim_authority_role
+        - sql:
+            sql: |
+              INSERT INTO nsure_role (name, desk_access, enabled, purpose) VALUES
+                ('Policyholder / End User', FALSE, TRUE, 'Portal customer. Zero capabilities; access is by ownership.'),
+                ('Product Configurator', TRUE, TRUE, 'Owns the product catalogue.'),
+                ('Actuary', TRUE, TRUE, 'Owns rate tables and portfolio loss ratios.'),
+                ('Onboarding Specialist', TRUE, TRUE, 'Reviews customer documents and KYC.'),
+                ('Claims Assessor', TRUE, TRUE, 'Assesses and approves claims. Four-eyes still requires two people.'),
+                ('Customer Support Representative', TRUE, TRUE, 'Services policies and answers customers.'),
+                ('Compliance & Auditor', TRUE, TRUE, 'Read-only oversight plus the finance export.');
+              INSERT INTO capability_grant (role_id, capability)
+              SELECT r.id, g.capability
+              FROM nsure_role r
+              JOIN (
+                SELECT 'Product Configurator' AS role_name, 'product.read' AS capability UNION ALL
+                SELECT 'Product Configurator', 'product.write' UNION ALL
+                SELECT 'Product Configurator', 'product.activate' UNION ALL
+                SELECT 'Product Configurator', 'product.delete' UNION ALL
+                SELECT 'Product Configurator', 'tier.write' UNION ALL
+                SELECT 'Product Configurator', 'rate.read' UNION ALL
+                SELECT 'Product Configurator', 'rate.write' UNION ALL
+                SELECT 'Actuary', 'dashboard.read' UNION ALL
+                SELECT 'Actuary', 'claim.read' UNION ALL
+                SELECT 'Actuary', 'policy.read' UNION ALL
+                SELECT 'Actuary', 'payment.read' UNION ALL
+                SELECT 'Actuary', 'product.read' UNION ALL
+                SELECT 'Actuary', 'product.write' UNION ALL
+                SELECT 'Actuary', 'rate.read' UNION ALL
+                SELECT 'Actuary', 'rate.write' UNION ALL
+                SELECT 'Actuary', 'rate.publish' UNION ALL
+                SELECT 'Actuary', 'controls.read' UNION ALL
+                SELECT 'Onboarding Specialist', 'customer.read' UNION ALL
+                SELECT 'Onboarding Specialist', 'customer.write' UNION ALL
+                SELECT 'Claims Assessor', 'dashboard.read' UNION ALL
+                SELECT 'Claims Assessor', 'claim.read' UNION ALL
+                SELECT 'Claims Assessor', 'claim.create' UNION ALL
+                SELECT 'Claims Assessor', 'claim.assess' UNION ALL
+                SELECT 'Claims Assessor', 'claim.approve' UNION ALL
+                SELECT 'Claims Assessor', 'claim.reject' UNION ALL
+                SELECT 'Claims Assessor', 'policy.read' UNION ALL
+                SELECT 'Claims Assessor', 'payment.read' UNION ALL
+                SELECT 'Claims Assessor', 'controls.read' UNION ALL
+                SELECT 'Customer Support Representative', 'dashboard.read' UNION ALL
+                SELECT 'Customer Support Representative', 'claim.read' UNION ALL
+                SELECT 'Customer Support Representative', 'claim.create' UNION ALL
+                SELECT 'Customer Support Representative', 'policy.read' UNION ALL
+                SELECT 'Customer Support Representative', 'policy.create' UNION ALL
+                SELECT 'Customer Support Representative', 'policy.write' UNION ALL
+                SELECT 'Customer Support Representative', 'payment.read' UNION ALL
+                SELECT 'Customer Support Representative', 'customer.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'dashboard.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'claim.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'policy.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'payment.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'customer.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'audit.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'finance.export' UNION ALL
+                SELECT 'Compliance & Auditor', 'rate.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'controls.read'
+              ) g ON g.role_name = r.name;
+              INSERT INTO claim_approval_authority (role_id, max_payout_amount)
+              SELECT id, 50000.00 FROM nsure_role WHERE name = 'Claims Assessor';
+              INSERT INTO nsure_user_role (user_id, role_id)
+              SELECT u.id, r.id
+              FROM app_user u
+              JOIN nsure_role r ON r.name <> 'Policyholder / End User'
+              WHERE u.username = 'admin';

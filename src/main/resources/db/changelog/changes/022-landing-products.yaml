@@ -1,0 +1,47 @@
+databaseChangeLog:
+  - changeSet:
+      id: 022-landing-products
+      author: nsure
+      comment: >-
+        Public landing page content that used to be hardcoded in LandingPage.jsx: the two-line card
+        headline (one line per row) and which products the landing page features, in order
+        (null = not featured; the landing page still mentions it as "looking further ahead").
+      changes:
+        - addColumn:
+            tableName: ins_product
+            columns:
+              - column: {name: tagline, type: varchar(120)}
+              - column: {name: featured_order, type: int}
+  - changeSet:
+      id: 022-seed-landing-products
+      author: nsure
+      comment: Same headlines and selection the landing page hardcoded, so nothing changes visually.
+      changes:
+        - update:
+            tableName: ins_product
+            where: name = 'Term Life'
+            columns:
+              - column: {name: tagline, value: "Their tomorrow.\nYour peace of mind."}
+              - column: {name: featured_order, valueNumeric: 1}
+        - update:
+            tableName: ins_product
+            where: name = 'Family Funeral'
+            columns:
+              - column: {name: tagline, value: "A little support.\nA lot of dignity."}
+              - column: {name: featured_order, valueNumeric: 2}
+        - update:
+            tableName: ins_product
+            where: name = 'Care Cash'
+            columns:
+              - column: {name: tagline, value: "Focus on recovery.\nNot the everyday."}
+              - column: {name: featured_order, valueNumeric: 3}
+        - update:
+            tableName: ins_product
+            where: name = 'Whole of Life'
+            columns:
+              - column: {name: tagline, value: "Cover for life.\nCare that lasts."}
+        - update:
+            tableName: ins_product
+            where: name = 'Individual Credit'
+            columns:
+              - column: {name: tagline, value: "Your loan covered.\nYour family protected."}

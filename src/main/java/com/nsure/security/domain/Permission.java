@@ -1,5 +1,6 @@
 package com.nsure.security.domain;
 
+import com.nsure.audit.domain.AuditableEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -9,13 +10,13 @@ import jakarta.persistence.Table;
 
 @Entity
 @Table(name = "app_permission")
-public class Permission {
+public class Permission extends AuditableEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, length = 45)
+    @Column(name = "permission_group", nullable = false, length = 45)
     private String grouping;
 
     @Column(nullable = false, unique = true, length = 100)
@@ -27,19 +28,11 @@ public class Permission {
     @Column(name = "action_name", length = 100)
     private String actionName;
 
+    @Column(name = "function_name", length = 150)
+    private String functionName;
+
     @Column(name = "can_maker_checker", nullable = false)
     private boolean canMakerChecker;
-
-    protected Permission() {
-    }
-
-    public Permission(String grouping, String code, String entityName, String actionName, boolean canMakerChecker) {
-        this.grouping = grouping;
-        this.code = code;
-        this.entityName = entityName;
-        this.actionName = actionName;
-        this.canMakerChecker = canMakerChecker;
-    }
 
     public boolean hasCode(String checkCode) {
         return code != null && code.equalsIgnoreCase(checkCode);
@@ -65,8 +58,36 @@ public class Permission {
         return actionName;
     }
 
+    public String getFunctionName() {
+        return functionName;
+    }
+
     public boolean isCanMakerChecker() {
         return canMakerChecker;
+    }
+
+    public void setFunctionName(String functionName) {
+        this.functionName = functionName;
+    }
+
+    public void setGrouping(String grouping) {
+        this.grouping = grouping;
+    }
+
+    public void setCode(String code) {
+        this.code = code;
+    }
+
+    public void setEntityName(String entityName) {
+        this.entityName = entityName;
+    }
+
+    public void setActionName(String actionName) {
+        this.actionName = actionName;
+    }
+
+    public void setCanMakerChecker(boolean canMakerChecker) {
+        this.canMakerChecker = canMakerChecker;
     }
 
     @Override
@@ -74,9 +95,10 @@ public class Permission {
         if (this == other) {
             return true;
         }
-        if (!(other instanceof Permission permission)) {
+        if (other == null || getClass() != other.getClass()) {
             return false;
         }
+        Permission permission = (Permission) other;
         return id != null && id.equals(permission.id);
     }
 

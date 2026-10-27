@@ -6,6 +6,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.LocalDate;
 
 @Entity
 @Table(name = "ins_customer")
@@ -15,7 +16,7 @@ public class CustomerAccount {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true, length = 20)
+    @Column(name = "record_ref", nullable = false, unique = true, length = 20)
     private String ref;
 
     @Column(nullable = false, length = 100)
@@ -42,9 +43,20 @@ public class CustomerAccount {
     @Column(name = "display_order", nullable = false)
     private int displayOrder;
 
-    // A politically exposed person needs an enhanced due diligence review (demo server pip_pep_status).
-    @Column(nullable = false)
-    private boolean pep;
+    @Column(name = "kyc_status", nullable = false, length = 20)
+    private String kycStatus = "PENDING";
+
+    @Column(name = "login_username", unique = true, length = 100)
+    private String loginUsername;
+
+    @Column(name = "poi_type", length = 20)
+    private String poiType;
+
+    @Column(name = "poi_number", length = 40)
+    private String poiNumber;
+
+    @Column(name = "date_of_birth")
+    private LocalDate dateOfBirth;
 
     @Column(name = "edd_status", length = 20)
     private String eddStatus;
@@ -135,12 +147,44 @@ public class CustomerAccount {
         this.displayOrder = displayOrder;
     }
 
-    public boolean isPep() {
-        return pep;
+    public String getKycStatus() {
+        return kycStatus;
     }
 
-    public void setPep(boolean pep) {
-        this.pep = pep;
+    public void setKycStatus(String kycStatus) {
+        this.kycStatus = kycStatus;
+    }
+
+    public String getLoginUsername() {
+        return loginUsername;
+    }
+
+    public void setLoginUsername(String loginUsername) {
+        this.loginUsername = loginUsername;
+    }
+
+    public String getPoiType() {
+        return poiType;
+    }
+
+    public void setPoiType(String poiType) {
+        this.poiType = poiType;
+    }
+
+    public String getPoiNumber() {
+        return poiNumber;
+    }
+
+    public void setPoiNumber(String poiNumber) {
+        this.poiNumber = poiNumber;
+    }
+
+    public LocalDate getDateOfBirth() {
+        return dateOfBirth;
+    }
+
+    public void setDateOfBirth(LocalDate dateOfBirth) {
+        this.dateOfBirth = dateOfBirth;
     }
 
     public String getEddStatus() {

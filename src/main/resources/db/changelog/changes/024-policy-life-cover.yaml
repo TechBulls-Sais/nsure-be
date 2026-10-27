@@ -1,0 +1,60 @@
+databaseChangeLog:
+  - changeSet:
+      id: 024-decimal-premiums
+      author: nsure
+      comment: >-
+        A rate-table premium is the sum of per-life rates in thebe (spec 03 section 4.3 rounds the total to
+        2 decimals), so whole-pula premiums would no longer equal the sum of the policy's life cover rows
+        (R-16). Every cover record shares the premium column definition, so all four tables move together.
+      changes:
+        - modifyDataType: {tableName: ins_application, columnName: premium, newDataType: "decimal(12,2)"}
+        - addNotNullConstraint: {tableName: ins_application, columnName: premium, columnDataType: "decimal(12,2)"}
+        - modifyDataType: {tableName: ins_policy, columnName: premium, newDataType: "decimal(12,2)"}
+        - addNotNullConstraint: {tableName: ins_policy, columnName: premium, columnDataType: "decimal(12,2)"}
+        - modifyDataType: {tableName: ins_claim, columnName: premium, newDataType: "decimal(12,2)"}
+        - addNotNullConstraint: {tableName: ins_claim, columnName: premium, columnDataType: "decimal(12,2)"}
+        - modifyDataType: {tableName: ins_receipt, columnName: premium, newDataType: "decimal(12,2)"}
+        - addNotNullConstraint: {tableName: ins_receipt, columnName: premium, columnDataType: "decimal(12,2)"}
+  - changeSet:
+      id: 024-create-policy-life-cover
+      author: nsure
+      comment: >-
+        Policy Life Cover (spec 03 R-16, spec 05): one row per covered life on a rate-table-priced
+        application or policy, recording why it costs what it costs - relationship, age at entry, cover and
+        monthly premium as rated from the version stamped on the record. Exactly one of application_id /
+        policy_id is set.
+      changes:
+        - createTable:
+            tableName: ins_policy_life_cover
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ins_policy_life_cover}}
+              - column: {name: application_id, type: bigint}
+              - column: {name: policy_id, type: bigint}
+              - column: {name: relationship_type_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: life_type, type: varchar(80), constraints: {nullable: false}}
+              - column: {name: full_name, type: varchar(200), constraints: {nullable: false}}
+              - column: {name: date_of_birth, type: date, constraints: {nullable: false}}
+              - column: {name: age_at_entry, type: int, constraints: {nullable: false}}
+              - column: {name: cover_amount, type: "decimal(15,2)", constraints: {nullable: false}}
+              - column: {name: monthly_premium, type: "decimal(15,2)", constraints: {nullable: false}}
+              - column: {name: display_order, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: ins_policy_life_cover
+            baseColumnNames: application_id
+            referencedTableName: ins_application
+            referencedColumnNames: id
+            constraintName: fk_life_cover_application
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: ins_policy_life_cover
+            baseColumnNames: policy_id
+            referencedTableName: ins_policy
+            referencedColumnNames: id
+            constraintName: fk_life_cover_policy
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: ins_policy_life_cover
+            baseColumnNames: relationship_type_id
+            referencedTableName: relationship_type
+            referencedColumnNames: id
+            constraintName: fk_life_cover_relationship

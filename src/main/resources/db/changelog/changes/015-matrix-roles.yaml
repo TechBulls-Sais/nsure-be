@@ -1,0 +1,168 @@
+databaseChangeLog:
+  - changeSet:
+      id: 015-matrix-permissions
+      author: nsure
+      comment: Function codes for products, rate tables and actuaries, plus READ_CLAIM.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'portfolio', 'READ_CLAIM', 'CLAIM', 'READ', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'READ_CLAIM');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'product', 'CREATE_PRODUCT', 'PRODUCT', 'CREATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'CREATE_PRODUCT');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'product', 'READ_PRODUCT', 'PRODUCT', 'READ', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'READ_PRODUCT');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'product', 'UPDATE_PRODUCT', 'PRODUCT', 'UPDATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'UPDATE_PRODUCT');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'product', 'DELETE_PRODUCT', 'PRODUCT', 'DELETE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'DELETE_PRODUCT');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'rating', 'CREATE_RATE_TABLE', 'RATE_TABLE', 'CREATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'CREATE_RATE_TABLE');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'rating', 'READ_RATE_TABLE', 'RATE_TABLE', 'READ', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'READ_RATE_TABLE');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'rating', 'UPDATE_RATE_TABLE', 'RATE_TABLE', 'UPDATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'UPDATE_RATE_TABLE');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'rating', 'PUBLISH_RATE_TABLE', 'RATE_TABLE', 'PUBLISH', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'PUBLISH_RATE_TABLE');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'actuary', 'CREATE_ACTUARY', 'ACTUARY', 'CREATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'CREATE_ACTUARY');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'actuary', 'READ_ACTUARY', 'ACTUARY', 'READ', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'READ_ACTUARY');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'actuary', 'UPDATE_ACTUARY', 'ACTUARY', 'UPDATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'UPDATE_ACTUARY');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'actuary', 'DELETE_ACTUARY', 'ACTUARY', 'DELETE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'DELETE_ACTUARY');
+  - changeSet:
+      id: 015-matrix-app-roles
+      author: nsure
+      comment: >-
+        Roles from the client User Roles & Task Matrix plus Super Admin. Customer Support
+        Representative and Compliance & Auditor are deliberately not created here.
+        Policyholder and Onboarding Specialist already exist (013-portal-roles).
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_role (name, description, disabled)
+              SELECT 'Super Admin', 'Full platform access: every permission, user and role management, and final maker-checker approval.', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_role WHERE name = 'Super Admin');
+
+              INSERT INTO app_role (name, description, disabled)
+              SELECT 'Product Configurator', 'Sets up no-code policy parameters: terms, fixed premiums and exclusions.', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_role WHERE name = 'Product Configurator');
+
+              INSERT INTO app_role (name, description, disabled)
+              SELECT 'Actuary', 'Defines rate tables and their versions, and monitors portfolio loss ratios.', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_role WHERE name = 'Actuary');
+
+              INSERT INTO app_role (name, description, disabled)
+              SELECT 'Claims Assessor', 'Reviews escalated, non-automated or high-value claims, inspects evidence, and approves or rejects claims and payouts.', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_role WHERE name = 'Claims Assessor');
+  - changeSet:
+      id: 015-matrix-app-role-grants
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id
+              FROM app_role r
+              JOIN app_permission p ON
+                   (r.name = 'Super Admin' AND p.code IN ('ALL_FUNCTIONS', 'CHECKER_SUPER_USER'))
+                OR (r.name = 'Product Configurator' AND p.code IN (
+                      'CREATE_PRODUCT', 'READ_PRODUCT', 'UPDATE_PRODUCT', 'DELETE_PRODUCT',
+                      'CREATE_RATE_TABLE', 'READ_RATE_TABLE', 'UPDATE_RATE_TABLE'))
+                OR (r.name = 'Actuary' AND p.code IN (
+                      'READ_PRODUCT', 'UPDATE_PRODUCT',
+                      'CREATE_RATE_TABLE', 'READ_RATE_TABLE', 'UPDATE_RATE_TABLE', 'PUBLISH_RATE_TABLE',
+                      'READ_POLICY', 'READ_CLAIM', 'READ_ACTUARY'))
+                OR (r.name = 'Onboarding Specialist' AND p.code IN ('READ_CUSTOMER', 'UPDATE_CUSTOMER', 'KYC_CUSTOMER'))
+                OR (r.name = 'Claims Assessor' AND p.code IN (
+                      'READ_CLAIM', 'CREATE_CLAIM', 'UPDATE_CLAIM', 'READ_POLICY', 'READ_CUSTOMER'))
+              WHERE NOT EXISTS (
+                SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+
+              INSERT INTO app_user_role (user_id, role_id)
+              SELECT u.id, r.id
+              FROM app_user u
+              JOIN app_role r ON r.name = 'Super Admin'
+              WHERE u.username = 'admin'
+                AND NOT EXISTS (
+                  SELECT 1 FROM app_user_role x WHERE x.user_id = u.id AND x.role_id = r.id);
+  - changeSet:
+      id: 015-super-admin-capabilities
+      author: nsure
+      comment: Super Admin capability role holds every capability in the Capability enum.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO nsure_role (name, desk_access, enabled, purpose)
+              SELECT 'Super Admin', TRUE, TRUE, 'Full platform access: every capability, user and role management, and final approval.'
+              WHERE NOT EXISTS (SELECT 1 FROM nsure_role WHERE name = 'Super Admin');
+
+              INSERT INTO capability_grant (role_id, capability)
+              SELECT r.id, c.capability
+              FROM nsure_role r
+              JOIN (
+                SELECT 'dashboard.read' AS capability UNION ALL
+                SELECT 'claim.read' UNION ALL
+                SELECT 'claim.create' UNION ALL
+                SELECT 'claim.assess' UNION ALL
+                SELECT 'claim.approve' UNION ALL
+                SELECT 'claim.reject' UNION ALL
+                SELECT 'policy.read' UNION ALL
+                SELECT 'policy.create' UNION ALL
+                SELECT 'policy.write' UNION ALL
+                SELECT 'payment.read' UNION ALL
+                SELECT 'customer.read' UNION ALL
+                SELECT 'customer.write' UNION ALL
+                SELECT 'product.read' UNION ALL
+                SELECT 'product.write' UNION ALL
+                SELECT 'product.activate' UNION ALL
+                SELECT 'product.delete' UNION ALL
+                SELECT 'tier.write' UNION ALL
+                SELECT 'audit.read' UNION ALL
+                SELECT 'finance.export' UNION ALL
+                SELECT 'rate.read' UNION ALL
+                SELECT 'rate.write' UNION ALL
+                SELECT 'rate.publish' UNION ALL
+                SELECT 'controls.read' UNION ALL
+                SELECT 'controls.write' UNION ALL
+                SELECT 'claim.approve.override' UNION ALL
+                SELECT 'rate.publish.self'
+              ) c ON 1 = 1
+              WHERE r.name = 'Super Admin'
+                AND NOT EXISTS (
+                  SELECT 1 FROM capability_grant x WHERE x.role_id = r.id AND x.capability = c.capability);
+
+              INSERT INTO nsure_user_role (user_id, role_id)
+              SELECT u.id, r.id
+              FROM app_user u
+              JOIN nsure_role r ON r.name = 'Super Admin'
+              WHERE u.username = 'admin'
+                AND NOT EXISTS (
+                  SELECT 1 FROM nsure_user_role x WHERE x.user_id = u.id AND x.role_id = r.id);

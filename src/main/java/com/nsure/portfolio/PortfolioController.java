@@ -32,27 +32,54 @@ public class PortfolioController {
         return portfolio.createCustomer(body);
     }
 
-    @PutMapping("/customers/{ref}")
-    public PortfolioViews.CustomerView updateCustomer(@PathVariable String ref, @RequestBody JsonNode body) {
-        return portfolio.updateCustomer(ref, body);
-    }
-
     /** KYC review: no body (or decision VERIFIED) approves; decision FAILED needs a reason. */
     @PostMapping("/customers/{ref}/kyc")
     public PortfolioViews.CustomerView reviewKyc(@PathVariable String ref, @RequestBody(required = false) JsonNode body) {
         return portfolio.reviewKyc(ref, body);
     }
 
+    @GetMapping("/shop")
+    public PortfolioViews.ShopView shop() {
+        return portfolio.shop();
+    }
+
+    @PostMapping("/shop")
+    public PortfolioViews.ShopView buy(@RequestBody JsonNode body) {
+        return portfolio.buy(body);
+    }
+
     @PostMapping("/customers/{ref}/edd")
-    public PortfolioViews.CustomerView reviewEdd(@PathVariable String ref, @RequestBody(required = false) JsonNode body) {
+    public PortfolioViews.CustomerView reviewEdd(@PathVariable String ref, @RequestBody JsonNode body) {
         return portfolio.reviewEdd(ref, body);
     }
 
-    // ── policy workflow ───────────────────────────────────────────────────────────────────────────
+    // ── customer portal: the signed-in customer's own policies and claims ─────────────────────────
+
+    @PostMapping("/shop/policies/{ref}/pay")
+    public PortfolioViews.ShopView shopPay(@PathVariable String ref, @RequestBody JsonNode body) {
+        return portfolio.shopPay(ref, body);
+    }
+
+    @PostMapping("/shop/policies/{ref}/beneficiaries")
+    public PortfolioViews.ShopView shopAddBeneficiary(@PathVariable String ref, @RequestBody JsonNode body) {
+        return portfolio.shopAddBeneficiary(ref, body);
+    }
+
+    @DeleteMapping("/shop/policies/{ref}/beneficiaries/{id}")
+    public PortfolioViews.ShopView shopRemoveBeneficiary(@PathVariable String ref, @PathVariable Long id) {
+        return portfolio.shopRemoveBeneficiary(ref, id);
+    }
+
+    @PostMapping("/shop/claims")
+    public PortfolioViews.ShopView shopClaim(@RequestBody JsonNode body) {
+        return portfolio.shopClaim(body);
+    }
+
+    // ── policy workflow (staff) ───────────────────────────────────────────────────────────────────
 
     @PostMapping("/policies/{ref}/payments")
     public PortfolioViews.CoverView recordPayment(@PathVariable String ref, @RequestBody(required = false) JsonNode body) {
-        return portfolio.recordPayment(ref, body);
+        return portfolio.recordPayment(ref, body == null ? com.fasterxml.jackson.databind.node.NullNode.getInstance() : body);
     }
 
     @PostMapping("/policies/{ref}/cancel")
@@ -76,9 +103,20 @@ public class PortfolioController {
         return portfolio.runPolicySweep();
     }
 
-    @GetMapping("/history/{type}/{ref}")
+    // The type is in the path pattern so ApiAccessRules can gate each history on its own read permission.
+    @GetMapping("/history/{type:policy|claim|kyc|edd}/{ref}")
     public List<PortfolioViews.HistoryView> history(@PathVariable String type, @PathVariable String ref) {
         return portfolio.history(type, ref);
+    }
+
+    @PostMapping("/shop/quote")
+    public PortfolioViews.QuoteView shopQuote(@RequestBody JsonNode body) {
+        return portfolio.shopQuote(body);
+    }
+
+    @PostMapping("/quote")
+    public PortfolioViews.QuoteView quote(@RequestBody JsonNode body) {
+        return portfolio.quote(body);
     }
 
     @GetMapping("/applications")
@@ -116,7 +154,7 @@ public class PortfolioController {
         return portfolio.createClaim(body);
     }
 
-    // ── claim workflow ────────────────────────────────────────────────────────────────────────────
+    // ── claim workflow (staff) ────────────────────────────────────────────────────────────────────
 
     @PutMapping("/claims/{ref}/payee")
     public PortfolioViews.ClaimView setClaimPayee(@PathVariable String ref, @RequestBody JsonNode body) {

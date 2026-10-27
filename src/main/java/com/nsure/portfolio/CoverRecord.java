@@ -5,6 +5,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.MappedSuperclass;
+import java.math.BigDecimal;
 
 @MappedSuperclass
 public abstract class CoverRecord {
@@ -13,7 +14,7 @@ public abstract class CoverRecord {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true, length = 20)
+    @Column(name = "record_ref", nullable = false, unique = true, length = 20)
     private String ref;
 
     @Column(name = "customer_name", nullable = false, length = 100)
@@ -25,8 +26,9 @@ public abstract class CoverRecord {
     @Column(nullable = false)
     private int amount;
 
-    @Column(nullable = false)
-    private int premium;
+    /** Monthly premium in pula and thebe; on a rate-table plan it is the sum of the covered lives' rates. */
+    @Column(nullable = false, precision = 12, scale = 2)
+    private BigDecimal premium;
 
     @Column(nullable = false, length = 40)
     private String status;
@@ -73,11 +75,11 @@ public abstract class CoverRecord {
         this.amount = amount;
     }
 
-    public int getPremium() {
+    public BigDecimal getPremium() {
         return premium;
     }
 
-    public void setPremium(int premium) {
+    public void setPremium(BigDecimal premium) {
         this.premium = premium;
     }
 

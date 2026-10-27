@@ -15,7 +15,7 @@ public class ProductConfiguration {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true, length = 20)
+    @Column(name = "record_ref", nullable = false, unique = true, length = 20)
     private String ref;
 
     @Column(nullable = false, length = 100)

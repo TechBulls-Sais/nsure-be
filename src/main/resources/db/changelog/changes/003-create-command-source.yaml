@@ -1,0 +1,105 @@
+databaseChangeLog:
+  - changeSet:
+      id: 003-create-command-source
+      author: nsure
+      changes:
+        - createTable:
+            tableName: command_source
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                    primaryKeyName: pk_command_source
+              - column:
+                  name: action_name
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: entity_name
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: resource_id
+                  type: bigint
+              - column:
+                  name: office_id
+                  type: bigint
+              - column:
+                  name: command_as_json
+                  type: clob
+              - column:
+                  name: result_json
+                  type: clob
+              - column:
+                  name: result_status
+                  type: int
+              - column:
+                  name: maker_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: made_on
+                  type: timestamp(6)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: checker_id
+                  type: bigint
+              - column:
+                  name: checked_on
+                  type: timestamp(6)
+              - column:
+                  name: status
+                  type: varchar(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: idempotency_key
+                  type: varchar(64)
+        - addUniqueConstraint:
+            tableName: command_source
+            columnNames: action_name, entity_name, idempotency_key
+            constraintName: uk_command_idem
+        - addForeignKeyConstraint:
+            baseTableName: command_source
+            baseColumnNames: maker_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_command_maker
+        - addForeignKeyConstraint:
+            baseTableName: command_source
+            baseColumnNames: checker_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_command_checker
+        - addForeignKeyConstraint:
+            baseTableName: command_source
+            baseColumnNames: office_id
+            referencedTableName: office
+            referencedColumnNames: id
+            constraintName: fk_command_office
+        - createIndex:
+            tableName: command_source
+            indexName: idx_command_made_on
+            columns:
+              - column:
+                  name: made_on
+        - createIndex:
+            tableName: command_source
+            indexName: idx_command_office
+            columns:
+              - column:
+                  name: office_id
+        - createIndex:
+            tableName: command_source
+            indexName: idx_command_status
+            columns:
+              - column:
+                  name: status

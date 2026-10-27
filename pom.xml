@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.5.15</version>
+        <version>3.5.16</version>
         <relativePath/>
     </parent>
 
@@ -15,7 +15,7 @@
     <artifactId>nsure-be</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>nsure-be</name>
-    <description>Nsure backend with RBAC and command auditing</description>
+    <description>Nsure backend with RBAC, command auditing, and portfolio</description>
 
     <properties>
         <java.version>21</java.version>
@@ -33,6 +33,10 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

@@ -1,0 +1,22 @@
+databaseChangeLog:
+  - changeSet:
+      id: 007-mysql-boolean-bit
+      author: nsure
+      dbms: mysql
+      changes:
+        - modifyDataType:
+            tableName: app_user
+            columnName: enabled
+            newDataType: bit
+        - modifyDataType:
+            tableName: app_role
+            columnName: disabled
+            newDataType: bit
+        - modifyDataType:
+            tableName: app_permission
+            columnName: can_maker_checker
+            newDataType: bit
+        - modifyDataType:
+            tableName: ins_product_config
+            columnName: approvals
+            newDataType: bit

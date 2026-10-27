@@ -1,0 +1,14 @@
+databaseChangeLog:
+  - changeSet:
+      id: 006-h2-command-json-longvarchar
+      author: nsure
+      dbms: h2
+      changes:
+        - modifyDataType:
+            tableName: command_source
+            columnName: command_as_json
+            newDataType: longvarchar
+        - modifyDataType:
+            tableName: command_source
+            columnName: result_json
+            newDataType: longvarchar

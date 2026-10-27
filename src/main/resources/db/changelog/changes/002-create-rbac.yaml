@@ -1,0 +1,201 @@
+databaseChangeLog:
+  - changeSet:
+      id: 002-create-rbac
+      author: nsure
+      changes:
+        - createTable:
+            tableName: app_user
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                    primaryKeyName: pk_app_user
+              - column:
+                  name: username
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uk_app_user_username
+              - column:
+                  name: password
+                  type: varchar(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: enabled
+                  type: boolean
+                  defaultValueBoolean: true
+                  constraints:
+                    nullable: false
+              - column:
+                  name: office_id
+                  type: bigint
+              - column:
+                  name: created_by
+                  type: bigint
+              - column:
+                  name: created_date
+                  type: timestamp(6)
+              - column:
+                  name: last_modified_by
+                  type: bigint
+              - column:
+                  name: last_modified_date
+                  type: timestamp(6)
+        - addForeignKeyConstraint:
+            baseTableName: app_user
+            baseColumnNames: office_id
+            referencedTableName: office
+            referencedColumnNames: id
+            constraintName: fk_app_user_office
+        - createTable:
+            tableName: app_role
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                    primaryKeyName: pk_app_role
+              - column:
+                  name: name
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uk_app_role_name
+              - column:
+                  name: description
+                  type: varchar(500)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: disabled
+                  type: boolean
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_by
+                  type: bigint
+              - column:
+                  name: created_date
+                  type: timestamp(6)
+              - column:
+                  name: last_modified_by
+                  type: bigint
+              - column:
+                  name: last_modified_date
+                  type: timestamp(6)
+        - createTable:
+            tableName: app_permission
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                    primaryKeyName: pk_app_permission
+              - column:
+                  name: permission_group
+                  type: varchar(45)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: code
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uk_app_permission_code
+              - column:
+                  name: entity_name
+                  type: varchar(100)
+              - column:
+                  name: action_name
+                  type: varchar(100)
+              - column:
+                  name: can_maker_checker
+                  type: boolean
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_by
+                  type: bigint
+              - column:
+                  name: created_date
+                  type: timestamp(6)
+              - column:
+                  name: last_modified_by
+                  type: bigint
+              - column:
+                  name: last_modified_date
+                  type: timestamp(6)
+        - createTable:
+            tableName: app_user_role
+            columns:
+              - column:
+                  name: user_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+                    primaryKeyName: pk_app_user_role
+              - column:
+                  name: role_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+                    primaryKeyName: pk_app_user_role
+        - addForeignKeyConstraint:
+            baseTableName: app_user_role
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_user_role_user
+        - addForeignKeyConstraint:
+            baseTableName: app_user_role
+            baseColumnNames: role_id
+            referencedTableName: app_role
+            referencedColumnNames: id
+            constraintName: fk_user_role_role
+        - createTable:
+            tableName: app_role_permission
+            columns:
+              - column:
+                  name: role_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+                    primaryKeyName: pk_app_role_permission
+              - column:
+                  name: permission_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+                    primaryKeyName: pk_app_role_permission
+        - addForeignKeyConstraint:
+            baseTableName: app_role_permission
+            baseColumnNames: role_id
+            referencedTableName: app_role
+            referencedColumnNames: id
+            constraintName: fk_role_permission_role
+        - addForeignKeyConstraint:
+            baseTableName: app_role_permission
+            baseColumnNames: permission_id
+            referencedTableName: app_permission
+            referencedColumnNames: id
+            constraintName: fk_role_permission_permission

@@ -1,0 +1,99 @@
+databaseChangeLog:
+  - changeSet:
+      id: 014-seed-function-crud
+      author: nsure
+      comment: Complete CRUD function codes under permissions (group, entity, action).
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'authorisation', 'CREATE_PERMISSION', 'PERMISSION', 'CREATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'CREATE_PERMISSION');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'authorisation', 'UPDATE_PERMISSION', 'PERMISSION', 'UPDATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'UPDATE_PERMISSION');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'authorisation', 'DELETE_PERMISSION', 'PERMISSION', 'DELETE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'DELETE_PERMISSION');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'authorisation', 'DELETE_ROLE', 'ROLE', 'DELETE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'DELETE_ROLE');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'authorisation', 'DELETE_USER', 'USER', 'DELETE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'DELETE_USER');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'organisation', 'CREATE_OFFICE', 'OFFICE', 'CREATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'CREATE_OFFICE');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'organisation', 'UPDATE_OFFICE', 'OFFICE', 'UPDATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'UPDATE_OFFICE');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'organisation', 'DELETE_OFFICE', 'OFFICE', 'DELETE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'DELETE_OFFICE');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'customer', 'CREATE_CUSTOMER', 'CUSTOMER', 'CREATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'CREATE_CUSTOMER');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'customer', 'READ_CUSTOMER', 'CUSTOMER', 'READ', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'READ_CUSTOMER');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'customer', 'UPDATE_CUSTOMER', 'CUSTOMER', 'UPDATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'UPDATE_CUSTOMER');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'customer', 'DELETE_CUSTOMER', 'CUSTOMER', 'DELETE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'DELETE_CUSTOMER');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'portfolio', 'CREATE_POLICY', 'POLICY', 'CREATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'CREATE_POLICY');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'portfolio', 'READ_POLICY', 'POLICY', 'READ', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'READ_POLICY');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'portfolio', 'UPDATE_POLICY', 'POLICY', 'UPDATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'UPDATE_POLICY');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'portfolio', 'DELETE_POLICY', 'POLICY', 'DELETE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'DELETE_POLICY');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'portfolio', 'CREATE_APPLICATION', 'APPLICATION', 'CREATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'CREATE_APPLICATION');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'portfolio', 'READ_APPLICATION', 'APPLICATION', 'READ', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'READ_APPLICATION');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'portfolio', 'UPDATE_APPLICATION', 'APPLICATION', 'UPDATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'UPDATE_APPLICATION');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'portfolio', 'DELETE_APPLICATION', 'APPLICATION', 'DELETE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'DELETE_APPLICATION');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'portfolio', 'CREATE_CLAIM', 'CLAIM', 'CREATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'CREATE_CLAIM');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'portfolio', 'UPDATE_CLAIM', 'CLAIM', 'UPDATE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'UPDATE_CLAIM');
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              SELECT 'portfolio', 'DELETE_CLAIM', 'CLAIM', 'DELETE', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission WHERE code = 'DELETE_CLAIM');

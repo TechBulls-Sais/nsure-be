@@ -1,11 +1,9 @@
 package com.nsure.portfolio;
 
-import com.nsure.web.ResourceNotFoundException;
-import com.nsure.mipas.control.ControlKey;
-import com.nsure.mipas.control.ControlService;
-import com.nsure.mipas.control.FourEyesControl;
-import com.nsure.mipas.capability.Capability;
-import com.nsure.mipas.capability.CapabilityService;
+import com.nsure.common.exception.NotFoundException;
+import com.nsure.controls.ControlKey;
+import com.nsure.controls.ControlService;
+import com.nsure.controls.FourEyesControl;
 import com.nsure.security.domain.AppUser;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
@@ -55,17 +53,17 @@ public class ClaimWorkflow {
     static final String FAIL = "Fail";
     static final String SYSTEM_VERIFIER = "System (registered beneficiary)";
 
-    /** Person actions, the states each may start from, and the capability it needs. */
+    /** Person actions, the states each may start from, and the permission it needs. */
     private static final Map<String, Transition> TRANSITIONS = new LinkedHashMap<>();
 
     static {
-        TRANSITIONS.put("assess", new Transition(Set.of(INITIATED, UNDER_REVIEW), RECOMMENDED, Capability.CLAIM_ASSESS));
-        TRANSITIONS.put("approve", new Transition(Set.of(RECOMMENDED), APPROVED, Capability.CLAIM_APPROVE));
-        TRANSITIONS.put("reject", new Transition(Set.of(INITIATED, UNDER_REVIEW, RECOMMENDED), REJECTED, Capability.CLAIM_REJECT));
-        TRANSITIONS.put("pay", new Transition(Set.of(APPROVED), PAID, Capability.CLAIM_APPROVE));
+        TRANSITIONS.put("assess", new Transition(Set.of(INITIATED, UNDER_REVIEW), RECOMMENDED, "ASSESS_CLAIM"));
+        TRANSITIONS.put("approve", new Transition(Set.of(RECOMMENDED), APPROVED, "APPROVE_CLAIM"));
+        TRANSITIONS.put("reject", new Transition(Set.of(INITIATED, UNDER_REVIEW, RECOMMENDED), REJECTED, "REJECT_CLAIM"));
+        TRANSITIONS.put("pay", new Transition(Set.of(APPROVED), PAID, "SETTLE_CLAIM"));
     }
 
-    private record Transition(Set<String> from, String to, Capability capability) {
+    private record Transition(Set<String> from, String to, String permission) {
     }
 
     private static final DateTimeFormatter DISPLAY = DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.ENGLISH);
@@ -75,16 +73,14 @@ public class ClaimWorkflow {
     private final FourEyesControl fourEyes;
     private final PolicyWorkflow policies;
     private final WorkflowHistory history;
-    private final CapabilityService capabilities;
 
     public ClaimWorkflow(EntityManager em, ControlService controls, FourEyesControl fourEyes,
-            PolicyWorkflow policies, WorkflowHistory history, CapabilityService capabilities) {
+            PolicyWorkflow policies, WorkflowHistory history) {
         this.em = em;
         this.controls = controls;
         this.fourEyes = fourEyes;
         this.policies = policies;
         this.history = history;
-        this.capabilities = capabilities;
     }
 
     /** Actions legal from `state`, ignoring who is acting. */
@@ -123,7 +119,7 @@ public class ClaimWorkflow {
         claim.setPolicyRef(policy.getRef());
         // A claim pays the policy's cover; an assessor may approve a partial amount.
         claim.setAmount(policy.getAmount());
-        claim.setPremium(0);
+        claim.setPremium(BigDecimal.ZERO);
         claim.setStatus(INITIATED);
         claim.setRecordDate(LocalDate.now().format(DISPLAY));
         claim.setDisplayOrder(0);
@@ -163,7 +159,7 @@ public class ClaimWorkflow {
     /** Re-evaluates the checks on an open claim; never moves it (demo server rerun_checks). */
     @Transactional
     public InsuranceClaim rerunChecks(String ref, AppUser actor) {
-        capabilities.require(Capability.CLAIM_ASSESS);
+        actor.validateHasPermissionTo("UPDATE_CLAIM");
         InsuranceClaim claim = claim(ref);
         requireOpen(claim, "Checks can only be re-run while the claim is open");
         if (claim.getPolicyRef() == null) {
@@ -190,8 +186,8 @@ public class ClaimWorkflow {
 
     @Transactional
     public InsuranceClaim setPayee(String ref, Payee payee, AppUser actor) {
-        if (!capabilities.has(Capability.CLAIM_ASSESS) && !capabilities.has(Capability.CLAIM_APPROVE)) {
-            capabilities.require(Capability.CLAIM_ASSESS);
+        if (!actor.hasPermissionTo("UPDATE_CLAIM") && !actor.hasPermissionTo("ASSESS_CLAIM")) {
+            actor.validateHasPermissionTo("UPDATE_CLAIM");
         }
         InsuranceClaim claim = claim(ref);
         requireOpen(claim, "The payee can only be changed while the claim is open");
@@ -248,11 +244,14 @@ public class ClaimWorkflow {
      * defaults to the full cover; a partial payout must be more than zero and no more than the cover.
      */
     @Transactional
-    public InsuranceClaim approve(String ref, Integer requestedPayout, String overrideReason, AppUser actor) {
+    public InsuranceClaim approve(String ref, Integer requestedPayout, AppUser actor) {
         InsuranceClaim claim = claim(ref);
         String previous = guard(claim, "approve", actor);
-        claim.setFourEyesApplied(fourEyes.assertClaimApproval(
-                claim.getRecommendedById(), actor.getId(), capabilities.has(Capability.CLAIM_APPROVE_OVERRIDE), overrideReason));
+        // Super Admin / Super user may approve their own assessment; the history records it as an override.
+        boolean fourEyesOverride = actor.isSuperAdmin() && actor.getId().equals(claim.getRecommendedById());
+        claim.setFourEyesApplied(fourEyesOverride
+                ? Boolean.FALSE
+                : fourEyes.assertClaimApproval(claim.getRecommendedById(), actor.getId()));
         if (!hasPayoutDetails(claim)) {
             throw new IllegalArgumentException("This claim has no complete payout details. Add the payee's name, "
                     + "payout method and account / wallet number on the claim first.");
@@ -273,8 +272,10 @@ public class ClaimWorkflow {
         claim.setStatus(APPROVED);
         claim.resolve(actor.getUsername());
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Approved", previous, APPROVED,
-                "Payout: BWP " + payout + (Boolean.TRUE.equals(claim.getFourEyesApplied())
-                        ? " · four-eyes: assessed by " + claim.getRecommendedBy() : " · four-eyes not applied (control off or overridden)"),
+                "Payout: BWP " + payout + (fourEyesOverride
+                        ? " · four-eyes overridden: super admin approved their own assessment"
+                        : Boolean.TRUE.equals(claim.getFourEyesApplied())
+                                ? " · four-eyes: assessed by " + claim.getRecommendedBy() : " · four-eyes control off"),
                 actor.getUsername());
         return claim;
     }
@@ -321,10 +322,10 @@ public class ClaimWorkflow {
                 .setParameter("ref", ref)
                 .getResultStream()
                 .findFirst()
-                .orElseThrow(() -> new ResourceNotFoundException("Claim " + ref + " not found"));
+                .orElseThrow(() -> new NotFoundException("Claim " + ref + " not found"));
     }
 
-    /** The guard order of the demo server's state machine: known action, legal from here, then capability. */
+    /** The guard order of the demo server's state machine: known action, legal from here, then permission. */
     private String guard(InsuranceClaim claim, String action, AppUser actor) {
         Transition transition = TRANSITIONS.get(action);
         String state = claim.getStatus();
@@ -333,7 +334,7 @@ public class ClaimWorkflow {
             throw new IllegalArgumentException("Cannot " + action + " a claim that is " + state
                     + ". Allowed from here: " + (allowed.isEmpty() ? "nothing" : String.join(", ", allowed)));
         }
-        capabilities.require(transition.capability());
+        actor.validateHasPermissionTo(transition.permission());
         return state;
     }
 
@@ -378,15 +379,15 @@ public class ClaimWorkflow {
 
     /** Null when a claim whose checks all passed may be approved straight through; else why not. */
     private String stpIneligibleReason(InsuranceClaim claim) {
-        if (!controls.isEnabled(ControlKey.CLAIM_STP_ENABLED)) {
+        if (!controls.isEnabled(ControlKey.CLAIM_STP_ENABLED.key())) {
             return "Straight-through processing is switched off";
         }
-        BigDecimal ceiling = controls.valueOf(ControlKey.CLAIM_STP_CEILING);
+        BigDecimal ceiling = controls.valueOf(ControlKey.CLAIM_STP_CEILING.key());
         if (BigDecimal.valueOf(claim.getAmount()).compareTo(ceiling) > 0) {
             return "Payout of BWP " + claim.getAmount() + " is over the straight-through ceiling of BWP "
                     + ceiling.stripTrailingZeros().toPlainString();
         }
-        if (controls.isEnabled(ControlKey.CLAIM_STP_REQUIRES_VERIFIED_PAYOUT) && !hasPayoutDetails(claim)) {
+        if (controls.isEnabled(ControlKey.CLAIM_STP_REQUIRES_VERIFIED_PAYOUT.key()) && !hasPayoutDetails(claim)) {
             return "No registered beneficiary with payout details to pay";
         }
         return null;

@@ -1,53 +1,53 @@
 package com.nsure.security.service;
 
+import com.nsure.security.api.RoleResponse;
 import com.nsure.security.domain.Permission;
 import com.nsure.security.domain.Role;
-import com.nsure.security.repo.RoleRepository;
-import com.nsure.security.web.RoleResponse;
-import com.nsure.web.ResourceNotFoundException;
+import com.nsure.security.repository.RoleRepository;
+import com.nsure.common.exception.NotFoundException;
 import java.util.Comparator;
-import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
+@Transactional(readOnly = true)
 public class RoleQueryService {
 
-    private final PlatformSecurityContext security;
     private final RoleRepository roles;
+    private final PlatformSecurityContext security;
+    private final SuperAdminGuard superAdmins;
 
-    public RoleQueryService(PlatformSecurityContext security, RoleRepository roles) {
-        this.security = security;
+    public RoleQueryService(RoleRepository roles, PlatformSecurityContext security, SuperAdminGuard superAdmins) {
         this.roles = roles;
+        this.security = security;
+        this.superAdmins = superAdmins;
     }
 
-    @Transactional(readOnly = true)
-    public List<RoleResponse> list() {
+    public java.util.List<RoleResponse> list() {
+        superAdmins.require();
         security.authenticatedUser().validateHasReadPermission("ROLE");
-        return roles.findAll().stream()
-                .sorted(Comparator.comparing(Role::getName))
-                .map(this::toResponse)
-                .toList();
+        return roles.findAllByOrderByNameAsc().stream().map(this::toResponse).toList();
     }
 
-    @Transactional(readOnly = true)
     public RoleResponse get(Long id) {
+        superAdmins.require();
         security.authenticatedUser().validateHasReadPermission("ROLE");
-        return toResponse(roles.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Role " + id + " not found")));
+        return toResponse(roles.findById(id).orElseThrow(() -> new NotFoundException("Role not found")));
     }
 
     private RoleResponse toResponse(Role role) {
-        List<String> permissions = role.getPermissions().stream()
-                .map(Permission::getCode)
-                .sorted()
-                .toList();
+        java.util.List<String> codes = role.getPermissions() == null
+                ? java.util.List.of()
+                : role.getPermissions().stream()
+                        .map(Permission::getCode)
+                        .sorted(Comparator.naturalOrder())
+                        .toList();
         return new RoleResponse(
                 role.getId(),
                 role.getName(),
                 role.getDescription(),
                 role.isDisabled(),
-                permissions,
+                codes,
                 role.getCreatedBy(),
                 role.getCreatedDate(),
                 role.getLastModifiedBy(),

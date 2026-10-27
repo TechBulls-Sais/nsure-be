@@ -1,0 +1,49 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001-create-office
+      author: nsure
+      changes:
+        - createTable:
+            tableName: office
+            columns:
+              - column:
+                  name: id
+                  type: bigint
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                    primaryKeyName: pk_office
+              - column:
+                  name: name
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: hierarchy
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uk_office_hierarchy
+              - column:
+                  name: parent_id
+                  type: bigint
+              - column:
+                  name: created_by
+                  type: bigint
+              - column:
+                  name: created_date
+                  type: timestamp(6)
+              - column:
+                  name: last_modified_by
+                  type: bigint
+              - column:
+                  name: last_modified_date
+                  type: timestamp(6)
+        - addForeignKeyConstraint:
+            baseTableName: office
+            baseColumnNames: parent_id
+            referencedTableName: office
+            referencedColumnNames: id
+            constraintName: fk_office_parent

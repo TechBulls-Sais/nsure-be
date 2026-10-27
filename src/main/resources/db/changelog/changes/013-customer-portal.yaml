@@ -1,0 +1,61 @@
+databaseChangeLog:
+  - changeSet:
+      id: 013-customer-kyc
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ins_customer
+            columns:
+              - column:
+                  name: kyc_status
+                  type: varchar(20)
+                  defaultValue: PENDING
+                  constraints:
+                    nullable: false
+              - column:
+                  name: login_username
+                  type: varchar(100)
+        - addUniqueConstraint:
+            tableName: ins_customer
+            columnNames: login_username
+            constraintName: uk_customer_login
+        - sql:
+            sql: |
+              UPDATE ins_customer SET kyc_status = 'VERIFIED' WHERE status = 'Verified';
+              UPDATE ins_customer SET login_username = 'customer' WHERE record_ref = 'CUS-1006';
+  - changeSet:
+      id: 013-portal-roles
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker)
+              VALUES ('customer', 'KYC_CUSTOMER', 'CUSTOMER', 'KYC', FALSE);
+
+              INSERT INTO app_role (name, description, disabled) VALUES
+              ('Policyholder', 'Customer login. Chooses a product and buys a policy after KYC is successful.', FALSE),
+              ('Onboarding Specialist', 'Marks customer KYC as successful.', FALSE);
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id
+              FROM app_role r
+              JOIN app_permission p ON p.code = 'KYC_CUSTOMER'
+              WHERE r.name = 'Onboarding Specialist';
+
+              INSERT INTO app_user (username, password, enabled, office_id)
+              SELECT 'customer', '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG', TRUE, id
+              FROM office WHERE name = 'Head Office';
+              INSERT INTO app_user (username, password, enabled, office_id)
+              SELECT 'onboarding', '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG', TRUE, id
+              FROM office WHERE name = 'Head Office';
+
+              INSERT INTO app_user_role (user_id, role_id)
+              SELECT u.id, r.id
+              FROM app_user u
+              JOIN app_role r ON r.name = 'Policyholder'
+              WHERE u.username = 'customer';
+              INSERT INTO app_user_role (user_id, role_id)
+              SELECT u.id, r.id
+              FROM app_user u
+              JOIN app_role r ON r.name = 'Onboarding Specialist'
+              WHERE u.username = 'onboarding';

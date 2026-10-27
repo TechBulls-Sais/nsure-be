@@ -1,0 +1,34 @@
+databaseChangeLog:
+  - changeSet:
+      id: 012-mysql-foundation-booleans
+      author: nsure
+      dbms: mysql
+      changes:
+        - modifyDataType:
+            tableName: relationship_type
+            columnName: is_self_relationship
+            newDataType: bit
+        - modifyDataType:
+            tableName: nsure_role
+            columnName: desk_access
+            newDataType: bit
+        - modifyDataType:
+            tableName: nsure_role
+            columnName: enabled
+            newDataType: bit
+        - modifyDataType:
+            tableName: operational_control
+            columnName: enabled
+            newDataType: bit
+        - modifyDataType:
+            tableName: operational_control
+            columnName: requires_reason
+            newDataType: bit
+        - modifyDataType:
+            tableName: operational_control_history
+            columnName: previous_enabled
+            newDataType: bit
+        - modifyDataType:
+            tableName: operational_control_history
+            columnName: new_enabled
+            newDataType: bit

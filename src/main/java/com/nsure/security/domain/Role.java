@@ -1,6 +1,6 @@
 package com.nsure.security.domain;
 
-import com.nsure.audit.AuditableEntity;
+import com.nsure.audit.domain.AuditableEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -38,17 +38,8 @@ public class Role extends AuditableEntity {
             inverseJoinColumns = @JoinColumn(name = "permission_id"))
     private Set<Permission> permissions = new HashSet<>();
 
-    protected Role() {
-    }
-
-    public Role(String name, String description) {
-        this.name = name;
-        this.description = description;
-        this.disabled = false;
-    }
-
     public boolean hasPermissionTo(String permissionCode) {
-        if (disabled) {
+        if (disabled || permissions == null) {
             return false;
         }
         for (Permission permission : permissions) {
@@ -60,6 +51,9 @@ public class Role extends AuditableEntity {
     }
 
     public boolean updatePermission(Permission permission, boolean selected) {
+        if (permissions == null) {
+            permissions = new HashSet<>();
+        }
         return selected ? permissions.add(permission) : permissions.remove(permission);
     }
 
@@ -100,9 +94,10 @@ public class Role extends AuditableEntity {
         if (this == other) {
             return true;
         }
-        if (!(other instanceof Role role)) {
+        if (other == null || getClass() != other.getClass()) {
             return false;
         }
+        Role role = (Role) other;
         return id != null && id.equals(role.id);
     }
 
