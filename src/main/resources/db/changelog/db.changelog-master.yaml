@@ -83,3 +83,6 @@ databaseChangeLog:
   - include:
       file: changes/028-claim-documents.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/029-policy-documents.yaml
+      relativeToChangelogFile: true

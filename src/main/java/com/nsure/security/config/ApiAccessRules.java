@@ -57,6 +57,8 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/shop/policies/*/pay", customer()),
             rule(POST, "/portfolio/shop/policies/*/beneficiaries", customer()),
             rule(DELETE, "/portfolio/shop/policies/*/beneficiaries/*", customer()),
+            rule(POST, "/portfolio/shop/policies/*/documents/schedule", customer()),
+            rule(GET, "/portfolio/shop/policies/*/documents/*", customer()),
 
             // ── customers and onboarding (Onboarding Specialist) ───────────────────────────────────────
             rule(GET, "/portfolio/customers", anyOf("READ_CUSTOMER")),
@@ -81,6 +83,9 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/policies/*/beneficiaries", anyOf("UPDATE_POLICY")),
             rule(DELETE, "/portfolio/policies/*/beneficiaries/*", anyOf("UPDATE_POLICY")),
             rule(GET, "/portfolio/history/policy/*", anyOf("READ_POLICY")),
+            rule(GET, "/portfolio/policies/*/documents", anyOf("READ_POLICY")),
+            rule(GET, "/portfolio/policies/*/documents/*", anyOf("READ_POLICY")),
+            rule(POST, "/portfolio/policies/*/documents/schedule", anyOf("CREATE_POLICY", "UPDATE_POLICY")),
             rule(GET, "/portfolio/receipts", anyOf("READ_POLICY")),
             rule(PUT, "/portfolio/receipts/*", anyOf("UPDATE_POLICY")),
             rule(GET, "/portfolio/schemes", anyOf("READ_POLICY")),

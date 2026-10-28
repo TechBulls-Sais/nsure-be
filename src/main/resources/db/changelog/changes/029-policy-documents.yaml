@@ -1,0 +1,26 @@
+databaseChangeLog:
+  - changeSet:
+      id: 029-policy-documents
+      author: nsure
+      comment: >-
+        Documents filed on a policy, starting with the generated policy schedule. The file itself is on local disk
+        under nsure.documents.dir; rows are never updated or deleted.
+      changes:
+        - createTable:
+            tableName: ins_policy_document
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ins_policy_document}}
+              - column: {name: policy_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: document_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: file_name, type: varchar(255), constraints: {nullable: false}}
+              - column: {name: content_type, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: size_bytes, type: bigint, constraints: {nullable: false}}
+              - column: {name: storage_path, type: varchar(255), constraints: {nullable: false}}
+              - column: {name: uploaded_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: uploaded_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: ins_policy_document
+            baseColumnNames: policy_id
+            referencedTableName: ins_policy
+            referencedColumnNames: id
+            constraintName: fk_policy_document_policy

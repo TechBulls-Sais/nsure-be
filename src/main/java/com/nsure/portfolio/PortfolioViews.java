@@ -75,7 +75,9 @@ public final class PortfolioViews {
             String paymentMethod,
             // Active, past its due date and still within the grace period.
             boolean inGrace,
-            List<BeneficiaryView> beneficiaries
+            List<BeneficiaryView> beneficiaries,
+            // Documents filed on a policy (generated schedules); empty on applications and receipts.
+            List<DocumentView> documents
     ) {
     }
 

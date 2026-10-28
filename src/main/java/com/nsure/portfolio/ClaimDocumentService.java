@@ -7,23 +7,18 @@ import com.nsure.security.service.PlatformSecurityContext;
 import jakarta.persistence.EntityManager;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.UUID;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * Claim evidence files: PDF, JPG or PNG up to 10 MB, stored on local disk under {@code nsure.documents.dir}.
+ * Claim evidence files: PDF, JPG or PNG up to 10 MB, stored on local disk by {@link DocumentFiles}.
  * Staff need a claim permission; a customer may only touch claims on their own policies.
  */
 @Service
@@ -49,20 +44,20 @@ public class ClaimDocumentService {
     private final WorkflowHistory history;
     private final PlatformSecurityContext security;
     private final PortfolioService portfolio;
-    private final Path root;
+    private final DocumentFiles files;
 
     public ClaimDocumentService(EntityManager em, ClaimWorkflow claims, WorkflowHistory history,
-            PlatformSecurityContext security, PortfolioService portfolio,
-            @Value("${nsure.documents.dir:data/claim-documents}") String directory) {
+            PlatformSecurityContext security, PortfolioService portfolio, DocumentFiles files) {
         this.em = em;
         this.claims = claims;
         this.history = history;
         this.security = security;
         this.portfolio = portfolio;
-        this.root = Path.of(directory).toAbsolutePath().normalize();
+        this.files = files;
     }
 
-    public record StoredFile(ClaimDocument document, Resource resource) {
+    /** A document's bytes plus what the download response needs to describe them. */
+    public record StoredFile(String fileName, String contentType, long size, Resource resource) {
     }
 
     // ── staff ────────────────────────────────────────────────────────────────────────────────────────
@@ -175,20 +170,13 @@ public class ClaimDocumentService {
     /** Writes the bytes to disk, then the row and a history entry; the file is removed again if the row fails. */
     private void save(InsuranceClaim claim, byte[] bytes, String fileName, String extension, String contentType,
             String documentType, String uploadedBy, String historyAction) {
-        String storagePath = claim.getRef() + "/" + UUID.randomUUID() + "." + extension;
-        Path target = resolve(storagePath);
-        try {
-            Files.createDirectories(target.getParent());
-            Files.write(target, bytes);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Could not save the document", e);
-        }
+        String storagePath = files.write(claim.getRef(), extension, bytes);
         try {
             em.persist(new ClaimDocument(claim.getId(), documentType, fileName, contentType, bytes.length,
                     storagePath, uploadedBy));
             em.flush();
         } catch (RuntimeException e) {
-            deleteQuietly(target);
+            files.deleteQuietly(storagePath);
             throw e;
         }
         history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), historyAction,
@@ -200,19 +188,8 @@ public class ClaimDocumentService {
         if (document == null || !document.getClaimId().equals(claim.getId())) {
             throw new NotFoundException("Document " + id + " not found on claim " + claim.getRef());
         }
-        Path path = resolve(document.getStoragePath());
-        if (!Files.isRegularFile(path)) {
-            throw new NotFoundException("The file for document " + id + " is missing from storage.");
-        }
-        return new StoredFile(document, new FileSystemResource(path));
-    }
-
-    private Path resolve(String storagePath) {
-        Path path = root.resolve(storagePath).normalize();
-        if (!path.startsWith(root)) {
-            throw new IllegalArgumentException("Invalid document path");
-        }
-        return path;
+        return new StoredFile(document.getFileName(), document.getContentType(), document.getSizeBytes(),
+                files.read(document.getStoragePath(), "document " + id));
     }
 
     /** The real type from the file's first bytes; the browser's Content-Type and the extension are not trusted. */
@@ -263,13 +240,5 @@ public class ClaimDocumentService {
     private static String extension(String fileName) {
         int dot = fileName.lastIndexOf('.');
         return dot < 0 ? "" : fileName.substring(dot + 1).toLowerCase(Locale.ROOT);
-    }
-
-    private static void deleteQuietly(Path path) {
-        try {
-            Files.deleteIfExists(path);
-        } catch (IOException ignored) {
-            // The row was not saved, so an orphan file is harmless.
-        }
     }
 }

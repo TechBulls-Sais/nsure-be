@@ -46,9 +46,9 @@ nsure:
     same-user-allowed: false
   audit:
     max-payload-chars: 8000
-  # Where uploaded claim documents are kept, relative to the working directory (data/ is git-ignored).
+  # Where claim and policy documents are kept, one folder per reference (data/ is git-ignored).
   documents:
-    dir: data/claim-documents
+    dir: data/documents
 
 management:
   endpoints:

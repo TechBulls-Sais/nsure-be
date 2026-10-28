@@ -60,13 +60,13 @@ public class ClaimDocumentController {
         return file(documents.shopDownload(ref, id));
     }
 
-    private static ResponseEntity<Resource> file(ClaimDocumentService.StoredFile stored) {
-        ClaimDocument document = stored.document();
+    /** The file shown inline (the browser opens a PDF or image) under its original name. Shared with policies. */
+    static ResponseEntity<Resource> file(ClaimDocumentService.StoredFile stored) {
         return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType(document.getContentType()))
-                .contentLength(document.getSizeBytes())
+                .contentType(MediaType.parseMediaType(stored.contentType()))
+                .contentLength(stored.size())
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.inline()
-                        .filename(document.getFileName(), StandardCharsets.UTF_8)
+                        .filename(stored.fileName(), StandardCharsets.UTF_8)
                         .build()
                         .toString())
                 .body(stored.resource());

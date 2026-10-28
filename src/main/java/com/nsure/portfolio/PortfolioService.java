@@ -185,7 +185,7 @@ public class PortfolioService {
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.CoverView> receipts() {
-        return list(PremiumReceipt.class).stream().map(row -> cover(row, List.of(), List.of())).toList();
+        return list(PremiumReceipt.class).stream().map(row -> cover(row, List.of(), List.of(), List.of())).toList();
     }
 
     @Transactional(readOnly = true)
@@ -946,15 +946,22 @@ public class PortfolioService {
         return number.isEmpty() ? 0 : Integer.parseInt(number);
     }
 
+    /** One policy as the workspace shows it: lives, beneficiaries and documents included. */
+    public PortfolioViews.CoverView policyView(InsurancePolicy policy) {
+        return cover(policy);
+    }
+
     private PortfolioViews.CoverView cover(CoverRecord row) {
+        boolean policy = row instanceof InsurancePolicy;
         return cover(row, row instanceof TieredCover rated && rated.getRateTableVersion() != null
                 ? livesOf(row.getClass(), List.of(row.getId())).getOrDefault(row.getId(), List.of()) : List.of(),
-                row instanceof InsurancePolicy ? beneficiariesOf(List.of(row.getId())).getOrDefault(row.getId(), List.of())
+                policy ? beneficiariesOf(List.of(row.getId())).getOrDefault(row.getId(), List.of()) : List.of(),
+                policy ? PolicyDocumentService.viewsOf(em, List.of(row.getId())).getOrDefault(row.getId(), List.of())
                         : List.of());
     }
 
     private PortfolioViews.CoverView cover(CoverRecord row, List<PortfolioViews.LifeCoverView> lives,
-            List<PortfolioViews.BeneficiaryView> beneficiaries) {
+            List<PortfolioViews.BeneficiaryView> beneficiaries, List<PortfolioViews.DocumentView> documents) {
         InsurancePolicy policy = row instanceof InsurancePolicy p ? p : null;
         LocalDate today = LocalDate.now();
         return new PortfolioViews.CoverView(
@@ -974,7 +981,8 @@ public class PortfolioService {
                 policy != null && PolicyWorkflow.ACTIVE.equals(policy.getStatus()) && policy.getNextPremiumDue() != null
                         && policy.getNextPremiumDue().isBefore(today) && policy.getGracePeriodEnd() != null
                         && !policy.getGracePeriodEnd().isBefore(today),
-                beneficiaries);
+                beneficiaries,
+                documents);
     }
 
     private static String date(LocalDate value) {
@@ -1005,10 +1013,14 @@ public class PortfolioService {
             List<? extends CoverRecord> rows, Class<? extends CoverRecord> type, boolean complete) {
         Map<Long, List<PortfolioViews.LifeCoverView>> lives = rows.isEmpty() ? Map.of()
                 : livesOf(type, complete ? null : rows.stream().map(CoverRecord::getId).toList());
+        List<Long> ids = rows.stream().map(CoverRecord::getId).toList();
         Map<Long, List<PortfolioViews.BeneficiaryView>> beneficiaries = type == InsurancePolicy.class
-                ? beneficiariesOf(rows.stream().map(CoverRecord::getId).toList()) : Map.of();
+                ? beneficiariesOf(ids) : Map.of();
+        Map<Long, List<PortfolioViews.DocumentView>> documents = type == InsurancePolicy.class
+                ? PolicyDocumentService.viewsOf(em, ids) : Map.of();
         return rows.stream().map(row -> cover(row, lives.getOrDefault(row.getId(), List.of()),
-                beneficiaries.getOrDefault(row.getId(), List.of()))).toList();
+                beneficiaries.getOrDefault(row.getId(), List.of()), documents.getOrDefault(row.getId(), List.of())))
+                .toList();
     }
 
     /** Policy Life Cover rows of applications or policies (only those ids, unless null), keyed by record id. */
