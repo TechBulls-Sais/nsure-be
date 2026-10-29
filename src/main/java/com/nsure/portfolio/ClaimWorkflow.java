@@ -4,6 +4,8 @@ import com.nsure.common.exception.NotFoundException;
 import com.nsure.controls.ControlKey;
 import com.nsure.controls.ControlService;
 import com.nsure.controls.FourEyesControl;
+import com.nsure.integration.Events;
+import com.nsure.integration.Outbox;
 import com.nsure.security.domain.AppUser;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
@@ -73,14 +75,16 @@ public class ClaimWorkflow {
     private final FourEyesControl fourEyes;
     private final PolicyWorkflow policies;
     private final WorkflowHistory history;
+    private final Outbox outbox;
 
     public ClaimWorkflow(EntityManager em, ControlService controls, FourEyesControl fourEyes,
-            PolicyWorkflow policies, WorkflowHistory history) {
+            PolicyWorkflow policies, WorkflowHistory history, Outbox outbox) {
         this.em = em;
         this.controls = controls;
         this.fourEyes = fourEyes;
         this.policies = policies;
         this.history = history;
+        this.outbox = outbox;
     }
 
     /** Actions legal from `state`, ignoring who is acting. */
@@ -314,6 +318,14 @@ public class ClaimWorkflow {
                 "BWP " + claim.getPayoutAmount() + " to " + claim.getPayeeName() + " by "
                         + claim.getPayeePayoutMethod() + " " + mask(claim.getPayeeAccountRef()) + " · " + reference,
                 actor.getUsername());
+        Map<String, Object> paid = new LinkedHashMap<>();
+        paid.put("claimRef", ref);
+        paid.put("policyRef", claim.getPolicyRef());
+        paid.put("customerName", claim.getCustomerName());
+        paid.put("product", claim.getProduct());
+        paid.put("amount", String.valueOf(claim.getPayoutAmount()));
+        paid.put("payoutRef", reference);
+        outbox.publish(Events.CLAIM_PAID, ref, paid, actor.getUsername());
         return claim;
     }
 

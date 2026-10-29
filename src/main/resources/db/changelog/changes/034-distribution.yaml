@@ -1,0 +1,202 @@
+databaseChangeLog:
+  - changeSet:
+      id: 034-distribution
+      author: nsure
+      comment: >-
+        SH06 Distribution and commissions. Intermediaries (agents and brokers) with appointment status and expiry,
+        commission rules by product and intermediary type (effective dated), effective-dated policy assignments (one
+        open assignment per policy), a commission ledger fed by events (one line per source event, AT-SH06-01) and
+        commission statements.
+      changes:
+        - createTable:
+            tableName: dist_intermediary
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_dist_intermediary}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_dist_intermediary_ref}}
+              - column: {name: name, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: intermediary_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: licence_number, type: varchar(60), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_dist_intermediary_licence}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: status_reason, type: varchar(500)}
+              - column: {name: appointment_expiry, type: date, constraints: {nullable: false}}
+              - column: {name: parent_id, type: bigint}
+              - column: {name: email, type: varchar(150)}
+              - column: {name: mobile, type: varchar(40)}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: updated_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: updated_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: dist_intermediary
+            baseColumnNames: parent_id
+            referencedTableName: dist_intermediary
+            referencedColumnNames: id
+            constraintName: fk_dist_intermediary_parent
+        - createTable:
+            tableName: dist_commission_rule
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_dist_commission_rule}}
+              - column: {name: product, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: intermediary_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: initial_rate_percent, type: 'decimal(5,2)', constraints: {nullable: false}}
+              - column: {name: renewal_rate_percent, type: 'decimal(5,2)', constraints: {nullable: false}}
+              - column: {name: effective_from, type: date, constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: dist_commission_rule
+            columnNames: product, intermediary_type, effective_from
+            constraintName: uk_dist_rule_product_type_from
+        - createTable:
+            tableName: dist_policy_assignment
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_dist_policy_assignment}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              # Equal to policy_ref while the assignment is open, null once ended: at most one open assignment per policy.
+              - column: {name: open_policy_ref, type: varchar(20), constraints: {unique: true, uniqueConstraintName: uk_dist_assignment_open_policy}}
+              - column: {name: intermediary_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: effective_from, type: date, constraints: {nullable: false}}
+              - column: {name: ended_on, type: date}
+              - column: {name: assigned_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: assigned_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: dist_policy_assignment
+            baseColumnNames: intermediary_id
+            referencedTableName: dist_intermediary
+            referencedColumnNames: id
+            constraintName: fk_dist_assignment_intermediary
+        - createIndex:
+            tableName: dist_policy_assignment
+            indexName: ix_dist_assignment_policy
+            columns:
+              - column: {name: policy_ref}
+        - createTable:
+            tableName: dist_statement
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_dist_statement}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_dist_statement_ref}}
+              - column: {name: intermediary_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: net_amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: line_count, type: int, constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: issued_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: issued_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: paid_by, type: varchar(100)}
+              - column: {name: paid_at, type: datetime}
+        - addForeignKeyConstraint:
+            baseTableName: dist_statement
+            baseColumnNames: intermediary_id
+            referencedTableName: dist_intermediary
+            referencedColumnNames: id
+            constraintName: fk_dist_statement_intermediary
+        - createTable:
+            tableName: dist_commission
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_dist_commission}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_dist_commission_ref}}
+              - column: {name: intermediary_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: product, type: varchar(100), constraints: {nullable: false}}
+              # The event that caused this line (a clawback adds the reversed line's ref): one line per source event.
+              - column: {name: source_event_id, type: varchar(80), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_dist_commission_source}}
+              - column: {name: line_kind, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: basis_amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: rate_percent, type: 'decimal(5,2)', constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              # A clawback points at the accrual it reverses; unique, so an accrual is clawed back at most once.
+              - column: {name: reverses_id, type: bigint, constraints: {unique: true, uniqueConstraintName: uk_dist_commission_reverses}}
+              - column: {name: statement_id, type: bigint}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: dist_commission
+            baseColumnNames: intermediary_id
+            referencedTableName: dist_intermediary
+            referencedColumnNames: id
+            constraintName: fk_dist_commission_intermediary
+        - addForeignKeyConstraint:
+            baseTableName: dist_commission
+            baseColumnNames: statement_id
+            referencedTableName: dist_statement
+            referencedColumnNames: id
+            constraintName: fk_dist_commission_statement
+        - addForeignKeyConstraint:
+            baseTableName: dist_commission
+            baseColumnNames: reverses_id
+            referencedTableName: dist_commission
+            referencedColumnNames: id
+            constraintName: fk_dist_commission_reverses
+        - createIndex:
+            tableName: dist_commission
+            indexName: ix_dist_commission_policy
+            columns:
+              - column: {name: policy_ref}
+
+  - changeSet:
+      id: 034-distribution-seed
+      author: nsure
+      comment: Demo intermediaries (one suspended) and commission rules for the seeded products.
+      changes:
+        - insert:
+            tableName: dist_intermediary
+            columns:
+              - column: {name: record_ref, value: INT-00001}
+              - column: {name: name, value: Kagiso Sebina}
+              - column: {name: intermediary_type, value: AGENT}
+              - column: {name: licence_number, value: NBFIRA-AG-2291}
+              - column: {name: status, value: ACTIVE}
+              - column: {name: appointment_expiry, valueDate: "2028-12-31"}
+              - column: {name: email, value: kagiso.sebina@example.com}
+              - column: {name: mobile, value: "+267 71 220 291"}
+              - column: {name: created_by, value: system}
+              - column: {name: created_at, valueComputed: CURRENT_TIMESTAMP}
+              - column: {name: updated_by, value: system}
+              - column: {name: updated_at, valueComputed: CURRENT_TIMESTAMP}
+        - insert:
+            tableName: dist_intermediary
+            columns:
+              - column: {name: record_ref, value: INT-00002}
+              - column: {name: name, value: Mokolodi Insurance Brokers}
+              - column: {name: intermediary_type, value: BROKER}
+              - column: {name: licence_number, value: NBFIRA-BR-0417}
+              - column: {name: status, value: ACTIVE}
+              - column: {name: appointment_expiry, valueDate: "2029-06-30"}
+              - column: {name: email, value: placements@mokolodi-brokers.example.com}
+              - column: {name: mobile, value: "+267 39 104 170"}
+              - column: {name: created_by, value: system}
+              - column: {name: created_at, valueComputed: CURRENT_TIMESTAMP}
+              - column: {name: updated_by, value: system}
+              - column: {name: updated_at, valueComputed: CURRENT_TIMESTAMP}
+        - insert:
+            tableName: dist_intermediary
+            columns:
+              - column: {name: record_ref, value: INT-00003}
+              - column: {name: name, value: Boitumelo Tau}
+              - column: {name: intermediary_type, value: AGENT}
+              - column: {name: licence_number, value: NBFIRA-AG-1876}
+              - column: {name: status, value: SUSPENDED}
+              - column: {name: status_reason, value: Licence renewal evidence outstanding}
+              - column: {name: appointment_expiry, valueDate: "2027-03-31"}
+              - column: {name: email, value: boitumelo.tau@example.com}
+              - column: {name: mobile, value: "+267 72 118 760"}
+              - column: {name: created_by, value: system}
+              - column: {name: created_at, valueComputed: CURRENT_TIMESTAMP}
+              - column: {name: updated_by, value: system}
+              - column: {name: updated_at, valueComputed: CURRENT_TIMESTAMP}
+        - sql:
+            sql: >-
+              INSERT INTO dist_commission_rule (product, intermediary_type, initial_rate_percent, renewal_rate_percent,
+              effective_from, created_by, created_at)
+              SELECT r.product, r.intermediary_type, r.initial_rate, r.renewal_rate, DATE '2026-01-01', 'system', CURRENT_TIMESTAMP
+              FROM (
+                SELECT 'Term Life' AS product, 'AGENT' AS intermediary_type, 20.00 AS initial_rate, 5.00 AS renewal_rate UNION ALL
+                SELECT 'Term Life', 'BROKER', 15.00, 7.50 UNION ALL
+                SELECT 'Whole of Life', 'AGENT', 25.00, 5.00 UNION ALL
+                SELECT 'Whole of Life', 'BROKER', 20.00, 7.50 UNION ALL
+                SELECT 'Family Funeral', 'AGENT', 15.00, 10.00 UNION ALL
+                SELECT 'Family Funeral', 'BROKER', 12.50, 10.00 UNION ALL
+                SELECT 'Care Cash', 'AGENT', 15.00, 7.50 UNION ALL
+                SELECT 'Care Cash', 'BROKER', 12.50, 7.50 UNION ALL
+                SELECT 'Individual Credit', 'AGENT', 10.00, 5.00 UNION ALL
+                SELECT 'Individual Credit', 'BROKER', 10.00, 5.00
+              ) r

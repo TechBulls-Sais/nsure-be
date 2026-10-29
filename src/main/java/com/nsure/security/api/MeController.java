@@ -11,6 +11,17 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class MeController {
 
+    /** Permission codes of the group, finance, distribution, reinsurance, service, integration and report modules. */
+    static final List<String> MODULE_CODES = List.of(
+            "READ_SCHEME", "MANAGE_SCHEME", "PROCESS_CENSUS", "UNDERWRITE_MEMBER", "BILL_SCHEME",
+            "READ_FINANCE", "MANAGE_FINANCE", "CLOSE_PERIOD", "EXPORT_GL",
+            "READ_DISTRIBUTION", "MANAGE_DISTRIBUTION", "PAY_COMMISSION",
+            "READ_REINSURANCE", "MANAGE_REINSURANCE", "APPROVE_TREATY",
+            "READ_COMMUNICATION", "MANAGE_COMMUNICATION", "APPROVE_TEMPLATE",
+            "READ_SERVICE_CASE", "MANAGE_SERVICE_CASE",
+            "READ_INTEGRATION", "MANAGE_INTEGRATION",
+            "READ_REPORT");
+
     private final PlatformSecurityContext security;
 
     public MeController(PlatformSecurityContext security) {
@@ -41,6 +52,7 @@ public class MeController {
                 user.hasPermissionTo("ASSESS_CLAIM"),
                 user.hasPermissionTo("APPROVE_CLAIM"),
                 user.hasPermissionTo("REJECT_CLAIM"),
-                user.hasPermissionTo("SETTLE_CLAIM"));
+                user.hasPermissionTo("SETTLE_CLAIM"),
+                MODULE_CODES.stream().filter(user::hasPermissionTo).toList());
     }
 }

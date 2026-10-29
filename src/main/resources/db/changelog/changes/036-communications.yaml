@@ -1,0 +1,166 @@
+databaseChangeLog:
+  - changeSet:
+      id: 036-communications
+      author: nsure
+      comment: >-
+        SH09B. Versioned message templates per event, channel and audience with maker-checker approval; customer
+        channel preferences (opt-in / opt-out, NS-SH09B-002); and the message log with a rendered content snapshot,
+        deduplicated by event + recipient + template version (AT-SH09B-01). Suppressed messages are kept with the
+        reason, never silently dropped (AT-SH09B-02).
+      changes:
+        - createTable:
+            tableName: com_template
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_com_template}}
+              - column: {name: code, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: event_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: audience, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: version, type: int, constraints: {nullable: false}}
+              - column: {name: subject, type: varchar(200)}
+              - column: {name: body, type: varchar(2000), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+        - addUniqueConstraint:
+            tableName: com_template
+            columnNames: code, version
+            constraintName: uk_com_template_code_version
+        - createIndex:
+            tableName: com_template
+            indexName: ix_com_template_event
+            columns:
+              - column: {name: event_type}
+              - column: {name: status}
+        - createTable:
+            tableName: com_preference
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_com_preference}}
+              - column: {name: customer_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: contact, type: varchar(150)}
+              - column: {name: verified, type: varchar(1), constraints: {nullable: false}}
+              - column: {name: updated_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: updated_at, type: datetime, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: com_preference
+            columnNames: customer_ref, channel
+            constraintName: uk_com_preference_customer_channel
+        - createTable:
+            tableName: com_message
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_com_message}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_com_message_ref}}
+              - column: {name: dedup_key, type: varchar(200), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_com_message_dedup}}
+              - column: {name: event_id, type: varchar(36)}
+              - column: {name: event_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: business_ref, type: varchar(60)}
+              - column: {name: customer_ref, type: varchar(20)}
+              - column: {name: recipient_name, type: varchar(100)}
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: contact, type: varchar(150)}
+              - column: {name: template_code, type: varchar(40)}
+              - column: {name: template_version, type: int}
+              - column: {name: subject, type: varchar(200)}
+              - column: {name: body, type: varchar(2000), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: attempts, type: int, constraints: {nullable: false}}
+              - column: {name: provider_message_id, type: varchar(60)}
+              - column: {name: last_error, type: varchar(500)}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: updated_at, type: datetime, constraints: {nullable: false}}
+        - createIndex:
+            tableName: com_message
+            indexName: ix_com_message_status
+            columns:
+              - column: {name: status}
+        - createIndex:
+            tableName: com_message
+            indexName: ix_com_message_customer
+            columns:
+              - column: {name: customer_ref}
+  - changeSet:
+      id: 036-communications-templates
+      author: nsure
+      comment: >-
+        Approved starter templates (approved by 'system'). Bodies carry references only and point the customer to the
+        secure portal for detail (NS-SH09B-003).
+      changes:
+        - insert:
+            tableName: com_template
+            columns:
+              - column: {name: code, value: POLICY_ISSUED_EMAIL}
+              - column: {name: event_type, value: PolicyIssued}
+              - column: {name: channel, value: EMAIL}
+              - column: {name: audience, value: CUSTOMER}
+              - column: {name: version, valueNumeric: 1}
+              - column: {name: subject, value: "Your Nsure Life policy {{policyRef}} is active"}
+              - column: {name: body, value: "Dear {{customerName}}, thank you for your first premium. Your {{product}} policy {{policyRef}} is now active. Your policy schedule and full cover details are in your secure Nsure Life portal: {{portalLink}}"}
+              - column: {name: status, value: APPROVED}
+              - column: {name: created_by, value: system}
+              - column: {name: created_at, valueComputed: CURRENT_TIMESTAMP}
+              - column: {name: approved_by, value: system}
+              - column: {name: approved_at, valueComputed: CURRENT_TIMESTAMP}
+        - insert:
+            tableName: com_template
+            columns:
+              - column: {name: code, value: POLICY_ISSUED_WHATSAPP}
+              - column: {name: event_type, value: PolicyIssued}
+              - column: {name: channel, value: WHATSAPP}
+              - column: {name: audience, value: CUSTOMER}
+              - column: {name: version, valueNumeric: 1}
+              - column: {name: body, value: "Hi {{customerName}}, your Nsure Life {{product}} policy {{policyRef}} is now active. View it securely at {{portalLink}}"}
+              - column: {name: status, value: APPROVED}
+              - column: {name: created_by, value: system}
+              - column: {name: created_at, valueComputed: CURRENT_TIMESTAMP}
+              - column: {name: approved_by, value: system}
+              - column: {name: approved_at, valueComputed: CURRENT_TIMESTAMP}
+        - insert:
+            tableName: com_template
+            columns:
+              - column: {name: code, value: PREMIUM_RECEIVED_EMAIL}
+              - column: {name: event_type, value: PremiumReceived}
+              - column: {name: channel, value: EMAIL}
+              - column: {name: audience, value: CUSTOMER}
+              - column: {name: version, valueNumeric: 1}
+              - column: {name: subject, value: "Premium received for policy {{policyRef}}"}
+              - column: {name: body, value: "Dear {{customerName}}, we have received your premium for policy {{policyRef}} (receipt {{receiptRef}}). Your receipt is available in your secure Nsure Life portal: {{portalLink}}"}
+              - column: {name: status, value: APPROVED}
+              - column: {name: created_by, value: system}
+              - column: {name: created_at, valueComputed: CURRENT_TIMESTAMP}
+              - column: {name: approved_by, value: system}
+              - column: {name: approved_at, valueComputed: CURRENT_TIMESTAMP}
+        - insert:
+            tableName: com_template
+            columns:
+              - column: {name: code, value: CLAIM_PAID_EMAIL}
+              - column: {name: event_type, value: ClaimPaid}
+              - column: {name: channel, value: EMAIL}
+              - column: {name: audience, value: CUSTOMER}
+              - column: {name: version, valueNumeric: 1}
+              - column: {name: subject, value: "Claim {{claimRef}} has been paid"}
+              - column: {name: body, value: "Dear {{customerName}}, the payout for claim {{claimRef}} on policy {{policyRef}} has been made. The payment details are in your secure Nsure Life portal: {{portalLink}}"}
+              - column: {name: status, value: APPROVED}
+              - column: {name: created_by, value: system}
+              - column: {name: created_at, valueComputed: CURRENT_TIMESTAMP}
+              - column: {name: approved_by, value: system}
+              - column: {name: approved_at, valueComputed: CURRENT_TIMESTAMP}
+        - insert:
+            tableName: com_template
+            columns:
+              - column: {name: code, value: SERVICE_CASE_OPENED_EMAIL}
+              - column: {name: event_type, value: ServiceCaseOpened}
+              - column: {name: channel, value: EMAIL}
+              - column: {name: audience, value: CUSTOMER}
+              - column: {name: version, valueNumeric: 1}
+              - column: {name: subject, value: "We have received your request {{caseRef}}"}
+              - column: {name: body, value: "Dear {{customerName}}, thank you for contacting Nsure Life. Your reference is {{caseRef}}. We will keep you updated, and you can follow progress in your secure Nsure Life portal: {{portalLink}}"}
+              - column: {name: status, value: APPROVED}
+              - column: {name: created_by, value: system}
+              - column: {name: created_at, valueComputed: CURRENT_TIMESTAMP}
+              - column: {name: approved_by, value: system}
+              - column: {name: approved_at, valueComputed: CURRENT_TIMESTAMP}

@@ -1,0 +1,98 @@
+databaseChangeLog:
+  - changeSet:
+      id: 030-life-platform-permissions
+      author: nsure
+      comment: >-
+        Permission codes for the Nsure Life Phase 1 modules: group administration (GL01-GL05), insurance subledger
+        (SH08), distribution (SH06), reinsurance (SH07), communications (SH09B), service desk (SH10), integration
+        (SH12) and management reporting (SH13). See docs/NSURE_LIFE_IMPLEMENTATION_PLAN.md.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT seed.g, seed.c, seed.e, seed.a, FALSE, seed.f FROM (
+                SELECT 'group' g, 'READ_SCHEME' c, 'SCHEME' e, 'READ' a, 'View group schemes, members and invoices' f
+                UNION ALL SELECT 'group', 'MANAGE_SCHEME', 'SCHEME', 'MANAGE', 'Create schemes and benefit categories'
+                UNION ALL SELECT 'group', 'PROCESS_CENSUS', 'CENSUS', 'PROCESS', 'Upload and commit census batches'
+                UNION ALL SELECT 'group', 'UNDERWRITE_MEMBER', 'MEMBER', 'UNDERWRITE', 'Decide member cover above the free-cover limit'
+                UNION ALL SELECT 'group', 'BILL_SCHEME', 'SCHEME', 'BILL', 'Issue scheme invoices and allocate sponsor receipts'
+                UNION ALL SELECT 'finance', 'READ_FINANCE', 'FINANCE', 'READ', 'View journals, trial balance and periods'
+                UNION ALL SELECT 'finance', 'MANAGE_FINANCE', 'FINANCE', 'MANAGE', 'Maintain posting rules, reverse journals, resolve exceptions'
+                UNION ALL SELECT 'finance', 'CLOSE_PERIOD', 'PERIOD', 'CLOSE', 'Soft-close, close and reopen accounting periods'
+                UNION ALL SELECT 'finance', 'EXPORT_GL', 'GL_BATCH', 'EXPORT', 'Export journals to the corporate GL'
+                UNION ALL SELECT 'distribution', 'READ_DISTRIBUTION', 'DISTRIBUTION', 'READ', 'View intermediaries and commissions'
+                UNION ALL SELECT 'distribution', 'MANAGE_DISTRIBUTION', 'DISTRIBUTION', 'MANAGE', 'Appoint intermediaries, set commission rules, assign policies'
+                UNION ALL SELECT 'distribution', 'PAY_COMMISSION', 'COMMISSION', 'PAY', 'Issue and pay commission statements'
+                UNION ALL SELECT 'reinsurance', 'READ_REINSURANCE', 'REINSURANCE', 'READ', 'View treaties, cessions and bordereaux'
+                UNION ALL SELECT 'reinsurance', 'MANAGE_REINSURANCE', 'REINSURANCE', 'MANAGE', 'Draft treaties and produce bordereaux'
+                UNION ALL SELECT 'reinsurance', 'APPROVE_TREATY', 'TREATY', 'APPROVE', 'Approve a treaty drafted by another user'
+                UNION ALL SELECT 'communication', 'READ_COMMUNICATION', 'COMMUNICATION', 'READ', 'View templates, messages and preferences'
+                UNION ALL SELECT 'communication', 'MANAGE_COMMUNICATION', 'COMMUNICATION', 'MANAGE', 'Draft templates, send and retry messages, set preferences'
+                UNION ALL SELECT 'communication', 'APPROVE_TEMPLATE', 'TEMPLATE', 'APPROVE', 'Approve a template drafted by another user'
+                UNION ALL SELECT 'service', 'READ_SERVICE_CASE', 'SERVICE_CASE', 'READ', 'View service requests and complaints'
+                UNION ALL SELECT 'service', 'MANAGE_SERVICE_CASE', 'SERVICE_CASE', 'MANAGE', 'Log, assign, pause and resolve service cases'
+                UNION ALL SELECT 'integration', 'READ_INTEGRATION', 'INTEGRATION', 'READ', 'View integration events, deliveries and inbound messages'
+                UNION ALL SELECT 'integration', 'MANAGE_INTEGRATION', 'INTEGRATION', 'MANAGE', 'Replay failed deliveries and accept payment notifications'
+                UNION ALL SELECT 'reporting', 'READ_REPORT', 'REPORT', 'READ', 'View the management dashboard'
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission p WHERE p.code = seed.c);
+  - changeSet:
+      id: 030-life-platform-roles
+      author: nsure
+      comment: Roles for the new modules, each holding only its own codes. Super Admin and Super user pass every check by name.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_role (name, description, disabled)
+              SELECT seed.n, seed.d, FALSE FROM (
+                SELECT 'Group Administrator' n, 'Runs group schemes: categories, census, member underwriting and scheme billing.' d
+                UNION ALL SELECT 'Finance Controller', 'Owns the insurance subledger: posting rules, periods, GL export and commission payment.'
+                UNION ALL SELECT 'Distribution Administrator', 'Appoints agents and brokers, sets commission rules and assigns policies.'
+                UNION ALL SELECT 'Reinsurance Officer', 'Maintains treaties, monitors cessions and produces bordereaux.'
+                UNION ALL SELECT 'Service Agent', 'Handles service requests, complaints and customer correspondence.'
+                UNION ALL SELECT 'Operations Manager', 'Monitors integrations, approves message templates and reads management reports.'
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM app_role r WHERE r.name = seed.n);
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id
+              FROM app_role r
+              JOIN app_permission p ON (
+                   (r.name = 'Group Administrator' AND p.code IN ('READ_SCHEME', 'MANAGE_SCHEME', 'PROCESS_CENSUS', 'UNDERWRITE_MEMBER', 'BILL_SCHEME', 'READ_REPORT'))
+                OR (r.name = 'Finance Controller' AND p.code IN ('READ_FINANCE', 'MANAGE_FINANCE', 'CLOSE_PERIOD', 'EXPORT_GL', 'READ_DISTRIBUTION', 'PAY_COMMISSION', 'READ_REINSURANCE', 'READ_SCHEME', 'READ_INTEGRATION', 'READ_REPORT'))
+                OR (r.name = 'Distribution Administrator' AND p.code IN ('READ_DISTRIBUTION', 'MANAGE_DISTRIBUTION', 'READ_POLICY'))
+                OR (r.name = 'Reinsurance Officer' AND p.code IN ('READ_REINSURANCE', 'MANAGE_REINSURANCE', 'APPROVE_TREATY', 'READ_POLICY'))
+                OR (r.name = 'Service Agent' AND p.code IN ('READ_SERVICE_CASE', 'MANAGE_SERVICE_CASE', 'READ_COMMUNICATION', 'MANAGE_COMMUNICATION', 'READ_CUSTOMER'))
+                OR (r.name = 'Operations Manager' AND p.code IN ('READ_INTEGRATION', 'MANAGE_INTEGRATION', 'READ_COMMUNICATION', 'APPROVE_TEMPLATE', 'READ_SERVICE_CASE', 'READ_REPORT'))
+              )
+              WHERE NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+  - changeSet:
+      id: 030-life-platform-demo-users
+      author: nsure
+      comment: >-
+        One demo login per new role, password "password" (same hash as admin). Replace before any shared
+        environment.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_user (username, password, enabled, office_id)
+              SELECT seed.u, '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG', TRUE, o.id
+              FROM (
+                SELECT 'grpadmin' u UNION ALL SELECT 'finance' UNION ALL SELECT 'distribution'
+                UNION ALL SELECT 'reinsurance' UNION ALL SELECT 'service' UNION ALL SELECT 'ops'
+              ) seed
+              JOIN office o ON o.name = 'Head Office'
+              WHERE NOT EXISTS (SELECT 1 FROM app_user x WHERE x.username = seed.u);
+
+              INSERT INTO app_user_role (user_id, role_id)
+              SELECT u.id, r.id
+              FROM app_user u
+              JOIN app_role r ON (
+                   (u.username = 'grpadmin' AND r.name = 'Group Administrator')
+                OR (u.username = 'finance' AND r.name = 'Finance Controller')
+                OR (u.username = 'distribution' AND r.name = 'Distribution Administrator')
+                OR (u.username = 'reinsurance' AND r.name = 'Reinsurance Officer')
+                OR (u.username = 'service' AND r.name = 'Service Agent')
+                OR (u.username = 'ops' AND r.name = 'Operations Manager')
+              )
+              WHERE NOT EXISTS (SELECT 1 FROM app_user_role x WHERE x.user_id = u.id AND x.role_id = r.id);

@@ -129,6 +129,69 @@ public final class ApiAccessRules {
             rule(POST, "/audits/*/reject", anyOf(
                     "CHECKER_SUPER_USER", "CHECKER_UPDATE_USER", "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
 
+            // ── group administration GL01-GL05 (Group Administrator) ───────────────────────────────────
+            rule(GET, "/group/schemes", anyOf("READ_SCHEME")),
+            rule(GET, "/group/schemes/*", anyOf("READ_SCHEME")),
+            rule(POST, "/group/schemes", anyOf("MANAGE_SCHEME")),
+            rule(POST, "/group/schemes/*/categories", anyOf("MANAGE_SCHEME")),
+            rule(PUT, "/group/schemes/*/categories/*", anyOf("MANAGE_SCHEME")),
+            rule(POST, "/group/schemes/*/census-batches", anyOf("PROCESS_CENSUS")),
+            rule(GET, "/group/census-batches/*", anyOf("READ_SCHEME")),
+            rule(POST, "/group/census-batches/*/commit", anyOf("PROCESS_CENSUS")),
+            rule(POST, "/group/members/*/underwriting", anyOf("UNDERWRITE_MEMBER")),
+            rule(POST, "/group/schemes/*/invoices", anyOf("BILL_SCHEME")),
+            rule(POST, "/group/invoices/*/receipts", anyOf("BILL_SCHEME")),
+
+            // ── insurance subledger SH08 (Finance Controller) ──────────────────────────────────────────
+            rule(GET, "/finance/**", anyOf("READ_FINANCE")),
+            rule(PUT, "/finance/posting-rules/*", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/finance/journals/*/reverse", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/finance/exceptions/*/retry", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/finance/periods/*/*", anyOf("CLOSE_PERIOD")),
+            rule(POST, "/finance/gl-batches", anyOf("EXPORT_GL")),
+            rule(POST, "/finance/gl-batches/*/acknowledge", anyOf("EXPORT_GL")),
+
+            // ── distribution and commissions SH06 (Distribution Administrator) ─────────────────────────
+            rule(GET, "/distribution/**", anyOf("READ_DISTRIBUTION")),
+            rule(POST, "/distribution/intermediaries", anyOf("MANAGE_DISTRIBUTION")),
+            rule(PUT, "/distribution/intermediaries/*", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/commission-rules", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/assignments", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/statements", anyOf("PAY_COMMISSION")),
+            rule(POST, "/distribution/statements/*/pay", anyOf("PAY_COMMISSION")),
+
+            // ── reinsurance SH07 (Reinsurance Officer) ─────────────────────────────────────────────────
+            rule(GET, "/reinsurance/**", anyOf("READ_REINSURANCE")),
+            rule(POST, "/reinsurance/treaties", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/treaties/*/approve", anyOf("APPROVE_TREATY")),
+            rule(POST, "/reinsurance/bordereaux", anyOf("MANAGE_REINSURANCE")),
+
+            // ── communications SH09B (Service Agent, Operations Manager) ───────────────────────────────
+            rule(GET, "/communications/**", anyOf("READ_COMMUNICATION")),
+            rule(POST, "/communications/templates", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/templates/*/approve", anyOf("APPROVE_TEMPLATE")),
+            rule(POST, "/communications/messages", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/messages/*/retry", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/dispatch", anyOf("MANAGE_COMMUNICATION")),
+            rule(PUT, "/communications/preferences/*", anyOf("MANAGE_COMMUNICATION")),
+
+            // ── service desk and complaints SH10 (Service Agent) ───────────────────────────────────────
+            rule(GET, "/service/cases", anyOf("READ_SERVICE_CASE")),
+            rule(GET, "/service/cases/*", anyOf("READ_SERVICE_CASE")),
+            rule(POST, "/service/cases", anyOf("MANAGE_SERVICE_CASE")),
+            rule(POST, "/service/cases/*/*", anyOf("MANAGE_SERVICE_CASE")),
+            rule(GET, "/portfolio/shop/cases", customer()),
+            rule(POST, "/portfolio/shop/cases", customer()),
+
+            // ── integration and operational control SH12 (Operations Manager) ──────────────────────────
+            rule(GET, "/integration/**", anyOf("READ_INTEGRATION")),
+            rule(POST, "/integration/outbox/dispatch", anyOf("MANAGE_INTEGRATION")),
+            rule(POST, "/integration/deliveries/*/replay", anyOf("MANAGE_INTEGRATION")),
+            rule(POST, "/integration/payment-notifications", anyOf("MANAGE_INTEGRATION")),
+
+            // ── management reporting SH13 ──────────────────────────────────────────────────────────────
+            rule(GET, "/reports/**", anyOf("READ_REPORT")),
+
             // ── organisation ───────────────────────────────────────────────────────────────────────────
             rule(GET, "/offices", anyOf("READ_OFFICE")),
 

@@ -1,0 +1,146 @@
+databaseChangeLog:
+  - changeSet:
+      id: 032-finance-subledger
+      author: nsure
+      comment: >-
+        SH08 insurance subledger. Business events post balanced journals through Finance-approved posting rules; the
+        event id is the journal key, so a replayed event never posts twice (AT-SH08-01). Posted journals are never
+        updated except to record their reversal or GL batch; corrections are reversal journals.
+      changes:
+        - createTable:
+            tableName: fin_account
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_fin_account}}
+              - column: {name: code, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_fin_account_code}}
+              - column: {name: name, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: account_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: display_order, type: int, constraints: {nullable: false}}
+        - createTable:
+            tableName: fin_posting_rule
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_fin_posting_rule}}
+              - column: {name: event_type, type: varchar(60), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_fin_rule_event}}
+              - column: {name: debit_account, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: credit_account, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: amount_field, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: business_domain, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: description, type: varchar(200), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: version, type: int, constraints: {nullable: false}}
+              - column: {name: updated_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: updated_at, type: datetime, constraints: {nullable: false}}
+        - createTable:
+            tableName: fin_period
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_fin_period}}
+              - column: {name: period_code, type: varchar(7), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_fin_period_code}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: note, type: varchar(500)}
+              - column: {name: updated_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: updated_at, type: datetime, constraints: {nullable: false}}
+        - createTable:
+            tableName: fin_journal
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_fin_journal}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_fin_journal_ref}}
+              - column: {name: event_key, type: varchar(80), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_fin_journal_event}}
+              - column: {name: event_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: source_ref, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: business_domain, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: event_date, type: date, constraints: {nullable: false}}
+              - column: {name: accounting_date, type: date, constraints: {nullable: false}}
+              - column: {name: period_code, type: varchar(7), constraints: {nullable: false}}
+              - column: {name: currency, type: varchar(3), constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: description, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: rule_version, type: int}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: reverses_ref, type: varchar(20)}
+              - column: {name: reversed_by_ref, type: varchar(20)}
+              - column: {name: gl_batch_ref, type: varchar(20)}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - createIndex:
+            tableName: fin_journal
+            indexName: ix_fin_journal_period
+            columns:
+              - column: {name: period_code}
+        - createTable:
+            tableName: fin_journal_line
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_fin_journal_line}}
+              - column: {name: journal_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: line_no, type: int, constraints: {nullable: false}}
+              - column: {name: account_code, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: debit, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: credit, type: 'decimal(15,2)', constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: fin_journal_line
+            baseColumnNames: journal_id
+            referencedTableName: fin_journal
+            referencedColumnNames: id
+            constraintName: fk_fin_line_journal
+        - createTable:
+            tableName: fin_exception
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_fin_exception}}
+              - column: {name: event_key, type: varchar(80), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_fin_exception_event}}
+              - column: {name: event_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: source_ref, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: resolved_by, type: varchar(100)}
+              - column: {name: resolved_at, type: datetime}
+              - column: {name: journal_ref, type: varchar(20)}
+        - createTable:
+            tableName: fin_gl_batch
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_fin_gl_batch}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_fin_gl_batch_ref}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: journal_count, type: int, constraints: {nullable: false}}
+              - column: {name: line_count, type: int, constraints: {nullable: false}}
+              - column: {name: debit_total, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: credit_total, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: gl_reference, type: varchar(60)}
+              - column: {name: acknowledged_by, type: varchar(100)}
+              - column: {name: acknowledged_at, type: datetime}
+              - column: {name: note, type: varchar(500)}
+  - changeSet:
+      id: 032-finance-chart-and-rules
+      author: nsure
+      comment: >-
+        Demonstration chart of accounts and posting rules. Production accounts, recognition and debit/credit rules
+        are decision D07 and must be approved by the insurer's Finance controller before go-live.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO fin_account (code, name, account_type, display_order) VALUES
+                ('1000', 'Cash at bank', 'ASSET', 1),
+                ('1100', 'Premium receivable - group schemes', 'ASSET', 2),
+                ('1200', 'Reinsurance recoverable', 'ASSET', 3),
+                ('2000', 'Suspense - unallocated receipts', 'LIABILITY', 4),
+                ('2100', 'Commission payable', 'LIABILITY', 5),
+                ('2200', 'Reinsurance premium payable', 'LIABILITY', 6),
+                ('4000', 'Premium income - individual life', 'INCOME', 7),
+                ('4100', 'Premium income - group schemes', 'INCOME', 8),
+                ('4200', 'Reinsurance recoveries', 'INCOME', 9),
+                ('5000', 'Claims and benefits paid', 'EXPENSE', 10),
+                ('5100', 'Commission expense', 'EXPENSE', 11),
+                ('5200', 'Reinsurance premium ceded', 'EXPENSE', 12);
+
+              INSERT INTO fin_posting_rule (event_type, debit_account, credit_account, amount_field, business_domain, description, status, version, updated_by, updated_at) VALUES
+                ('PremiumReceived', '1000', '4000', 'amount', 'INDIVIDUAL', 'Individual premium collected', 'ACTIVE', 1, 'system', CURRENT_TIMESTAMP),
+                ('UnmatchedReceipt', '1000', '2000', 'amount', 'SHARED', 'Cash received that could not be applied', 'ACTIVE', 1, 'system', CURRENT_TIMESTAMP),
+                ('ClaimPaid', '5000', '1000', 'amount', 'INDIVIDUAL', 'Claim benefit paid', 'ACTIVE', 1, 'system', CURRENT_TIMESTAMP),
+                ('SchemeInvoiceIssued', '1100', '4100', 'amount', 'GROUP', 'Group scheme invoice raised', 'ACTIVE', 1, 'system', CURRENT_TIMESTAMP),
+                ('SponsorReceiptAllocated', '1000', '1100', 'amount', 'GROUP', 'Sponsor payment allocated to an invoice', 'ACTIVE', 1, 'system', CURRENT_TIMESTAMP),
+                ('CommissionAccrued', '5100', '2100', 'amount', 'SHARED', 'Commission earned on collected premium', 'ACTIVE', 1, 'system', CURRENT_TIMESTAMP),
+                ('CommissionReversed', '2100', '5100', 'amount', 'SHARED', 'Commission clawed back', 'ACTIVE', 1, 'system', CURRENT_TIMESTAMP),
+                ('CommissionPaid', '2100', '1000', 'amount', 'SHARED', 'Commission statement paid', 'ACTIVE', 1, 'system', CURRENT_TIMESTAMP),
+                ('RiskCeded', '5200', '2200', 'cededPremium', 'SHARED', 'Premium ceded to reinsurer', 'ACTIVE', 1, 'system', CURRENT_TIMESTAMP),
+                ('ReinsuranceRecoveryRecognised', '1200', '4200', 'amount', 'SHARED', 'Recovery due from reinsurer on a paid claim', 'ACTIVE', 1, 'system', CURRENT_TIMESTAMP);

@@ -86,3 +86,27 @@ databaseChangeLog:
   - include:
       file: changes/029-policy-documents.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/030-life-platform-security.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/031-integration-outbox.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/032-finance-subledger.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/033-group-administration.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/034-distribution.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/035-reinsurance.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/036-communications.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/037-service-desk.yaml
+      relativeToChangelogFile: true

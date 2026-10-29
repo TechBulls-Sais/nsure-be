@@ -1,0 +1,305 @@
+databaseChangeLog:
+  - changeSet:
+      id: 033-group-administration
+      author: nsure
+      comment: >-
+        GL01/GL02/GL03/GL04/GL05. Real group schemes: benefit categories (salary multiple or fixed cover, free-cover
+        limit, rate per mille, entry ages), member cover episodes with accepted and pending cover, staged census
+        batches with per-row outcomes (idempotent by scheme and external batch id), monthly scheme invoices with
+        pro-rated member lines, and sponsor receipts (idempotent by invoice and payer reference).
+      changes:
+        - addColumn:
+            tableName: ins_scheme
+            columns:
+              - column: {name: inception_date, type: date, defaultValueDate: '2026-01-01', constraints: {nullable: false}}
+              - column: {name: renewal_date, type: date, defaultValueDate: '2027-01-01', constraints: {nullable: false}}
+              - column: {name: billing_frequency, type: varchar(20), defaultValue: MONTHLY, constraints: {nullable: false}}
+              - column: {name: scheme_status, type: varchar(20), defaultValue: ACTIVE, constraints: {nullable: false}}
+
+        - createTable:
+            tableName: grp_benefit_category
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_benefit_category}}
+              - column: {name: scheme_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: category_code, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: category_name, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: benefit_basis, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: salary_multiple, type: 'decimal(9,4)'}
+              - column: {name: fixed_cover, type: 'decimal(15,2)'}
+              - column: {name: free_cover_limit, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: rate_per_mille, type: 'decimal(9,4)', constraints: {nullable: false}}
+              - column: {name: min_entry_age, type: int, constraints: {nullable: false}}
+              - column: {name: max_entry_age, type: int, constraints: {nullable: false}}
+              - column: {name: updated_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: updated_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_benefit_category
+            baseColumnNames: scheme_id
+            referencedTableName: ins_scheme
+            referencedColumnNames: id
+            constraintName: fk_grp_category_scheme
+        - addUniqueConstraint:
+            tableName: grp_benefit_category
+            columnNames: scheme_id, category_code
+            constraintName: uk_grp_category_scheme_code
+
+        - createTable:
+            tableName: grp_member
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_member}}
+              - column: {name: scheme_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: category_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: member_key, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: first_name, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: last_name, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: date_of_birth, type: date, constraints: {nullable: false}}
+              - column: {name: salary, type: 'decimal(15,2)'}
+              - column: {name: member_status, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: join_date, type: date, constraints: {nullable: false}}
+              - column: {name: exit_date, type: date}
+              - column: {name: requested_cover, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: accepted_cover, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: pending_cover, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: underwritten_cover, type: 'decimal(15,2)'}
+              - column: {name: uw_decision, type: varchar(20)}
+              - column: {name: uw_reason, type: varchar(500)}
+              - column: {name: uw_by, type: varchar(100)}
+              - column: {name: uw_at, type: datetime}
+              - column: {name: source_batch_ref, type: varchar(20)}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: updated_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_member
+            baseColumnNames: scheme_id
+            referencedTableName: ins_scheme
+            referencedColumnNames: id
+            constraintName: fk_grp_member_scheme
+        - addForeignKeyConstraint:
+            baseTableName: grp_member
+            baseColumnNames: category_id
+            referencedTableName: grp_benefit_category
+            referencedColumnNames: id
+            constraintName: fk_grp_member_category
+        - createIndex:
+            tableName: grp_member
+            indexName: ix_grp_member_scheme_key
+            columns:
+              - column: {name: scheme_id}
+              - column: {name: member_key}
+
+        - createTable:
+            tableName: grp_member_change
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_member_change}}
+              - column: {name: member_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: change_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: effective_date, type: date, constraints: {nullable: false}}
+              - column: {name: salary_before, type: 'decimal(15,2)'}
+              - column: {name: salary_after, type: 'decimal(15,2)'}
+              - column: {name: cover_before, type: 'decimal(15,2)'}
+              - column: {name: cover_after, type: 'decimal(15,2)'}
+              - column: {name: pending_after, type: 'decimal(15,2)'}
+              - column: {name: batch_ref, type: varchar(20)}
+              - column: {name: detail, type: varchar(500)}
+              - column: {name: changed_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: changed_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_member_change
+            baseColumnNames: member_id
+            referencedTableName: grp_member
+            referencedColumnNames: id
+            constraintName: fk_grp_change_member
+
+        - createTable:
+            tableName: grp_census_batch
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_census_batch}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_census_batch_ref}}
+              - column: {name: scheme_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: external_batch_id, type: varchar(80), constraints: {nullable: false}}
+              - column: {name: batch_mode, type: varchar(10), constraints: {nullable: false}}
+              - column: {name: file_hash, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: batch_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: total_rows, type: int, constraints: {nullable: false}}
+              - column: {name: valid_rows, type: int, constraints: {nullable: false}}
+              - column: {name: invalid_rows, type: int, constraints: {nullable: false}}
+              - column: {name: accepted_rows, type: int, constraints: {nullable: false}}
+              - column: {name: rejected_rows, type: int, constraints: {nullable: false}}
+              - column: {name: submitted_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: submitted_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: committed_by, type: varchar(100)}
+              - column: {name: committed_at, type: datetime}
+        - addForeignKeyConstraint:
+            baseTableName: grp_census_batch
+            baseColumnNames: scheme_id
+            referencedTableName: ins_scheme
+            referencedColumnNames: id
+            constraintName: fk_grp_census_scheme
+        - addUniqueConstraint:
+            tableName: grp_census_batch
+            columnNames: scheme_id, external_batch_id
+            constraintName: uk_grp_census_external
+
+        - createTable:
+            tableName: grp_census_row
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_census_row}}
+              - column: {name: batch_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: line_no, type: int, constraints: {nullable: false}}
+              - column: {name: member_key, type: varchar(40)}
+              - column: {name: first_name, type: varchar(60)}
+              - column: {name: last_name, type: varchar(60)}
+              - column: {name: date_of_birth, type: varchar(20)}
+              - column: {name: category_code, type: varchar(20)}
+              - column: {name: salary, type: varchar(30)}
+              - column: {name: row_action, type: varchar(20)}
+              - column: {name: effective_date, type: varchar(20)}
+              - column: {name: row_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: error_detail, type: varchar(1000)}
+              - column: {name: member_id, type: bigint}
+        - addForeignKeyConstraint:
+            baseTableName: grp_census_row
+            baseColumnNames: batch_id
+            referencedTableName: grp_census_batch
+            referencedColumnNames: id
+            constraintName: fk_grp_census_row_batch
+        - addUniqueConstraint:
+            tableName: grp_census_row
+            columnNames: batch_id, line_no
+            constraintName: uk_grp_census_row_line
+
+        - createTable:
+            tableName: grp_invoice
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_invoice}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_invoice_ref}}
+              - column: {name: scheme_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: billing_period, type: varchar(7), constraints: {nullable: false}}
+              - column: {name: period_start, type: date, constraints: {nullable: false}}
+              - column: {name: period_end, type: date, constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: paid_amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: outstanding, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: invoice_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: member_count, type: int, constraints: {nullable: false}}
+              - column: {name: issued_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: issued_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_invoice
+            baseColumnNames: scheme_id
+            referencedTableName: ins_scheme
+            referencedColumnNames: id
+            constraintName: fk_grp_invoice_scheme
+        - addUniqueConstraint:
+            tableName: grp_invoice
+            columnNames: scheme_id, billing_period
+            constraintName: uk_grp_invoice_scheme_period
+
+        - createTable:
+            tableName: grp_invoice_line
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_invoice_line}}
+              - column: {name: invoice_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: member_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: member_key, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: member_name, type: varchar(130), constraints: {nullable: false}}
+              - column: {name: category_code, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: accepted_cover, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: rate_per_mille, type: 'decimal(9,4)', constraints: {nullable: false}}
+              - column: {name: days_covered, type: int, constraints: {nullable: false}}
+              - column: {name: days_in_period, type: int, constraints: {nullable: false}}
+              - column: {name: premium, type: 'decimal(15,2)', constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_invoice_line
+            baseColumnNames: invoice_id
+            referencedTableName: grp_invoice
+            referencedColumnNames: id
+            constraintName: fk_grp_line_invoice
+        - addForeignKeyConstraint:
+            baseTableName: grp_invoice_line
+            baseColumnNames: member_id
+            referencedTableName: grp_member
+            referencedColumnNames: id
+            constraintName: fk_grp_line_member
+        - addUniqueConstraint:
+            tableName: grp_invoice_line
+            columnNames: invoice_id, member_id
+            constraintName: uk_grp_line_invoice_member
+
+        - createTable:
+            tableName: grp_sponsor_receipt
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_sponsor_receipt}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_receipt_ref}}
+              - column: {name: invoice_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: payer_reference, type: varchar(80), constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: outstanding_after, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: received_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: received_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_sponsor_receipt
+            baseColumnNames: invoice_id
+            referencedTableName: grp_invoice
+            referencedColumnNames: id
+            constraintName: fk_grp_receipt_invoice
+        - addUniqueConstraint:
+            tableName: grp_sponsor_receipt
+            columnNames: invoice_id, payer_reference
+            constraintName: uk_grp_receipt_invoice_ref
+
+  - changeSet:
+      id: 033-group-administration-seed
+      author: nsure
+      comment: >-
+        Demo categories and members for the three seeded schemes. Annual salaries; cover above the free-cover limit is
+        pending underwriting (one member on SCH-001 and SCH-003). The ins_scheme members/premium snapshot is reset to
+        match the seeded membership.
+      changes:
+        - sql:
+            sql: |
+              UPDATE ins_scheme SET inception_date = DATE '2026-01-01', renewal_date = DATE '2027-01-01' WHERE record_ref = 'SCH-001';
+              UPDATE ins_scheme SET inception_date = DATE '2026-02-01', renewal_date = DATE '2027-02-01' WHERE record_ref = 'SCH-002';
+              UPDATE ins_scheme SET inception_date = DATE '2026-03-01', renewal_date = DATE '2027-03-01' WHERE record_ref = 'SCH-003';
+        - sql:
+            sql: |
+              INSERT INTO grp_benefit_category (scheme_id, category_code, category_name, benefit_basis, salary_multiple,
+                fixed_cover, free_cover_limit, rate_per_mille, min_entry_age, max_entry_age, updated_by, updated_at)
+              SELECT s.id, seed.code, seed.name, seed.basis, seed.multiple, seed.fixed, seed.free_limit, seed.rate,
+                18, 64, 'system', CURRENT_TIMESTAMP
+              FROM (
+                SELECT 'SCH-001' scheme, 'STAFF' code, 'Staff' name, 'SALARY_MULTIPLE' basis, 3.0000 multiple, CAST(NULL AS DECIMAL(15,2)) fixed, 500000.00 free_limit, 0.4500 rate
+                UNION ALL SELECT 'SCH-001', 'MGMT', 'Management', 'SALARY_MULTIPLE', 4.0000, NULL, 500000.00, 0.5000
+                UNION ALL SELECT 'SCH-002', 'STAFF', 'Office staff', 'SALARY_MULTIPLE', 2.0000, NULL, 400000.00, 0.5500
+                UNION ALL SELECT 'SCH-002', 'DRIVER', 'Drivers', 'FIXED', NULL, 250000.00, 400000.00, 0.8000
+                UNION ALL SELECT 'SCH-003', 'STAFF', 'Staff', 'SALARY_MULTIPLE', 3.0000, NULL, 600000.00, 0.4000
+                UNION ALL SELECT 'SCH-003', 'MGMT', 'Management', 'SALARY_MULTIPLE', 4.0000, NULL, 600000.00, 0.4500
+              ) seed
+              JOIN ins_scheme s ON s.record_ref = seed.scheme
+        - sql:
+            sql: |
+              INSERT INTO grp_member (scheme_id, category_id, member_key, first_name, last_name, date_of_birth, salary,
+                member_status, join_date, requested_cover, accepted_cover, pending_cover, created_at, updated_at)
+              SELECT c.scheme_id, c.id, seed.mkey, seed.first_name, seed.last_name, seed.dob, seed.salary, seed.status,
+                s.inception_date, seed.requested, seed.accepted, seed.pending, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+              FROM (
+                SELECT 'SCH-001' scheme, 'STAFF' code, 'OH-1001' mkey, 'Kagiso' first_name, 'Sebina' last_name, DATE '1985-04-12' dob, 120000.00 salary, 'ACTIVE' status, 360000.00 requested, 360000.00 accepted, 0.00 pending
+                UNION ALL SELECT 'SCH-001', 'STAFF', 'OH-1002', 'Naledi', 'Kgosi', DATE '1990-09-03', 150000.00, 'ACTIVE', 450000.00, 450000.00, 0.00
+                UNION ALL SELECT 'SCH-001', 'MGMT', 'OH-1003', 'Boitumelo', 'Phiri', DATE '1978-01-25', 240000.00, 'UNDERWRITING_PENDING', 960000.00, 500000.00, 460000.00
+                UNION ALL SELECT 'SCH-001', 'MGMT', 'OH-1004', 'Tshepo', 'Moremi', DATE '1982-06-18', 110000.00, 'ACTIVE', 440000.00, 440000.00, 0.00
+                UNION ALL SELECT 'SCH-001', 'STAFF', 'OH-1005', 'Mpho', 'Ditshwanelo', DATE '1996-11-30', 90000.00, 'ACTIVE', 270000.00, 270000.00, 0.00
+                UNION ALL SELECT 'SCH-002', 'DRIVER', 'KL-2001', 'Onalenna', 'Tau', DATE '1988-02-14', 72000.00, 'ACTIVE', 250000.00, 250000.00, 0.00
+                UNION ALL SELECT 'SCH-002', 'DRIVER', 'KL-2002', 'Kabelo', 'Masire', DATE '1993-07-07', 68000.00, 'ACTIVE', 250000.00, 250000.00, 0.00
+                UNION ALL SELECT 'SCH-002', 'STAFF', 'KL-2003', 'Lorato', 'Seretse', DATE '1987-05-21', 160000.00, 'ACTIVE', 320000.00, 320000.00, 0.00
+                UNION ALL SELECT 'SCH-002', 'STAFF', 'KL-2004', 'Gaone', 'Mokgosi', DATE '1991-10-09', 140000.00, 'ACTIVE', 280000.00, 280000.00, 0.00
+                UNION ALL SELECT 'SCH-003', 'STAFF', 'PB-3001', 'Masego', 'Kgafela', DATE '1986-03-16', 130000.00, 'ACTIVE', 390000.00, 390000.00, 0.00
+                UNION ALL SELECT 'SCH-003', 'MGMT', 'PB-3002', 'Refilwe', 'Dintwe', DATE '1975-08-02', 200000.00, 'UNDERWRITING_PENDING', 800000.00, 600000.00, 200000.00
+                UNION ALL SELECT 'SCH-003', 'STAFF', 'PB-3003', 'Thato', 'Ramokate', DATE '1994-12-01', 100000.00, 'ACTIVE', 300000.00, 300000.00, 0.00
+              ) seed
+              JOIN ins_scheme s ON s.record_ref = seed.scheme
+              JOIN grp_benefit_category c ON c.scheme_id = s.id AND c.category_code = seed.code
+        - sql:
+            sql: |
+              UPDATE ins_scheme SET members = 5, premium = 956 WHERE record_ref = 'SCH-001';
+              UPDATE ins_scheme SET members = 4, premium = 730 WHERE record_ref = 'SCH-002';
+              UPDATE ins_scheme SET members = 3, premium = 546 WHERE record_ref = 'SCH-003';

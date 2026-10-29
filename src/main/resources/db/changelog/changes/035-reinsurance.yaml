@@ -1,0 +1,141 @@
+databaseChangeLog:
+  - changeSet:
+      id: 035-reinsurance
+      author: nsure
+      comment: >-
+        SH07 Reinsurance. Treaties (quota share or surplus) approved by a second user, automatic cessions on premium
+        received under an approved treaty only (AT-SH07-01), claim recoveries kept apart from the customer payment
+        (AT-SH07-03) and bordereaux per treaty and month with record counts and control totals.
+      changes:
+        - createTable:
+            tableName: ri_treaty
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ri_treaty}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_ri_treaty_ref}}
+              - column: {name: name, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: reinsurer, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: treaty_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: products, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: ceded_percent, type: 'decimal(5,2)'}
+              - column: {name: retention, type: 'decimal(15,2)'}
+              - column: {name: effective_from, type: date, constraints: {nullable: false}}
+              - column: {name: effective_to, type: date, constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+        - createTable:
+            tableName: ri_bordereau
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ri_bordereau}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_ri_bordereau_ref}}
+              - column: {name: treaty_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: bordereau_period, type: varchar(7), constraints: {nullable: false}}
+              - column: {name: record_count, type: int, constraints: {nullable: false}}
+              - column: {name: total_ceded_premium, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: total_ceded_sum, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: ri_bordereau
+            baseColumnNames: treaty_id
+            referencedTableName: ri_treaty
+            referencedColumnNames: id
+            constraintName: fk_ri_bordereau_treaty
+        - addUniqueConstraint:
+            tableName: ri_bordereau
+            columnNames: treaty_id, bordereau_period
+            constraintName: uk_ri_bordereau_treaty_period
+        - createTable:
+            tableName: ri_cession
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ri_cession}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_ri_cession_ref}}
+              - column: {name: treaty_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: product, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: source_event_id, type: varchar(36), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_ri_cession_source}}
+              - column: {name: sum_assured, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: ceded_sum, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: premium, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: ceded_premium, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: ceded_share, type: 'decimal(9,6)', constraints: {nullable: false}}
+              - column: {name: bordereau_id, type: bigint}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: ri_cession
+            baseColumnNames: treaty_id
+            referencedTableName: ri_treaty
+            referencedColumnNames: id
+            constraintName: fk_ri_cession_treaty
+        - addForeignKeyConstraint:
+            baseTableName: ri_cession
+            baseColumnNames: bordereau_id
+            referencedTableName: ri_bordereau
+            referencedColumnNames: id
+            constraintName: fk_ri_cession_bordereau
+        - createIndex:
+            tableName: ri_cession
+            indexName: ix_ri_cession_policy
+            columns:
+              - column: {name: policy_ref}
+        - createTable:
+            tableName: ri_recovery
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ri_recovery}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_ri_recovery_ref}}
+              - column: {name: treaty_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: claim_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: source_event_id, type: varchar(36), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_ri_recovery_source}}
+              - column: {name: claim_amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: ceded_share, type: 'decimal(9,6)', constraints: {nullable: false}}
+              - column: {name: recovery_amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: ri_recovery
+            baseColumnNames: treaty_id
+            referencedTableName: ri_treaty
+            referencedColumnNames: id
+            constraintName: fk_ri_recovery_treaty
+
+  - changeSet:
+      id: 035-reinsurance-seed
+      author: nsure
+      comment: >-
+        One approved quota-share treaty (approved by the system at go-live) and one surplus treaty still in draft,
+        which therefore cedes nothing until a second user approves it.
+      changes:
+        - insert:
+            tableName: ri_treaty
+            columns:
+              - column: {name: record_ref, value: TRT-00001}
+              - column: {name: name, value: Whole of Life quota share 2026}
+              - column: {name: reinsurer, value: Hannover Re (demo)}
+              - column: {name: treaty_type, value: QUOTA_SHARE}
+              - column: {name: products, value: Whole of Life}
+              - column: {name: ceded_percent, valueNumeric: 25.00}
+              - column: {name: effective_from, valueDate: "2026-01-01"}
+              - column: {name: effective_to, valueDate: "2030-12-31"}
+              - column: {name: status, value: APPROVED}
+              - column: {name: created_by, value: system}
+              - column: {name: created_at, valueComputed: CURRENT_TIMESTAMP}
+              - column: {name: approved_by, value: system}
+              - column: {name: approved_at, valueComputed: CURRENT_TIMESTAMP}
+        - insert:
+            tableName: ri_treaty
+            columns:
+              - column: {name: record_ref, value: TRT-00002}
+              - column: {name: name, value: Term Life surplus 2027}
+              - column: {name: reinsurer, value: Munich Re (demo)}
+              - column: {name: treaty_type, value: SURPLUS}
+              - column: {name: products, value: "Term Life"}
+              - column: {name: retention, valueNumeric: 400000.00}
+              - column: {name: effective_from, valueDate: "2027-01-01"}
+              - column: {name: effective_to, valueDate: "2027-12-31"}
+              - column: {name: status, value: DRAFT}
+              - column: {name: created_by, value: system}
+              - column: {name: created_at, valueComputed: CURRENT_TIMESTAMP}

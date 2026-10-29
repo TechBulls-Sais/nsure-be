@@ -1,0 +1,50 @@
+databaseChangeLog:
+  - changeSet:
+      id: 037-service-desk
+      author: nsure
+      comment: >-
+        SH10. Service requests and complaints with their own SLA deadlines, atomic ownership, optimistic concurrency
+        (version, NS-TXN-001) and a pausable SLA clock (paused minutes extend the due date, AT-SH10-03). Transitions are
+        written to workflow_log so a reopen keeps the earlier resolution in history.
+      changes:
+        - createTable:
+            tableName: svc_case
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_svc_case}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_svc_case_ref}}
+              - column: {name: case_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: category, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: customer_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: customer_name, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: linked_ref, type: varchar(40)}
+              - column: {name: subject, type: varchar(200), constraints: {nullable: false}}
+              - column: {name: description, type: varchar(1000)}
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: priority, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: owner, type: varchar(100)}
+              - column: {name: opened_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: opened_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: due_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: paused_at, type: datetime}
+              - column: {name: pause_reason, type: varchar(500)}
+              - column: {name: paused_minutes, type: int, constraints: {nullable: false}}
+              - column: {name: resolution, type: varchar(1000)}
+              - column: {name: resolved_at, type: datetime}
+              - column: {name: closed_at, type: datetime}
+              - column: {name: version, type: int, constraints: {nullable: false}}
+        - createIndex:
+            tableName: svc_case
+            indexName: ix_svc_case_status
+            columns:
+              - column: {name: status}
+        - createIndex:
+            tableName: svc_case
+            indexName: ix_svc_case_customer
+            columns:
+              - column: {name: customer_ref}
+        - createIndex:
+            tableName: svc_case
+            indexName: ix_svc_case_owner
+            columns:
+              - column: {name: owner}

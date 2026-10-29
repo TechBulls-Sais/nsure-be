@@ -1,0 +1,67 @@
+databaseChangeLog:
+  - changeSet:
+      id: 031-integration-outbox
+      author: nsure
+      comment: >-
+        SH12 / NS-ARC-003. Business changes and their outgoing events commit together (transactional outbox). Each
+        interested handler gets one delivery row, so a failed consumer is retried or replayed on its own without
+        repeating the others. Inbound provider callbacks are deduplicated by provider reference.
+      changes:
+        - createTable:
+            tableName: int_outbox_event
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_int_outbox_event}}
+              - column: {name: event_id, type: varchar(36), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_int_outbox_event_id}}
+              - column: {name: event_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: aggregate_ref, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: payload, type: varchar(4000), constraints: {nullable: false}}
+              - column: {name: correlation_id, type: varchar(36), constraints: {nullable: false}}
+              - column: {name: published_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: occurred_at, type: datetime, constraints: {nullable: false}}
+        - createTable:
+            tableName: int_event_delivery
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_int_event_delivery}}
+              - column: {name: outbox_event_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: handler_name, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: attempts, type: int, constraints: {nullable: false}}
+              - column: {name: last_error, type: varchar(1000)}
+              - column: {name: next_attempt_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: delivered_at, type: datetime}
+              - column: {name: updated_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: int_event_delivery
+            baseColumnNames: outbox_event_id
+            referencedTableName: int_outbox_event
+            referencedColumnNames: id
+            constraintName: fk_int_delivery_event
+        - addUniqueConstraint:
+            tableName: int_event_delivery
+            columnNames: outbox_event_id, handler_name
+            constraintName: uk_int_delivery_event_handler
+        - createIndex:
+            tableName: int_event_delivery
+            indexName: ix_int_delivery_status
+            columns:
+              - column: {name: status}
+              - column: {name: next_attempt_at}
+        - createTable:
+            tableName: int_inbound_message
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_int_inbound_message}}
+              - column: {name: provider, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: provider_ref, type: varchar(80), constraints: {nullable: false}}
+              - column: {name: message_type, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: payload_hash, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: business_ref, type: varchar(60)}
+              - column: {name: amount, type: 'decimal(15,2)'}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: result_ref, type: varchar(60)}
+              - column: {name: detail, type: varchar(500)}
+              - column: {name: received_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: received_at, type: datetime, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: int_inbound_message
+            columnNames: provider, provider_ref
+            constraintName: uk_int_inbound_provider_ref

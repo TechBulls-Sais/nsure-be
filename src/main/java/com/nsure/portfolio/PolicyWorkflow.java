@@ -3,14 +3,18 @@ package com.nsure.portfolio;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.controls.ControlKey;
 import com.nsure.controls.ControlService;
+import com.nsure.integration.Events;
+import com.nsure.integration.Outbox;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,11 +50,13 @@ public class PolicyWorkflow {
     private final EntityManager em;
     private final ControlService controls;
     private final WorkflowHistory history;
+    private final Outbox outbox;
 
-    public PolicyWorkflow(EntityManager em, ControlService controls, WorkflowHistory history) {
+    public PolicyWorkflow(EntityManager em, ControlService controls, WorkflowHistory history, Outbox outbox) {
         this.em = em;
         this.controls = controls;
         this.history = history;
+        this.outbox = outbox;
     }
 
     /** A customer's purchase: reserved, unpaid, and confers no cover until paid within the payment window. */
@@ -116,10 +122,30 @@ public class PolicyWorkflow {
                     "Policy " + ref + " is " + previous + " and can no longer be paid. Please buy a new policy.");
         }
         policy.setPaymentMethod(paymentMethod);
-        receipt(policy, paymentMethod);
+        String receiptRef = receipt(policy, paymentMethod);
+        boolean first = PENDING_PAYMENT.equals(previous);
         history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(),
-                PENDING_PAYMENT.equals(previous) ? "Payment Received" : "Premium Received",
+                first ? "Payment Received" : "Premium Received",
                 previous, policy.getStatus(), details, actor);
+        // Downstream effects (subledger, commission, reinsurance, messages) follow from these events, after commit.
+        if (first) {
+            Map<String, Object> issued = new LinkedHashMap<>();
+            issued.put("policyRef", ref);
+            issued.put("customerName", policy.getCustomerName());
+            issued.put("product", policy.getProduct());
+            issued.put("sumAssured", policy.getAmount());
+            issued.put("premium", policy.getPremium().toPlainString());
+            outbox.publish(Events.POLICY_ISSUED, ref, issued, actor);
+        }
+        Map<String, Object> premium = new LinkedHashMap<>();
+        premium.put("policyRef", ref);
+        premium.put("customerName", policy.getCustomerName());
+        premium.put("product", policy.getProduct());
+        premium.put("amount", policy.getPremium().toPlainString());
+        premium.put("method", paymentMethod);
+        premium.put("receiptRef", receiptRef);
+        premium.put("firstPremium", first);
+        outbox.publish(Events.PREMIUM_RECEIVED, ref, premium, actor);
         return policy;
     }
 
@@ -144,6 +170,8 @@ public class PolicyWorkflow {
         policy.review(actor, note);
         history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Cancelled", PENDING_PAYMENT,
                 CANCELLED, note, actor);
+        outbox.publish(Events.POLICY_CANCELLED, ref, Map.of("policyRef", ref, "customerName",
+                policy.getCustomerName(), "product", policy.getProduct(), "reason", note), actor);
         return policy;
     }
 
@@ -337,7 +365,7 @@ public class PolicyWorkflow {
         return controls.valueOf(ControlKey.POLICY_PAYMENT_WINDOW_HOURS.key()).longValue();
     }
 
-    private void receipt(InsurancePolicy policy, String method) {
+    private String receipt(InsurancePolicy policy, String method) {
         PremiumReceipt row = new PremiumReceipt();
         int max = 0;
         for (String ref : em.createQuery("select r.ref from PremiumReceipt r", String.class).getResultList()) {
@@ -352,6 +380,7 @@ public class PolicyWorkflow {
         row.setRecordDate(LocalDate.now().format(DISPLAY));
         row.setDisplayOrder(0);
         em.persist(row);
+        return row.getRef();
     }
 
     private CustomerAccount account(String customerName) {

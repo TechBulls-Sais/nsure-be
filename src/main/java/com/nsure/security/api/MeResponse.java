@@ -18,5 +18,7 @@ public record MeResponse(
         boolean canAssessClaims,
         boolean canApproveClaims,
         boolean canRejectClaims,
-        boolean canSettleClaims) {
+        boolean canSettleClaims,
+        // The Nsure Life module codes this user holds (MeController.MODULE_CODES): the UI shows only these workspaces.
+        List<String> permissions) {
 }
