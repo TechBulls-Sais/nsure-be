@@ -2,6 +2,7 @@ package com.nsure.portfolio;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.nsure.common.exception.NotFoundException;
+import com.nsure.configuration.PolicyAttributes;
 import com.nsure.rating.RateTableService;
 import com.nsure.rating.RateTableViews;
 import com.nsure.security.domain.AppUser;
@@ -46,6 +47,7 @@ public class PortfolioService {
     private final PolicyWorkflow policyWorkflow;
     private final ClaimWorkflow claimWorkflow;
     private final WorkflowHistory history;
+    private final PolicyAttributes policyAttributes;
 
     public PortfolioService(
             EntityManager em,
@@ -56,7 +58,8 @@ public class PortfolioService {
             RateTableService rates,
             PolicyWorkflow policyWorkflow,
             ClaimWorkflow claimWorkflow,
-            WorkflowHistory history) {
+            WorkflowHistory history,
+            PolicyAttributes policyAttributes) {
         this.em = em;
         this.security = security;
         this.users = users;
@@ -66,6 +69,7 @@ public class PortfolioService {
         this.policyWorkflow = policyWorkflow;
         this.claimWorkflow = claimWorkflow;
         this.history = history;
+        this.policyAttributes = policyAttributes;
     }
 
     @Transactional(readOnly = true)
@@ -268,6 +272,8 @@ public class PortfolioService {
         InsurancePolicy row = new InsurancePolicy();
         fillCover(row, body, "POL-", 5, PolicyWorkflow.ACTIVE);
         List<RateTableService.PricedLife> lives = applyTier(row, body);
+        // Staff issue: every required insurer-configured field must be present (guide §15).
+        policyAttributes.pinNewPolicy(row, body, true);
         policyWorkflow.startActive(row);
         em.persist(row);
         saveLives(row, lives);
@@ -317,6 +323,8 @@ public class PortfolioService {
         row.setAmount(digits(product.getCover()));
         row.setPremium(BigDecimal.valueOf(digits(product.getPremium())));
         List<RateTableService.PricedLife> lives = applyTier(row, body);
+        // A portal purchase is pinned to the current form; staff complete any required extra fields later.
+        policyAttributes.pinNewPolicy(row, body, false);
         // Spec 01 BR-25: no plan selection while the customer's enhanced due diligence is open or failed.
         String edd = blank(account.getEddStatus());
         if ("PENDING".equals(edd) || "FAILED".equals(edd)) {

@@ -1,0 +1,17 @@
+# Shared environments (UAT, production). Credentials and identity must be supplied; nothing defaults.
+spring:
+  datasource:
+    url: ${NSURE_DB_URL}
+    username: ${NSURE_DB_USER}
+    password: ${NSURE_DB_PASSWORD}
+  liquibase:
+    # The runtime account has no DDL rights; the migrate job applies schema changes before deployment.
+    enabled: false
+
+nsure:
+  insurer:
+    code: ${NSURE_INSURER_CODE}
+    environment: ${NSURE_ENVIRONMENT}
+    display-name: ${NSURE_INSURER_NAME}
+    # Identity is bound by provisioning (the migrate job), never by an application that happens to start first.
+    bind-on-first-start: false

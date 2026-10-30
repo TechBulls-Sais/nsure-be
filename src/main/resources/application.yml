@@ -1,13 +1,14 @@
-# Dev login seeded by Liquibase: username admin, password password.
-# Local MySQL account created for this app: database nsure, user nsure, password nsure.
-# Replace that hash in db/changelog/changes/004-seed-security.yaml before any shared environment.
+# One installation serves exactly one insurer (docs/INSURER_DEPLOYMENT_PLAN.md). Everything insurer- or
+# environment-specific comes from NSURE_* environment variables; the defaults below are the local developer
+# installation (database nsure, user nsure/nsure, dev login admin/password). Shared environments run with the
+# prod profile (application-prod.yml), which has no defaults for credentials.
 spring:
   application:
     name: nsure-be
   datasource:
-    url: jdbc:mysql://127.0.0.1:3306/nsure?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8
-    username: nsure
-    password: nsure
+    url: ${NSURE_DB_URL:jdbc:mysql://127.0.0.1:3306/nsure?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8}
+    username: ${NSURE_DB_USER:nsure}
+    password: ${NSURE_DB_PASSWORD:nsure}
   jpa:
     open-in-view: false
     hibernate:
@@ -21,6 +22,10 @@ spring:
         auto_quote_keyword: true
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
+    # Local development migrates on startup. Production runs the separate migrate job instead (guide §8).
+    enabled: ${NSURE_LIQUIBASE_ENABLED:true}
+    # Empty runs every changeset; production uses "!demo" to skip demonstration seed data.
+    contexts: ${NSURE_LIQUIBASE_CONTEXTS:}
   jackson:
     time-zone: UTC
     serialization:
@@ -33,7 +38,7 @@ spring:
 
 server:
   # 8091, not 8080: MIPAS runs on 8080 on the same machine.
-  port: 8091
+  port: ${NSURE_PORT:8091}
   tomcat:
     # Read an oversized upload to the end so the client gets the 413 message, not a reset connection.
     max-swallow-size: 20MB
@@ -42,13 +47,33 @@ server:
     include-binding-errors: never
 
 nsure:
+  # The insurer this installation belongs to. Bound to the database on first start (deployment_identity) and
+  # checked on every start and before every migration, so this backend can never run against another insurer's data.
+  insurer:
+    code: ${NSURE_INSURER_CODE:local-dev}
+    environment: ${NSURE_ENVIRONMENT:dev}
+    display-name: ${NSURE_INSURER_NAME:Nsure Life (local)}
+    legal-name: ${NSURE_INSURER_LEGAL_NAME:Nsure Life development installation}
+    currency: ${NSURE_CURRENCY:BWP}
+    timezone: ${NSURE_TIMEZONE:Africa/Gaborone}
+    locale: ${NSURE_LOCALE:en-BW}
+    support-email: ${NSURE_SUPPORT_EMAIL:support@nsure.local}
+    support-phone: ${NSURE_SUPPORT_PHONE:+267 390 0000}
+    primary-color: ${NSURE_PRIMARY_COLOR:#4e6c39}
+    logo-url: ${NSURE_LOGO_URL:}
+    # First start on an empty database records this identity. Production provisions it explicitly (false).
+    bind-on-first-start: ${NSURE_BIND_ON_FIRST_START:true}
+  # Optional first administrator for a clean installation, created only while no enabled Super Admin exists.
+  bootstrap:
+    admin-username: ${NSURE_BOOTSTRAP_ADMIN_USERNAME:}
+    admin-password: ${NSURE_BOOTSTRAP_ADMIN_PASSWORD:}
   maker-checker:
     same-user-allowed: false
   audit:
     max-payload-chars: 8000
   # Where claim and policy documents are kept, one folder per reference (data/ is git-ignored).
   documents:
-    dir: data/documents
+    dir: ${NSURE_DOCUMENTS_DIR:data/documents}
 
 management:
   endpoints:

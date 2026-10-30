@@ -69,6 +69,8 @@ databaseChangeLog:
   - changeSet:
       id: 030-life-platform-demo-users
       author: nsure
+      # Demonstration data: production installs run with contexts "!demo" and skip it.
+      context: demo
       comment: >-
         One demo login per new role, password "password" (same hash as admin). Replace before any shared
         environment.

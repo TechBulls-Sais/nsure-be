@@ -105,6 +105,8 @@ databaseChangeLog:
   - changeSet:
       id: 035-reinsurance-seed
       author: nsure
+      # Demonstration data: production installs run with contexts "!demo" and skip it.
+      context: demo
       comment: >-
         One approved quota-share treaty (approved by the system at go-live) and one surplus treaty still in draft,
         which therefore cedes nothing until a second user approves it.

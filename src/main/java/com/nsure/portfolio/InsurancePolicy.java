@@ -3,12 +3,26 @@ package com.nsure.portfolio;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "ins_policy")
 public class InsurancePolicy extends CoverRecord implements TieredCover {
+
+    // The insurer-approved form this policy was issued under, and its values for that form's extra fields (JSON).
+    // A later form version never re-validates an existing policy (guide §15).
+    @Column(name = "form_version_id")
+    private Long formVersionId;
+
+    @Column(name = "custom_attributes", length = 4000)
+    private String customAttributes;
+
+    // Optimistic locking: a write based on a stale copy fails with 409 instead of overwriting another change.
+    @Version
+    @Column(name = "row_version", nullable = false)
+    private long rowVersion;
 
     @Column(length = 60)
     private String tier;
@@ -130,5 +144,25 @@ public class InsurancePolicy extends CoverRecord implements TieredCover {
 
     public void setPaymentMethod(String paymentMethod) {
         this.paymentMethod = paymentMethod;
+    }
+
+    public Long getFormVersionId() {
+        return formVersionId;
+    }
+
+    public void setFormVersionId(Long formVersionId) {
+        this.formVersionId = formVersionId;
+    }
+
+    public String getCustomAttributes() {
+        return customAttributes;
+    }
+
+    public void setCustomAttributes(String customAttributes) {
+        this.customAttributes = customAttributes;
+    }
+
+    public long getRowVersion() {
+        return rowVersion;
     }
 }

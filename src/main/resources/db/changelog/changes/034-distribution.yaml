@@ -135,6 +135,8 @@ databaseChangeLog:
   - changeSet:
       id: 034-distribution-seed
       author: nsure
+      # Demonstration data: production installs run with contexts "!demo" and skip it.
+      context: demo
       comment: Demo intermediaries (one suspended) and commission rules for the seeded products.
       changes:
         - insert:

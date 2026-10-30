@@ -1,0 +1,184 @@
+databaseChangeLog:
+  - changeSet:
+      id: 038-deployment-identity
+      author: nsure
+      comment: >-
+        One row per database: which insurer and environment this installation belongs to (guide §7). Written once by
+        the migrate job or the first local start, then checked on every start and before every migration, so an
+        insurer-A backend can never run against insurer B's database. No secrets are stored here.
+      changes:
+        - createTable:
+            tableName: deployment_identity
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_deployment_identity}}
+              - column: {name: insurer_code, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: environment_name, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: installation_uuid, type: varchar(36), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_deployment_installation}}
+              - column: {name: bound_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: bound_at, type: datetime, constraints: {nullable: false}}
+  - changeSet:
+      id: 038-configuration-releases
+      author: nsure
+      comment: >-
+        Insurer business configuration as versioned data (guide §7, §12): a release moves DRAFT → IN_REVIEW → APPROVED
+        → ACTIVE → RETIRED, its content is frozen (checksum) at submission, and each product's policy form is a new
+        version on activation. Insurer A requiring five policy fields and B six is two different releases on the
+        same schema.
+      changes:
+        - createTable:
+            tableName: config_release
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_config_release}}
+              - column: {name: release_code, type: varchar(40), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_config_release_code}}
+              - column: {name: description, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: release_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: checksum, type: varchar(64)}
+              - column: {name: schema_version, type: varchar(80)}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: submitted_by, type: varchar(100)}
+              - column: {name: submitted_at, type: datetime}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+              - column: {name: activated_by, type: varchar(100)}
+              - column: {name: activated_at, type: datetime}
+              - column: {name: rejection_reason, type: varchar(500)}
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - createTable:
+            tableName: policy_form_version
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_policy_form_version}}
+              - column: {name: config_release_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: product, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: version_no, type: int}
+              - column: {name: form_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: definition_checksum, type: varchar(64)}
+              - column: {name: activated_at, type: datetime}
+              - column: {name: retired_at, type: datetime}
+        - addForeignKeyConstraint:
+            baseTableName: policy_form_version
+            baseColumnNames: config_release_id
+            referencedTableName: config_release
+            referencedColumnNames: id
+            constraintName: fk_policy_form_release
+        - addUniqueConstraint:
+            tableName: policy_form_version
+            columnNames: config_release_id, product
+            constraintName: uk_policy_form_release_product
+        - createTable:
+            tableName: policy_field_definition
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_policy_field_definition}}
+              - column: {name: form_version_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: field_key, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: field_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: label, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: required_flag, type: varchar(1), constraints: {nullable: false}}
+              - column: {name: sensitive_flag, type: varchar(1), constraints: {nullable: false}}
+              - column: {name: max_length, type: int}
+              - column: {name: allowed_values, type: varchar(500)}
+              - column: {name: help_text, type: varchar(200)}
+              - column: {name: display_order, type: int, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: policy_field_definition
+            baseColumnNames: form_version_id
+            referencedTableName: policy_form_version
+            referencedColumnNames: id
+            constraintName: fk_policy_field_form
+        - addUniqueConstraint:
+            tableName: policy_field_definition
+            columnNames: form_version_id, field_key
+            constraintName: uk_policy_field_form_key
+  - changeSet:
+      id: 038-policy-custom-attributes
+      author: nsure
+      comment: >-
+        A policy pins the form version it was issued under and keeps its approved custom values as JSON text; core
+        insurance fields stay typed columns. row_version gives optimistic locking (stale write → 409). varchar, not
+        MySQL JSON, so the same changeset runs on H2 in tests; the service validates the content.
+      changes:
+        - addColumn:
+            tableName: ins_policy
+            columns:
+              - column: {name: form_version_id, type: bigint}
+              - column: {name: custom_attributes, type: varchar(4000)}
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: ins_policy
+            baseColumnNames: form_version_id
+            referencedTableName: policy_form_version
+            referencedColumnNames: id
+            constraintName: fk_policy_form_version
+  - changeSet:
+      id: 038-configuration-permissions
+      author: nsure
+      comment: >-
+        Separate duties (guide §16): a maker drafts and submits, an approver approves or rejects, a deployer
+        activates. Nobody approves their own release — Super Admin included.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT seed.g, seed.c, seed.e, seed.a, FALSE, seed.f FROM (
+                SELECT 'configuration' g, 'READ_CONFIG' c, 'CONFIG_RELEASE' e, 'READ' a, 'View configuration releases and installation details' f
+                UNION ALL SELECT 'configuration', 'MANAGE_CONFIG', 'CONFIG_RELEASE', 'MANAGE', 'Draft and submit configuration releases'
+                UNION ALL SELECT 'configuration', 'APPROVE_CONFIG', 'CONFIG_RELEASE', 'APPROVE', 'Approve or reject a release drafted by another user'
+                UNION ALL SELECT 'configuration', 'ACTIVATE_CONFIG', 'CONFIG_RELEASE', 'ACTIVATE', 'Activate an approved configuration release'
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission p WHERE p.code = seed.c);
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id
+              FROM app_role r
+              JOIN app_permission p ON (
+                   (r.name = 'Product Configurator' AND p.code IN ('READ_CONFIG', 'MANAGE_CONFIG'))
+                OR (r.name = 'Actuary' AND p.code IN ('READ_CONFIG', 'APPROVE_CONFIG'))
+                OR (r.name = 'Operations Manager' AND p.code IN ('READ_CONFIG', 'ACTIVATE_CONFIG'))
+              )
+              WHERE NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+  - changeSet:
+      id: 038-configuration-demo-users
+      author: nsure
+      context: demo
+      comment: Demo maker and approver logins (password "password"). Production provisions real users.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_user (username, password, enabled, office_id)
+              SELECT seed.u, '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG', TRUE, o.id
+              FROM (SELECT 'configurator' u UNION ALL SELECT 'actuary') seed
+              JOIN office o ON o.name = 'Head Office'
+              WHERE NOT EXISTS (SELECT 1 FROM app_user x WHERE x.username = seed.u);
+
+              INSERT INTO app_user_role (user_id, role_id)
+              SELECT u.id, r.id
+              FROM app_user u
+              JOIN app_role r ON ((u.username = 'configurator' AND r.name = 'Product Configurator')
+                OR (u.username = 'actuary' AND r.name = 'Actuary'))
+              WHERE NOT EXISTS (SELECT 1 FROM app_user_role x WHERE x.user_id = u.id AND x.role_id = r.id);
+  - changeSet:
+      id: 038-configuration-demo-release
+      author: nsure
+      context: demo
+      comment: >-
+        A demonstration active release: Whole of Life asks for two optional extra fields. Optional only, so existing
+        purchase and policy journeys are unaffected.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO config_release (release_code, description, release_status, checksum, created_by, created_at,
+                  submitted_by, submitted_at, approved_by, approved_at, activated_by, activated_at, row_version)
+              VALUES ('DEMO-R1', 'Demonstration: extra underwriting details for Whole of Life', 'ACTIVE',
+                  'demo', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP,
+                  'system', CURRENT_TIMESTAMP, 0);
+
+              INSERT INTO policy_form_version (config_release_id, product, version_no, form_status, definition_checksum, activated_at)
+              SELECT r.id, 'Whole of Life', 1, 'ACTIVE', 'demo', CURRENT_TIMESTAMP FROM config_release r WHERE r.release_code = 'DEMO-R1';
+
+              INSERT INTO policy_field_definition (form_version_id, field_key, field_type, label, required_flag, sensitive_flag, max_length, allowed_values, help_text, display_order)
+              SELECT f.id, 'occupation', 'STRING', 'Occupation', 'N', 'N', 60, NULL, 'As stated on the application', 1
+              FROM policy_form_version f JOIN config_release r ON r.id = f.config_release_id WHERE r.release_code = 'DEMO-R1';
+
+              INSERT INTO policy_field_definition (form_version_id, field_key, field_type, label, required_flag, sensitive_flag, max_length, allowed_values, help_text, display_order)
+              SELECT f.id, 'smokerStatus', 'ENUM', 'Smoker status', 'N', 'Y', NULL, 'Non-smoker,Smoker,Ex-smoker', NULL, 2
+              FROM policy_form_version f JOIN config_release r ON r.id = f.config_release_id WHERE r.release_code = 'DEMO-R1';

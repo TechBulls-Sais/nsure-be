@@ -18,3 +18,12 @@ nsure:
   # Tests run the outbox dispatcher explicitly (POST /integration/outbox/dispatch), never on the timer.
   integration:
     dispatch-delay-ms: 3600000
+  # The test installation's identity; each test database binds it on first start.
+  insurer:
+    code: test-insurer
+    environment: test
+    display-name: Test Insurer
+    currency: BWP
+    timezone: Africa/Gaborone
+    primary-color: "#4e6c39"
+    bind-on-first-start: true

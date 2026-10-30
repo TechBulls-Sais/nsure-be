@@ -1,0 +1,18 @@
+# The migration job: verifies the target insurer, applies the changelog with the migrator account, records the
+# installation identity if this is the first install, then exits. Run once per insurer database (guide §8, §10).
+spring:
+  main:
+    web-application-type: none
+  datasource:
+    username: ${NSURE_DB_MIGRATOR_USER:${NSURE_DB_USER:nsure}}
+    password: ${NSURE_DB_MIGRATOR_PASSWORD:${NSURE_DB_PASSWORD:nsure}}
+  liquibase:
+    enabled: true
+
+nsure:
+  insurer:
+    bind-on-first-start: true
+  integration:
+    dispatch-delay-ms: 3600000
+  communications:
+    dispatch-delay-ms: 3600000

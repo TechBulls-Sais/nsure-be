@@ -20,7 +20,8 @@ public class MeController {
             "READ_COMMUNICATION", "MANAGE_COMMUNICATION", "APPROVE_TEMPLATE",
             "READ_SERVICE_CASE", "MANAGE_SERVICE_CASE",
             "READ_INTEGRATION", "MANAGE_INTEGRATION",
-            "READ_REPORT");
+            "READ_REPORT",
+            "READ_CONFIG", "MANAGE_CONFIG", "APPROVE_CONFIG", "ACTIVATE_CONFIG");
 
     private final PlatformSecurityContext security;
 

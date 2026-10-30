@@ -251,6 +251,8 @@ databaseChangeLog:
   - changeSet:
       id: 033-group-administration-seed
       author: nsure
+      # Demonstration data: production installs run with contexts "!demo" and skip it.
+      context: demo
       comment: >-
         Demo categories and members for the three seeded schemes. Annual salaries; cover above the free-cover limit is
         pending underwriting (one member on SCH-001 and SCH-003). The ins_scheme members/premium snapshot is reset to

@@ -192,6 +192,21 @@ public final class ApiAccessRules {
             // ── management reporting SH13 ──────────────────────────────────────────────────────────────
             rule(GET, "/reports/**", anyOf("READ_REPORT")),
 
+            // ── insurer installation and configuration releases (guide §12, §16) ───────────────────────
+            // GET /public/config is covered by /public/** above: branding only, nothing secret.
+            rule(GET, "/admin/deployment", anyOf("READ_CONFIG")),
+            rule(GET, "/admin/config-releases", anyOf("READ_CONFIG")),
+            rule(GET, "/admin/config-releases/*", anyOf("READ_CONFIG")),
+            rule(POST, "/admin/config-releases", anyOf("MANAGE_CONFIG")),
+            rule(PUT, "/admin/config-releases/*", anyOf("MANAGE_CONFIG")),
+            rule(POST, "/admin/config-releases/*/submit", anyOf("MANAGE_CONFIG")),
+            rule(POST, "/admin/config-releases/*/approve", anyOf("APPROVE_CONFIG")),
+            rule(POST, "/admin/config-releases/*/reject", anyOf("APPROVE_CONFIG")),
+            rule(POST, "/admin/config-releases/*/activate", anyOf("ACTIVATE_CONFIG")),
+            rule(GET, "/configuration/forms/policy", staff()),
+            rule(GET, "/portfolio/policies/*/attributes", anyOf("READ_POLICY")),
+            rule(PUT, "/portfolio/policies/*/attributes", anyOf("UPDATE_POLICY")),
+
             // ── organisation ───────────────────────────────────────────────────────────────────────────
             rule(GET, "/offices", anyOf("READ_OFFICE")),
 

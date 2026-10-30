@@ -110,3 +110,6 @@ databaseChangeLog:
   - include:
       file: changes/037-service-desk.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/038-insurer-deployment-and-configuration.yaml
+      relativeToChangelogFile: true
