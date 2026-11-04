@@ -55,47 +55,63 @@ jobs:
       cancel-in-progress: false
     env:
       DEPLOY_USER: deploy
+      # Host and host key are not sensitive, so they may be Actions secrets or Actions variables.
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST || vars.DEPLOY_HOST }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS || vars.DEPLOY_KNOWN_HOSTS }}
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: nsure-be-jar
           path: artifact
 
-      # Logs only whether each secret is set; values are never printed (GitHub masks them as *** anyway).
-      - name: Check deploy secrets
+      # Logs where each value was found, never the value itself (GitHub masks secrets as *** anyway).
+      - name: Check deploy settings
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          HOST_SECRET: ${{ secrets.DEPLOY_HOST != '' }}
+          HOST_VAR: ${{ vars.DEPLOY_HOST != '' }}
+          KNOWN_SECRET: ${{ secrets.DEPLOY_KNOWN_HOSTS != '' }}
+          KNOWN_VAR: ${{ vars.DEPLOY_KNOWN_HOSTS != '' }}
+          KEY_SECRET: ${{ secrets.DEPLOY_SSH_KEY != '' }}
+          KEY_VAR: ${{ vars.DEPLOY_SSH_KEY != '' }}
         run: |
           missing=0
-          for name in DEPLOY_HOST DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
-            if [ -n "${!name}" ]; then
-              echo "$name: set"
+          report() { # name, found-as-secret, found-as-variable, must-be-secret
+            if [ "$2" = true ]; then
+              echo "$1: set (secret)"
+            elif [ "$3" = true ] && [ "$4" = yes ]; then
+              echo "::error::$1 is saved as a variable, which is shown in plain text. Delete it and add it under Secrets instead."
+              missing=1
+            elif [ "$3" = true ]; then
+              echo "$1: set (variable)"
             else
-              echo "::error::$name is not set (Settings > Secrets and variables > Actions)"
+              echo "::error::$1 is not set as a repository, organisation or 'production' environment secret (Settings > Secrets and variables > Actions > Secrets)"
               missing=1
             fi
-          done
+          }
+          report DEPLOY_HOST "$HOST_SECRET" "$HOST_VAR" no
+          report DEPLOY_KNOWN_HOSTS "$KNOWN_SECRET" "$KNOWN_VAR" no
+          report DEPLOY_SSH_KEY "$KEY_SECRET" "$KEY_VAR" yes
           [ "$missing" = 0 ]
 
       - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
           install -d -m 700 ~/.ssh
-          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
 
       - name: Upload JAR
         run: |
           jar="$(ls artifact/nsure-be-*.jar | grep -v -- '-plain' | head -1)"
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$jar" \
-            "$DEPLOY_USER@${{ secrets.DEPLOY_HOST }}:incoming/nsure-be.jar"
+            "$DEPLOY_USER@$DEPLOY_HOST:incoming/nsure-be.jar"
 
       - name: Install and restart backend
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
-            "$DEPLOY_USER@${{ secrets.DEPLOY_HOST }}" sudo -n /usr/local/bin/nsure-deploy-be
+            "$DEPLOY_USER@$DEPLOY_HOST" sudo -n /usr/local/bin/nsure-deploy-be
 
       - name: Check the live site
-        run: curl -fsS "http://${{ secrets.DEPLOY_HOST }}/api/actuator/health"
+        run: curl -fsS "http://$DEPLOY_HOST/api/actuator/health"
