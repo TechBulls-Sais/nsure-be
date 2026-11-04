@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: production
-      url: http://129.151.189.55/
+      url: https://129.151.189.55/
     concurrency:
       group: deploy-nsure-be
       cancel-in-progress: false
@@ -114,4 +114,4 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST" sudo -n /usr/local/bin/nsure-deploy-be
 
       - name: Check the live site
-        run: curl -fsS "http://$DEPLOY_HOST/api/actuator/health"
+        run: curl -fsS "https://$DEPLOY_HOST/api/actuator/health"
