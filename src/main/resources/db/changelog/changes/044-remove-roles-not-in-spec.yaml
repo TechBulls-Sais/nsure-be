@@ -1,0 +1,40 @@
+databaseChangeLog:
+  - changeSet:
+      id: 044-remove-roles-not-in-spec
+      author: nsure
+      comment: >-
+        Keep only the roles defined in the Nsure roles spec (docs/spec/.../04-roles-and-capabilities.md) plus the
+        Super Admin role. The six roles added for the Life modules (030-life-platform-security) are removed: their
+        user assignments and permission grants go first, then the roles. Their permission codes stay in the catalog,
+        so Super Admin keeps them and they can be granted to a spec role later.
+      changes:
+        - sql:
+            sql: |
+              DELETE FROM app_user_role
+              WHERE role_id IN (SELECT id FROM app_role WHERE name IN (
+                'Group Administrator', 'Finance Controller', 'Distribution Administrator',
+                'Reinsurance Officer', 'Service Agent', 'Operations Manager'));
+        - sql:
+            sql: |
+              DELETE FROM app_role_permission
+              WHERE role_id IN (SELECT id FROM app_role WHERE name IN (
+                'Group Administrator', 'Finance Controller', 'Distribution Administrator',
+                'Reinsurance Officer', 'Service Agent', 'Operations Manager'));
+        - sql:
+            sql: |
+              DELETE FROM app_role WHERE name IN (
+                'Group Administrator', 'Finance Controller', 'Distribution Administrator',
+                'Reinsurance Officer', 'Service Agent', 'Operations Manager');
+  - changeSet:
+      id: 044-disable-demo-users-of-removed-roles
+      author: nsure
+      context: demo
+      comment: >-
+        The demo logins created for the removed roles (030-life-platform-demo-users) now hold no role. They are
+        disabled rather than deleted, because audit and command rows may reference them.
+      changes:
+        - sql:
+            sql: |
+              UPDATE app_user SET enabled = FALSE
+              WHERE username IN ('grpadmin', 'finance', 'distribution', 'reinsurance', 'service', 'ops')
+                AND NOT EXISTS (SELECT 1 FROM app_user_role ur WHERE ur.user_id = app_user.id);

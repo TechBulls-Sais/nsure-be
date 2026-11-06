@@ -247,6 +247,61 @@ public class PortfolioService {
         return customer(row);
     }
 
+    // ── customer self sign-up (public) ────────────────────────────────────────────────────────────
+
+    /** Demo build: no SMS or email gateway is wired, so every sign-up uses this fixed one-time code. */
+    static final String SIGNUP_OTP = "123456";
+
+    /** Step 1 of sign-up: check the details before "sending" the code, so the customer fixes them first. */
+    @Transactional(readOnly = true)
+    public Map<String, String> requestSignupOtp(JsonNode body) {
+        checkSignupDetails(body);
+        String phone = text(body, "phone");
+        String tail = phone.replaceAll("\\D", "");
+        tail = tail.length() > 3 ? tail.substring(tail.length() - 3) : tail;
+        return Map.of("sentTo", "•••• " + tail, "email", text(body, "email"));
+    }
+
+    /** Step 2 of sign-up: the code must match, then the customer is created exactly as staff would add them. */
+    @Transactional
+    public PortfolioViews.CustomerView signUp(JsonNode body) {
+        String otp = optional(body, "otp");
+        if (otp == null || !SIGNUP_OTP.equals(otp.replaceAll("\\s", ""))) {
+            throw new IllegalArgumentException("The verification code is incorrect.");
+        }
+        checkSignupDetails(body);
+        return createCustomer(body);
+    }
+
+    /** Self sign-up needs every field the staff Add customer form requires, including the sign-in details. */
+    private void checkSignupDetails(JsonNode body) {
+        String name = text(body, "name");
+        if (name.length() < 2) {
+            throw new IllegalArgumentException("Full name must be at least 2 characters.");
+        }
+        if (!text(body, "email").matches("[^@\\s]+@[^@\\s]+\\.[^@\\s]+")) {
+            throw new IllegalArgumentException("Enter a valid email address.");
+        }
+        text(body, "phone");
+        text(body, "poiType");
+        String poiNumber = text(body, "poiNumber");
+        if (poiNumber.length() < 5 || poiNumber.length() > 40) {
+            throw new IllegalArgumentException("Proof of identity number must be 5–40 characters.");
+        }
+        text(body, "dateOfBirth");
+        String username = text(body, "username").toLowerCase();
+        if (!username.matches("[a-z0-9._-]{3,100}")) {
+            throw new IllegalArgumentException("Username must be 3–100 letters, numbers, dots, or hyphens.");
+        }
+        String password = optional(body, "password");
+        if (password == null || password.length() < 8) {
+            throw new IllegalArgumentException("Password must be at least 8 characters.");
+        }
+        if (users.findByUsername(username).isPresent()) {
+            throw new IllegalArgumentException("Username " + username + " is already in use.");
+        }
+    }
+
     @Transactional
     public PortfolioViews.CoverView createApplication(JsonNode body) {
         InsuranceApplication row = new InsuranceApplication();

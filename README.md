@@ -35,14 +35,14 @@ Services still check the same codes before they write, so the URL rule and the s
 | Audit | `GET /audits/**` · `POST …/approve` · `…/reject` | `READ_AUDIT` · a `CHECKER_*` code | Super roles |
 | Offices | `GET /offices` | `READ_OFFICE` | Super roles |
 | Access admin | `/users/**`, `/roles/**`, `/permissions/**` | Super Admin / Super user | Super roles |
-| Group schemes | `/group/**` | `READ_SCHEME` · `MANAGE_SCHEME` · `PROCESS_CENSUS` · `UNDERWRITE_MEMBER` · `BILL_SCHEME` | Group Administrator (`grpadmin`) |
-| Subledger | `/finance/**` | `READ_FINANCE` · `MANAGE_FINANCE` · `CLOSE_PERIOD` · `EXPORT_GL` | Finance Controller (`finance`) |
-| Distribution | `/distribution/**` | `READ_DISTRIBUTION` · `MANAGE_DISTRIBUTION` · `PAY_COMMISSION` | Distribution Administrator (`distribution`) |
-| Reinsurance | `/reinsurance/**` | `READ_REINSURANCE` · `MANAGE_REINSURANCE` · `APPROVE_TREATY` | Reinsurance Officer (`reinsurance`) |
-| Communications | `/communications/**` | `READ_COMMUNICATION` · `MANAGE_COMMUNICATION` · `APPROVE_TEMPLATE` | Service Agent (`service`), Operations Manager (`ops`) |
-| Service desk | `/service/**`, customer `/portfolio/shop/cases` | `READ_SERVICE_CASE` · `MANAGE_SERVICE_CASE` | Service Agent (`service`) |
-| Integration | `/integration/**` | `READ_INTEGRATION` · `MANAGE_INTEGRATION` | Operations Manager (`ops`) |
-| Management report | `GET /reports/management` | `READ_REPORT` | Operations Manager, Finance Controller, Group Administrator |
+| Group schemes | `/group/**` | `READ_SCHEME` · `MANAGE_SCHEME` · `PROCESS_CENSUS` · `UNDERWRITE_MEMBER` · `BILL_SCHEME` | Super Admin |
+| Subledger | `/finance/**` | `READ_FINANCE` · `MANAGE_FINANCE` · `CLOSE_PERIOD` · `EXPORT_GL` | Compliance & Auditor (read, GL export) |
+| Distribution | `/distribution/**` | `READ_DISTRIBUTION` · `MANAGE_DISTRIBUTION` · `PAY_COMMISSION` | Super Admin |
+| Reinsurance | `/reinsurance/**` | `READ_REINSURANCE` · `MANAGE_REINSURANCE` · `APPROVE_TREATY` | Super Admin |
+| Communications | `/communications/**` | `READ_COMMUNICATION` · `MANAGE_COMMUNICATION` · `APPROVE_TEMPLATE` | Customer Support Representative (`support`; not template approval) |
+| Service desk | `/service/**`, customer `/portfolio/shop/cases` | `READ_SERVICE_CASE` · `MANAGE_SERVICE_CASE` | Customer Support Representative (`support`) |
+| Integration | `/integration/**` | `READ_INTEGRATION` · `MANAGE_INTEGRATION` | Super Admin |
+| Management report | `GET /reports/management` | `READ_REPORT` | Compliance & Auditor (`compliance`) |
 
 ## Nsure Life modules and the event bus
 
@@ -53,7 +53,9 @@ Business changes publish events through the transactional outbox (`com.nsure.int
 transaction. `OutboxDispatcher` delivers them every 5 s (`nsure.integration.dispatch-delay-ms`) to each
 `DomainEventHandler` — subledger posting, commission, reinsurance cession, customer messages — one delivery row per
 handler, retried with backoff and replayable from the Integration monitor. Handlers are idempotent on the event id,
-so a replay never posts, pays or messages twice. Demo logins for the new roles all use password `password`.
+so a replay never posts, pays or messages twice. Only the roles in the Nsure roles spec are shipped (migration 044 removed the six Life-module roles), so the group, distribution,
+reinsurance and integration modules are open to Super Admin until their codes are granted to a spec role. Customer
+Support Representative (`support`) and Compliance & Auditor (`compliance`) come from migration 045; demo password `password`.
 
 ### Adding an endpoint
 

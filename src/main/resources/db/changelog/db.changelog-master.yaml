@@ -128,3 +128,9 @@ databaseChangeLog:
   - include:
       file: changes/043-single-super-admin-role.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/044-remove-roles-not-in-spec.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/045-support-and-compliance-roles.yaml
+      relativeToChangelogFile: true

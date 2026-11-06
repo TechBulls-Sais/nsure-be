@@ -12,8 +12,11 @@ import com.jayway.jsonpath.JsonPath;
 import java.math.BigDecimal;
 import java.time.YearMonth;
 import java.util.List;
+import com.nsure.support.ModuleTestUsers;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
@@ -32,6 +35,14 @@ class SubledgerAndIntegrationApiTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private JdbcTemplate moduleJdbc;
+
+    @BeforeEach
+    void provisionModuleUsers() {
+        ModuleTestUsers.provision(moduleJdbc);
+    }
 
     @Test
     void aConfirmedPaymentActivatesThePolicyAndPostsOnceHoweverOftenItIsDelivered() throws Exception {

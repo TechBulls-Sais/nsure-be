@@ -61,6 +61,54 @@ class ApiAccessIntegrationTest {
     }
 
     @Test
+    void onlyTheRolesInTheNsureSpecAreShipped() throws Exception {
+        JsonNode roles = json.readTree(mockMvc.perform(get("/roles").with(httpBasic("admin", "password")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        java.util.List<String> names = new java.util.ArrayList<>();
+        roles.forEach(role -> names.add(role.get("name").asText()));
+        assertThat(names).doesNotContain("Group Administrator", "Finance Controller", "Distribution Administrator",
+                "Reinsurance Officer", "Service Agent", "Operations Manager");
+        assertThat(names).contains("Super Admin", "Policyholder", "Product Configurator", "Actuary",
+                "Onboarding Specialist", "Claims Assessor", "Customer Support Representative",
+                "Compliance & Auditor");
+    }
+
+    @Test
+    void customerSupportServicesPoliciesButCannotDecideClaims() throws Exception {
+        send("support", get("/portfolio/customers"), 200);
+        send("support", get("/portfolio/policies"), 200);
+        send("support", get("/portfolio/receipts"), 200);
+        send("support", get("/portfolio/claims"), 200);
+        send("support", get("/service/cases"), 200);
+        send("support", get("/communications/messages"), 200);
+        send("support", post("/portfolio/claims/CLM-1/assess").content("{}"), 403);
+        send("support", post("/portfolio/claims/CLM-1/approve").content("{}"), 403);
+        send("support", post("/portfolio/customers/CUS-1/kyc").content("{}"), 403);
+        send("support", post("/communications/templates/1/approve").content("{}"), 403);
+        send("support", get("/audits"), 403);
+        send("support", get("/finance/periods"), 403);
+        send("support", get("/roles"), 403);
+    }
+
+    @Test
+    void complianceReadsEverythingItAuditsAndWritesNothingButTheGlExport() throws Exception {
+        send("compliance", get("/portfolio/customers"), 200);
+        send("compliance", get("/portfolio/policies"), 200);
+        send("compliance", get("/portfolio/claims"), 200);
+        send("compliance", get("/audits"), 200);
+        send("compliance", get("/admin/rate-tables"), 200);
+        send("compliance", get("/admin/controls"), 200);
+        send("compliance", get("/reports/management"), 200);
+        send("compliance", get("/finance/periods"), 200);
+        send("compliance", post("/portfolio/policies").content("{}"), 403);
+        send("compliance", post("/portfolio/claims").content("{}"), 403);
+        send("compliance", post("/portfolio/claims/CLM-1/approve").content("{}"), 403);
+        send("compliance", put("/admin/rate-tables/1/grid").content("{}"), 403);
+        send("compliance", post("/finance/periods/2026-01/close").content("{}"), 403);
+        send("compliance", get("/users"), 403);
+    }
+
+    @Test
     void claimsAssessorReachesClaimsButNotAdministration() throws Exception {
         send("assessor", get("/portfolio/claims"), 200);
         send("assessor", get("/portfolio/policies"), 200);

@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jayway.jsonpath.JsonPath;
+import com.nsure.support.ModuleTestUsers;
 import com.nsure.integration.DomainEvent;
 import com.nsure.integration.Events;
 import com.nsure.integration.Outbox;
@@ -22,8 +23,10 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
@@ -45,6 +48,14 @@ class DistributionApiTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private JdbcTemplate moduleJdbc;
+
+    @BeforeEach
+    void provisionModuleUsers() {
+        ModuleTestUsers.provision(moduleJdbc);
+    }
 
     @Autowired
     private EntityManager em;

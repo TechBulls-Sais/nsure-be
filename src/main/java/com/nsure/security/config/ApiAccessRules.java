@@ -43,6 +43,9 @@ public final class ApiAccessRules {
             rule(GET, "/actuator/health", publicAccess()),
             rule(GET, "/reference/**", publicAccess()),
             rule(GET, "/public/**", publicAccess()),
+            // Customer self sign-up: creates a Pending KYC customer once the one-time code matches.
+            rule(POST, "/public/signup/otp", publicAccess()),
+            rule(POST, "/public/signup", publicAccess()),
 
             // ── every signed-in user ───────────────────────────────────────────────────────────────────
             rule(GET, "/me", authenticated()),
