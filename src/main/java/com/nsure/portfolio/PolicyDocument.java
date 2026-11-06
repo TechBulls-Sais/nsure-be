@@ -42,11 +42,16 @@ public class PolicyDocument {
     @Column(name = "uploaded_at", nullable = false)
     private LocalDateTime uploadedAt;
 
+    // The schedule layout the file was made with (PolicySchedulePdf.LAYOUT_VERSION); 1 is the old layout.
+    @Column(name = "layout_version", nullable = false)
+    private int layoutVersion;
+
     protected PolicyDocument() {
     }
 
     public PolicyDocument(Long policyId, String documentType, String fileName, String contentType, long sizeBytes,
-            String storagePath, String uploadedBy) {
+            String storagePath, String uploadedBy, int layoutVersion) {
+        this.layoutVersion = layoutVersion;
         this.policyId = policyId;
         this.documentType = documentType;
         this.fileName = fileName;
@@ -91,5 +96,9 @@ public class PolicyDocument {
 
     public LocalDateTime getUploadedAt() {
         return uploadedAt;
+    }
+
+    public int getLayoutVersion() {
+        return layoutVersion;
     }
 }

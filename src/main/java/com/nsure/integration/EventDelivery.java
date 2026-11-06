@@ -10,6 +10,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 
 /** One handler's delivery of one outbox event: Pending → Delivered, or Failed after bounded retries. */
 @Entity
@@ -56,8 +57,17 @@ public class EventDelivery {
         this.event = event;
         this.handler = handler;
         this.status = PENDING;
-        this.nextAttemptAt = LocalDateTime.now();
-        this.updatedAt = nextAttemptAt;
+        this.nextAttemptAt = dueNow();
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * "Due immediately", truncated to whole seconds. The column keeps less precision than the JVM clock (MySQL
+     * DATETIME keeps seconds, H2 microseconds) and the database rounds on insert, so an untruncated value can be
+     * stored slightly later than the moment it was created; a dispatch in the same clock tick would then skip it.
+     */
+    private static LocalDateTime dueNow() {
+        return LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS);
     }
 
     void delivered() {
@@ -83,8 +93,8 @@ public class EventDelivery {
     void replay() {
         status = PENDING;
         attempts = 0;
-        nextAttemptAt = LocalDateTime.now();
-        updatedAt = nextAttemptAt;
+        nextAttemptAt = dueNow();
+        updatedAt = LocalDateTime.now();
     }
 
     public Long getId() {

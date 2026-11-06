@@ -34,7 +34,7 @@ public class MakerCheckerPolicy {
         if (!checker.hasPermissionTo("CHECKER_SUPER_USER") && !checker.hasPermissionTo(required)) {
             throw new NoAuthorizationException("User has no authority to: " + required);
         }
-        // Super user and Super admin may check a command they made; every other maker still needs a different checker.
+        // Super Admin may check a command they made; every other maker still needs a different checker.
         if (!properties.isSameUserAllowed()
                 && checker.getId().equals(pending.getMakerId())
                 && !checker.isSuperAdmin()) {

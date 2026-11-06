@@ -106,7 +106,7 @@ public class ReinsuranceService {
     }
 
     /**
-     * Approves a draft. The user who drafted it cannot approve it (four eyes), except Super user and Super admin, who
+     * Approves a draft. The user who drafted it cannot approve it (four eyes), except Super Admin, who
      * may approve their own draft. Two approved treaties may not cover the same product on the same dates.
      */
     @Transactional

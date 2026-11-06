@@ -229,7 +229,7 @@ class CommunicationApiTest {
                         "{\"code\":\"OPS_DRAFT\",\"eventType\":\"ClaimPaid\",\"channel\":\"EMAIL\",\"subject\":\"x\",\"body\":\"y\"}"))
                 .andExpect(status().isForbidden());
 
-        // Super user (admin) may approve a version they drafted. A specialist who only drafts still cannot.
+        // Super Admin (admin) may approve a version they drafted. A specialist who only drafts still cannot.
         String own = mockMvc.perform(json(post("/communications/templates"), "admin",
                         "{\"code\":\"CLAIM_PAID_WHATSAPP\",\"eventType\":\"ClaimPaid\",\"channel\":\"WHATSAPP\","
                                 + "\"body\":\"Hi {{customerName}}, claim {{claimRef}} is paid. {{portalLink}}\"}"))

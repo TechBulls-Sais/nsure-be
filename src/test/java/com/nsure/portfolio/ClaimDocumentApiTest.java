@@ -35,6 +35,12 @@ class ClaimDocumentApiTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private ClaimDocumentService documents;
+
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
     @Test
     void customerAndStaffShareTheEvidenceOnAClaim() throws Exception {
         String claim = customerClaim("Lerato Dube", "lerato");
@@ -151,6 +157,10 @@ class ClaimDocumentApiTest {
         mockMvc.perform(upload("/portfolio/shop/claims/" + claim + "/documents", "refilwe", "password1",
                         file("certificate.pdf", PDF)).param("type", "Death certificate"))
                 .andExpect(status().isOk());
+        // Not while the claim is open: its outcome is not final yet.
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(httpBasic("assessor", "password")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(Matchers.containsString("once the claim is paid or rejected")));
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reject"), "assessor",
                         "{\"reason\":\"Event before cover → not covered\"}"))
                 .andExpect(status().isOk());
@@ -180,10 +190,52 @@ class ClaimDocumentApiTest {
         try (org.apache.pdfbox.pdmodel.PDDocument doc = org.apache.pdfbox.Loader.loadPDF(pdf)) {
             String text = new org.apache.pdfbox.text.PDFTextStripper().getText(doc);
             assertThat(text).contains("Claim summary", claim, "Refilwe Moagi", "Rejected",
-                    "Event before cover -> not covered", "Death certificate", "certificate.pdf", "Rejected by assessor");
+                    "Event before cover -> not covered", "Death certificate", "certificate.pdf", "1. The claim",
+                    "3. Checks", "The policy was active", "No payment was made, because the claim was rejected",
+                    "7. Timeline", "If you disagree with this decision", "Page 1 of");
         }
         mockMvc.perform(get("/portfolio/history/claim/" + claim).with(httpBasic("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Summary Generated')].performedBy").value(Matchers.hasItem("assessor")));
+
+        // Once per claim.
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(httpBasic("assessor", "password")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(Matchers.containsString("already has its claim summary")));
+    }
+
+    @Test
+    void oldLayoutSummariesOnAClosedClaimAreReplacedByOneCurrentSummary() throws Exception {
+        String claim = customerClaim("Tumelo Ditshwanelo", "tumelod");
+        mockMvc.perform(upload("/portfolio/shop/claims/" + claim + "/documents", "tumelod", "password1",
+                        file("bill.pdf", PDF)).param("type", "Hospital bill"))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reject"), "assessor", "{\"reason\":\"Not covered\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(httpBasic("assessor", "password")))
+                .andExpect(status().isOk());
+        // As the old button left it: two summaries in the old layout, next to the uploaded bill.
+        Long claimId = jdbc.queryForObject("select claim_id from ins_claim_document where document_type = 'Claim summary'"
+                + " and id = (select max(id) from ins_claim_document)", Long.class);
+        jdbc.update("update ins_claim_document set layout_version = 1 where claim_id = ? and document_type = 'Claim summary'",
+                claimId);
+        jdbc.update("insert into ins_claim_document (claim_id, document_type, file_name, content_type, size_bytes,"
+                + " storage_path, uploaded_by, uploaded_at, layout_version) select claim_id, document_type, file_name,"
+                + " content_type, size_bytes, 'gone/old.pdf', uploaded_by, uploaded_at, 1 from ins_claim_document"
+                + " where claim_id = ? and document_type = 'Claim summary'", claimId);
+        assertThat(documents.closedClaimsWithOldSummaries()).contains(claimId);
+
+        assertThat(documents.replaceOldSummaries(claimId)).isEqualTo(2);
+
+        assertThat(documents.closedClaimsWithOldSummaries()).doesNotContain(claimId);
+        assertThat(documents.replaceOldSummaries(claimId)).isZero();
+        // The bill is untouched; one summary, credited to whoever issued the first.
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/documents").with(httpBasic("admin", "password")))
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].type").value("Hospital bill"))
+                .andExpect(jsonPath("$[1].type").value("Claim summary"))
+                .andExpect(jsonPath("$[1].uploadedBy").value("assessor"));
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(httpBasic("assessor", "password")))
+                .andExpect(status().isConflict());
     }
 
     /** A customer with a verified login, a paid-up policy over the STP ceiling, and a claim they lodged on it. */

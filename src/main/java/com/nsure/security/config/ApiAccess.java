@@ -14,7 +14,7 @@ import org.springframework.security.core.GrantedAuthority;
 /**
  * Who may call one API endpoint. Every rule in {@link ApiAccessRules} is one of these.
  *
- * <p>Super Admin and Super user pass every rule (except that nothing is needed for {@code PUBLIC}). The check
+ * <p>Super Admin passes every rule (except that nothing is needed for {@code PUBLIC}). The check
  * runs before any permission lookup, so an empty or broken grant table can never lock them out.
  *
  * <p>A {@code PERMISSION} rule names the permission codes that open it; holding any one of them is enough.
@@ -32,7 +32,7 @@ public final class ApiAccess {
         CUSTOMER,
         /** Any signed-in staff user, whatever their permissions. */
         STAFF,
-        /** Super Admin or Super user only. */
+        /** Super Admin only. */
         SUPER_ADMIN,
         /** Staff holding at least one of the listed permission codes. */
         PERMISSION

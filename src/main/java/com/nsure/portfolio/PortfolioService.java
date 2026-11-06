@@ -620,7 +620,8 @@ public class PortfolioService {
         InsuranceClaim claim = switch (action) {
             case "assess" -> claimWorkflow.assess(ref, optional(input, "note"), actor);
             case "approve" -> claimWorkflow.approve(ref,
-                    input.hasNonNull("payoutAmount") ? Integer.valueOf(input.get("payoutAmount").asInt()) : null, actor);
+                    input.hasNonNull("payoutAmount") ? Integer.valueOf(input.get("payoutAmount").asInt()) : null,
+                    optional(input, "overrideReason"), actor);
             case "reject" -> claimWorkflow.reject(ref, optional(input, "reason"), actor);
             case "pay" -> claimWorkflow.pay(ref, actor);
             default -> throw new IllegalArgumentException("Unknown claim action: " + action);
@@ -1077,7 +1078,9 @@ public class PortfolioService {
                 blank(row.getRejectionReason()), row.getPayoutAmount(), blank(row.getPayoutReference()),
                 row.getPaidAt() == null ? "" : row.getPaidAt().withNano(0).toString(),
                 ClaimWorkflow.allowedActions(row.getStatus()),
-                ClaimDocumentService.views(em, row.getId()));
+                ClaimDocumentService.views(em, row.getId()),
+                blank(row.getCheckOverrideReason()),
+                blank(ClaimWorkflow.auditFlag(row)));
     }
 
     private PortfolioViews.ConfigView config(ProductConfiguration row) {

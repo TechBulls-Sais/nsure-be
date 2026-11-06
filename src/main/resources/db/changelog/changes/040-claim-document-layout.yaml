@@ -1,0 +1,13 @@
+databaseChangeLog:
+  - changeSet:
+      id: 040-claim-document-layout
+      author: nsure
+      comment: >-
+        Which layout of the claim summary a document was made with (0 for uploaded evidence, which has none). Every
+        summary on file before this change is layout 1 (the old snapshot, several allowed per claim). On start-up,
+        DocumentLayoutUpgrade replaces them on closed claims with one summary in the current layout.
+      changes:
+        - addColumn:
+            tableName: ins_claim_document
+            columns:
+              - column: {name: layout_version, type: int, defaultValueNumeric: 1, constraints: {nullable: false}}

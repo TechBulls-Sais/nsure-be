@@ -28,6 +28,12 @@ class PolicyDocumentApiTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private PolicyDocumentService documents;
+
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
     @Test
     void staffGenerateAPolicyScheduleWithTheCoverAndBeneficiaries() throws Exception {
         String policy = customerPolicy("Gosego Ramotswa", "gosego");
@@ -51,16 +57,71 @@ class PolicyDocumentApiTest {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             String text = new PDFTextStripper().getText(doc);
             assertThat(text).contains("Policy schedule", policy, "Gosego Ramotswa", "Term Life", "Active",
-                    "BWP 250,000", "gosego@example.com", "Kopano Ramotswa (Spouse)", "Bank Account ending 4567",
-                    "Created by admin");
-            // Full account numbers are never printed.
-            assertThat(text).doesNotContain("62004567");
+                    "BWP 250,000", "BWP 180 a month", "gosego@example.com", "Kopano Ramotswa", "Spouse",
+                    "Bank Account ending 4567", "1. Your policy", "2. Your premium", "5. Beneficiaries",
+                    "Important terms", "Page 1 of");
+            // Full account numbers are never printed, and a schedule is a contract, not an audit trail.
+            assertThat(text).doesNotContain("62004567", "Created by admin");
         }
 
         mockMvc.perform(get("/portfolio/policies").with(httpBasic("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + policy + "')].documents.length()").value(1));
         mockMvc.perform(get("/portfolio/history/policy/" + policy).with(httpBasic("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Schedule Generated')].performedBy").value(Matchers.hasItem("admin")));
+    }
+
+    @Test
+    void aPolicyHasOneScheduleOnly() throws Exception {
+        String policy = customerPolicy("Mpho Dintwe", "mpho");
+
+        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(httpBasic("admin", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(httpBasic("admin", "password")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(Matchers.containsString("already has its policy schedule")));
+        // Not from the customer portal either.
+        mockMvc.perform(post("/portfolio/shop/policies/" + policy + "/documents/schedule")
+                        .with(httpBasic("mpho", "password1")))
+                .andExpect(status().isConflict());
+
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents").with(httpBasic("admin", "password")))
+                .andExpect(jsonPath("$.length()").value(1));
+    }
+
+    @Test
+    void oldLayoutSchedulesAreReplacedByOneCurrentSchedule() throws Exception {
+        String policy = customerPolicy("Kagiso Moremi", "kagiso");
+        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(httpBasic("admin", "password")))
+                .andExpect(status().isOk());
+        // As the old button left it: three schedules in the old layout.
+        Long policyId = jdbc.queryForObject("select max(policy_id) from ins_policy_document", Long.class);
+        jdbc.update("update ins_policy_document set layout_version = 1 where policy_id = ?", policyId);
+        for (int i = 0; i < 2; i++) {
+            jdbc.update("insert into ins_policy_document (policy_id, document_type, file_name, content_type, size_bytes,"
+                    + " storage_path, uploaded_by, uploaded_at, layout_version) select policy_id, document_type,"
+                    + " file_name, content_type, size_bytes, 'gone/old.pdf', uploaded_by, uploaded_at, 1"
+                    + " from ins_policy_document where policy_id = ? and storage_path <> 'gone/old.pdf'", policyId);
+        }
+        assertThat(documents.policiesWithOldSchedules()).contains(policyId);
+
+        assertThat(documents.replaceOldSchedules(policyId)).isEqualTo(3);
+
+        assertThat(documents.policiesWithOldSchedules()).doesNotContain(policyId);
+        assertThat(documents.replaceOldSchedules(policyId)).isZero();
+        String list = mockMvc.perform(get("/portfolio/policies/" + policy + "/documents").with(httpBasic("admin", "password")))
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].uploadedBy").value("admin"))
+                .andReturn().getResponse().getContentAsString();
+        byte[] pdf = mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + JsonPath.read(list, "$[0].id"))
+                        .with(httpBasic("admin", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsByteArray();
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            assertThat(new PDFTextStripper().getText(doc)).contains("1. Your policy", "Important terms");
+        }
+        // Still one per policy afterwards.
+        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(httpBasic("admin", "password")))
+                .andExpect(status().isConflict());
     }
 
     @Test

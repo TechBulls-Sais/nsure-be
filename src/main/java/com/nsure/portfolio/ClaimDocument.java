@@ -8,7 +8,10 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.LocalDateTime;
 
-/** One evidence file on a claim. The bytes live on disk at {@code storagePath}. Never updated. */
+/**
+ * One file on a claim: uploaded evidence, or the generated claim summary. The bytes live on disk at
+ * {@code storagePath}. Never updated; an old-layout summary is replaced, never edited.
+ */
 @Entity
 @Table(name = "ins_claim_document")
 public class ClaimDocument {
@@ -42,11 +45,16 @@ public class ClaimDocument {
     @Column(name = "uploaded_at", nullable = false)
     private LocalDateTime uploadedAt;
 
+    // The claim summary layout the file was made with (ClaimSummaryPdf.LAYOUT_VERSION); 0 on uploaded evidence.
+    @Column(name = "layout_version", nullable = false)
+    private int layoutVersion;
+
     protected ClaimDocument() {
     }
 
     public ClaimDocument(Long claimId, String documentType, String fileName, String contentType, long sizeBytes,
-            String storagePath, String uploadedBy) {
+            String storagePath, String uploadedBy, int layoutVersion) {
+        this.layoutVersion = layoutVersion;
         this.claimId = claimId;
         this.documentType = documentType;
         this.fileName = fileName;
@@ -91,5 +99,9 @@ public class ClaimDocument {
 
     public LocalDateTime getUploadedAt() {
         return uploadedAt;
+    }
+
+    public int getLayoutVersion() {
+        return layoutVersion;
     }
 }

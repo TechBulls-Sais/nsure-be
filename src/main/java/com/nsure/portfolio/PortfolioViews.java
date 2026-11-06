@@ -148,7 +148,12 @@ public final class PortfolioViews {
             String paidAt,
             // Workflow actions legal from the current state (assess, approve, reject, pay), before permissions.
             List<String> actions,
-            List<DocumentView> documents
+            List<DocumentView> documents,
+            // Why it was approved although Beneficiary Match or No Duplicate failed; empty when none failed.
+            String checkOverrideReason,
+            // Set on an approved or paid claim that went through despite a failed hard check, or with no checks
+            // run ("Paid despite failed checks: Policy Active, ..."); empty otherwise. ClaimWorkflow.auditFlag.
+            String auditFlag
     ) {
     }
 

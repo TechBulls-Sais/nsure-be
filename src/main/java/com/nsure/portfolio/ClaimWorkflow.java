@@ -228,6 +228,7 @@ public class ClaimWorkflow {
     public InsuranceClaim assess(String ref, String note, AppUser actor) {
         InsuranceClaim claim = claim(ref);
         String previous = guard(claim, "assess", actor);
+        requireCover(claim, "recommend");
         if (!hasPayoutDetails(claim)) {
             throw new IllegalArgumentException("This claim has no complete payout details. Add the payee's name, "
                     + "payout method and account / wallet number first.");
@@ -245,13 +246,25 @@ public class ClaimWorkflow {
 
     /**
      * Approves a recommended claim. Four-eyes: the assessor may not approve their own recommendation. The payout
-     * defaults to the full cover; a partial payout must be more than zero and no more than the cover.
+     * defaults to the full cover; a partial payout must be more than zero and no more than the cover. A failed hard
+     * check blocks it; a failed soft check needs {@code overrideReason}, which is kept with the claim.
      */
     @Transactional
-    public InsuranceClaim approve(String ref, Integer requestedPayout, AppUser actor) {
+    public InsuranceClaim approve(String ref, Integer requestedPayout, String overrideReason, AppUser actor) {
         InsuranceClaim claim = claim(ref);
         String previous = guard(claim, "approve", actor);
-        // Super Admin / Super user may approve their own assessment; the history records it as an override.
+        requireCover(claim, "approve");
+        List<String> softFailed = failedSoftChecks(claim);
+        String reason = trim(overrideReason);
+        if (!softFailed.isEmpty() && reason.isEmpty()) {
+            throw new IllegalArgumentException(String.join(" and ", softFailed) + " failed on " + ref
+                    + ". Enter a reason for approving it anyway; the reason is kept with the claim.");
+        }
+        if (reason.length() > 500) {
+            throw new IllegalArgumentException("Keep the reason to 500 characters.");
+        }
+        claim.setCheckOverrideReason(softFailed.isEmpty() ? null : reason);
+        // Super Admin may approve their own assessment; the history records it as an override.
         boolean fourEyesOverride = actor.isSuperAdmin() && actor.getId().equals(claim.getRecommendedById());
         claim.setFourEyesApplied(fourEyesOverride
                 ? Boolean.FALSE
@@ -276,7 +289,8 @@ public class ClaimWorkflow {
         claim.setStatus(APPROVED);
         claim.resolve(actor.getUsername());
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Approved", previous, APPROVED,
-                "Payout: BWP " + payout + (fourEyesOverride
+                "Payout: BWP " + payout + (softFailed.isEmpty() ? ""
+                        : " · approved despite " + String.join(", ", softFailed) + ": " + reason) + (fourEyesOverride
                         ? " · four-eyes overridden: super admin approved their own assessment"
                         : Boolean.TRUE.equals(claim.getFourEyesApplied())
                                 ? " · four-eyes: assessed by " + claim.getRecommendedBy() : " · four-eyes control off"),
@@ -366,26 +380,33 @@ public class ClaimWorkflow {
         // 2. Waiting Period: the event is at least the product's waiting period after cover started.
         boolean waited = start != null
                 && ChronoUnit.DAYS.between(start, event) >= policies.product(policy).getWaitingPeriodDays();
-        // 3. Premiums Paid: paid up to the event, or the event fell within the grace period.
-        boolean paid = (policy.getNextPremiumDue() != null && !policy.getNextPremiumDue().isBefore(event))
-                || (policy.getGracePeriodEnd() != null && !policy.getGracePeriodEnd().isBefore(event));
+        // 3. Premiums Paid: the event is on or after the cover start (premiums paid before then bought no cover
+        //    for it), and the policy was paid up to it or the event fell within the grace period.
+        boolean paid = start != null && !event.isBefore(start)
+                && ((policy.getNextPremiumDue() != null && !policy.getNextPremiumDue().isBefore(event))
+                        || (policy.getGracePeriodEnd() != null && !policy.getGracePeriodEnd().isBefore(event)));
         // 4. Beneficiary Match: the claimant is a beneficiary registered on the policy.
         String claimant = normalise(claim.getClaimantName());
         boolean beneficiary = policies.beneficiaries(policy).stream()
                 .anyMatch(row -> normalise(row.getFullName()).equals(claimant));
-        // 5. No Duplicate: no other approved or paid claim on this policy.
+        // 5. No Duplicate: no earlier claim, not rejected, on this policy for the same event (same date and claim
+        //    type). Two hospital stays on one policy are two events, so both pass; a later duplicate never makes
+        //    the earlier claim fail.
         boolean unique = em.createQuery(
-                        "select count(c) from InsuranceClaim c where c.policyRef = :policy and c.status in :states"
-                                + " and c.ref <> :ref", Long.class)
+                        "select count(c) from InsuranceClaim c where c.policyRef = :policy and c.status <> :rejected"
+                                + " and c.eventDate = :event and c.claimType = :type and c.id < :id", Long.class)
                 .setParameter("policy", policy.getRef())
-                .setParameter("states", List.of(APPROVED, PAID))
-                .setParameter("ref", claim.getRef())
+                .setParameter("rejected", REJECTED)
+                .setParameter("event", claim.getEventDate())
+                .setParameter("type", claim.getClaimType())
+                .setParameter("id", claim.getId())
                 .getSingleResult() == 0;
         claim.setCheckPolicyActive(result(active));
         claim.setCheckWaitingPeriod(result(waited));
         claim.setCheckPremiumsPaid(result(paid));
         claim.setCheckBeneficiaryMatch(result(beneficiary));
         claim.setCheckNoDuplicate(result(unique));
+        claim.setCheckRulesVersion(CHECK_RULES_VERSION);
         return active && waited && paid && beneficiary && unique;
     }
 
@@ -405,14 +426,124 @@ public class ClaimWorkflow {
         return null;
     }
 
+    /** Checks that decide whether there was valid cover for the event. A failure cannot be overridden. */
+    static final List<String> HARD_CHECKS = List.of("Policy Active", "Waiting Period", "Premiums Paid");
+    /** Checks with real exceptions; a claim may be approved despite a failure, with a recorded reason. */
+    static final List<String> SOFT_CHECKS = List.of("Beneficiary Match", "No Duplicate");
+
+    /** The hard checks that stop this claim being recommended or approved: failed, or never run. */
+    static List<String> blockingChecks(InsuranceClaim claim) {
+        Map<String, String> results = results(claim);
+        return HARD_CHECKS.stream().filter(name -> !PASS.equals(results.get(name))).toList();
+    }
+
+    /** The soft checks that failed, so approving needs a reason. */
+    static List<String> failedSoftChecks(InsuranceClaim claim) {
+        Map<String, String> results = results(claim);
+        return SOFT_CHECKS.stream().filter(name -> FAIL.equals(results.get(name))).toList();
+    }
+
+    /**
+     * Why an approved or paid claim needs an audit: it went through although a hard check failed, or with no
+     * checks run at all. Null otherwise (a soft-check override with its reason is the rule working, not a flag).
+     */
+    static String auditFlag(InsuranceClaim claim) {
+        if (!APPROVED.equals(claim.getStatus()) && !PAID.equals(claim.getStatus())) {
+            return null;
+        }
+        Map<String, String> results = results(claim);
+        String done = PAID.equals(claim.getStatus()) ? "Paid" : "Approved";
+        if (results.values().stream().allMatch(r -> NOT_RUN.equals(r) || "Pending".equals(r))) {
+            return done + " without checks";
+        }
+        List<String> failed = HARD_CHECKS.stream().filter(name -> FAIL.equals(results.get(name))).toList();
+        return failed.isEmpty() ? null : done + " despite failed checks: " + String.join(", ", failed);
+    }
+
+    /** Refuses to move a claim towards payout while a hard check has failed or not run. */
+    private static void requireCover(InsuranceClaim claim, String action) {
+        List<String> blocking = blockingChecks(claim);
+        if (blocking.isEmpty()) {
+            return;
+        }
+        Map<String, String> results = results(claim);
+        if (blocking.stream().allMatch(name -> "Pending".equals(results.get(name)))) {
+            throw new IllegalArgumentException("Cannot " + action + " " + claim.getRef() + ": its checks have not "
+                    + "run. Re-run the checks first.");
+        }
+        throw new IllegalArgumentException("Cannot " + action + " " + claim.getRef() + ": " + String.join(", ", blocking)
+                + " failed, so there was no valid cover for this event and the "
+                + "claim can only be rejected. If the policy or claim details were wrong, correct them and re-run the checks.");
+    }
+
+    /**
+     * The check rules in force; bump it when a check changes so stored results are re-run once (ClaimCheckRefresh).
+     * 2: Premiums Paid fails an event before cover started; No Duplicate means an earlier claim for the same event.
+     */
+    static final int CHECK_RULES_VERSION = 2;
+
+    /** A check with no result on a decided claim: it never ran, and now never will. */
+    static final String NOT_RUN = "Not run";
+
+    /**
+     * Each check's result. One that has not run is "Pending" while the claim is open, and "Not run" once it is
+     * decided (claims recorded before the checks existed, with no event date to check against).
+     */
     static Map<String, String> results(InsuranceClaim claim) {
+        String none = claim.getStatus() == null || OPEN_STATES.contains(claim.getStatus()) ? "Pending" : NOT_RUN;
         Map<String, String> results = new LinkedHashMap<>();
-        results.put("Policy Active", orPending(claim.getCheckPolicyActive()));
-        results.put("Waiting Period", orPending(claim.getCheckWaitingPeriod()));
-        results.put("Premiums Paid", orPending(claim.getCheckPremiumsPaid()));
-        results.put("Beneficiary Match", orPending(claim.getCheckBeneficiaryMatch()));
-        results.put("No Duplicate", orPending(claim.getCheckNoDuplicate()));
+        results.put("Policy Active", orElse(claim.getCheckPolicyActive(), none));
+        results.put("Waiting Period", orElse(claim.getCheckWaitingPeriod(), none));
+        results.put("Premiums Paid", orElse(claim.getCheckPremiumsPaid(), none));
+        results.put("Beneficiary Match", orElse(claim.getCheckBeneficiaryMatch(), none));
+        results.put("No Duplicate", orElse(claim.getCheckNoDuplicate(), none));
         return results;
+    }
+
+    /**
+     * Re-runs the checks on a claim whose stored results came from older check rules, in any state, and records
+     * what changed. Never moves the claim: a decided claim keeps its decision, and an audit flag shows if the
+     * corrected results say it should not have gone through. Returns the changes, or nothing if there was nothing
+     * to re-run (no event date or no policy).
+     */
+    @Transactional
+    public List<String> refreshChecks(Long claimId) {
+        InsuranceClaim claim = em.find(InsuranceClaim.class, claimId);
+        if (claim == null || claim.getCheckRulesVersion() >= CHECK_RULES_VERSION
+                || trim(claim.getEventDate()).isEmpty() || trim(claim.getPolicyRef()).isEmpty()) {
+            return List.of();
+        }
+        InsurancePolicy policy = em.createQuery("select p from InsurancePolicy p where p.ref = :ref", InsurancePolicy.class)
+                .setParameter("ref", claim.getPolicyRef())
+                .getResultStream()
+                .findFirst()
+                .orElse(null);
+        if (policy == null) {
+            return List.of();
+        }
+        Map<String, String> before = results(claim);
+        runChecks(claim, policy);
+        Map<String, String> after = results(claim);
+        List<String> changed = new ArrayList<>();
+        after.forEach((name, result) -> {
+            if (!result.equals(before.get(name))) {
+                changed.add(name + ": " + before.get(name) + " → " + result);
+            }
+        });
+        history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Checks Re-run",
+                claim.getStatus(), claim.getStatus(), "Check rules updated · "
+                        + (changed.isEmpty() ? "no change" : String.join("; ", changed)), WorkflowHistory.SYSTEM);
+        return changed;
+    }
+
+    /** Claims whose stored check results came from older rules and can be re-run, for ClaimCheckRefresh. */
+    @Transactional(readOnly = true)
+    public List<Long> claimsWithOldCheckResults() {
+        return em.createQuery("select c.id from InsuranceClaim c where c.checkRulesVersion < :version"
+                        + " and c.eventDate is not null and c.eventDate <> '' and c.policyRef is not null"
+                        + " and c.policyRef <> '' order by c.id", Long.class)
+                .setParameter("version", CHECK_RULES_VERSION)
+                .getResultList();
     }
 
     private static List<String> failedChecks(InsuranceClaim claim) {
@@ -482,8 +613,8 @@ public class ClaimWorkflow {
         return passed ? PASS : FAIL;
     }
 
-    private static String orPending(String value) {
-        return value == null ? "Pending" : value;
+    private static String orElse(String value, String none) {
+        return value == null ? none : value;
     }
 
     private static String normalise(String text) {

@@ -108,8 +108,8 @@ public class CommunicationService {
     }
 
     /**
-     * Checker step: another user approves, and the previously approved version of the code is retired. Super user and
-     * Super admin may approve a version they drafted.
+     * Checker step: another user approves, and the previously approved version of the code is retired. Super Admin
+     * may approve a version they drafted.
      */
     @Transactional
     public CommunicationViews.TemplateView approveTemplate(Long id) {

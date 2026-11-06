@@ -341,7 +341,7 @@ public class PolicyWorkflow {
     }
 
     /** Months one premium pays for, from the tier's premium frequency; monthly when the policy has no tier. */
-    private int months(InsurancePolicy policy) {
+    int months(InsurancePolicy policy) {
         String frequency = policy.getTier() == null ? null : em.createQuery(
                         "select t.premiumFrequency from CoverTier t where t.product.name = :product and t.name = :tier",
                         String.class)

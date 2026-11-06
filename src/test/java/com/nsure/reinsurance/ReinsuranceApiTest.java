@@ -127,7 +127,7 @@ class ReinsuranceApiTest {
                 .andReturn().getResponse().getContentAsString();
         String surplus = JsonPath.read(body, "$.ref");
 
-        // Four eyes: the drafter cannot approve. Super user and Super admin can approve a treaty they drafted.
+        // Four eyes: the drafter cannot approve. Super Admin can approve a treaty they drafted.
         mockMvc.perform(post("/reinsurance/treaties/" + surplus + "/approve").with(httpBasic("reinsurance", "password")))
                 .andExpect(status().isForbidden());
         String own = JsonPath.read(mockMvc.perform(json(post("/reinsurance/treaties"), "admin", treaty(

@@ -107,6 +107,14 @@ public class InsuranceClaim extends CoverRecord {
     @Column(name = "rejection_reason", length = 500)
     private String rejectionReason;
 
+    // Why it was approved although a soft check failed (ClaimWorkflow.SOFT_CHECKS); null when none failed.
+    @Column(name = "check_override_reason", length = 500)
+    private String checkOverrideReason;
+
+    // The check rules the stored results came from (ClaimWorkflow.CHECK_RULES_VERSION); 1 is the old, buggy rules.
+    @Column(name = "check_rules_version", nullable = false)
+    private int checkRulesVersion = 1;
+
     @Column(name = "payout_amount")
     private Integer payoutAmount;
 
@@ -346,6 +354,22 @@ public class InsuranceClaim extends CoverRecord {
 
     public void setRejectionReason(String rejectionReason) {
         this.rejectionReason = rejectionReason;
+    }
+
+    public int getCheckRulesVersion() {
+        return checkRulesVersion;
+    }
+
+    public void setCheckRulesVersion(int checkRulesVersion) {
+        this.checkRulesVersion = checkRulesVersion;
+    }
+
+    public String getCheckOverrideReason() {
+        return checkOverrideReason;
+    }
+
+    public void setCheckOverrideReason(String checkOverrideReason) {
+        this.checkOverrideReason = checkOverrideReason;
     }
 
     public Integer getPayoutAmount() {

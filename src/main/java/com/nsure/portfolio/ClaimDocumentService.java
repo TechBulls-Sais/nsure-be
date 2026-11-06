@@ -1,10 +1,12 @@
 package com.nsure.portfolio;
 
+import com.nsure.common.exception.ConflictException;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.service.PlatformSecurityContext;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.LocalDateTime;
@@ -15,6 +17,8 @@ import java.util.Set;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
@@ -86,8 +90,9 @@ public class ClaimDocumentService {
     }
 
     /**
-     * Builds a claim summary PDF from the claim as it stands now and files it with the claim's documents. Each
-     * call adds a new dated snapshot, so it also works on Paid and Rejected claims.
+     * Issues the claim's one summary: the record of the claim as decided. Only once the claim is closed (Paid or
+     * Rejected), since before that its outcome is not final, and only once; the row lock means a double click, or
+     * two users at once, issue only one. Any summaries in an older layout are replaced by it.
      */
     @Transactional
     public List<PortfolioViews.DocumentView> generateSummary(String ref) {
@@ -96,11 +101,87 @@ public class ClaimDocumentService {
             throw new NoAuthorizationException("User has no authority to generate claim documents");
         }
         InsuranceClaim claim = claims.claim(ref);
-        byte[] pdf = ClaimSummaryPdf.render(claim, ClaimWorkflow.results(claim), views(em, claim.getId()),
-                history.of(WorkflowHistory.CLAIM, ref), staff.getUsername());
-        String fileName = claim.getRef() + "-summary-" + LocalDateTime.now().format(FILE_STAMP) + ".pdf";
-        save(claim, pdf, fileName, "pdf", "application/pdf", SUMMARY_TYPE, staff.getUsername(), "Summary Generated");
+        em.lock(claim, LockModeType.PESSIMISTIC_WRITE);
+        if (!CLOSED.contains(claim.getStatus())) {
+            throw new ConflictException("Claim " + ref + " is " + claim.getStatus()
+                    + ". Its summary is issued once the claim is paid or rejected.");
+        }
+        List<ClaimDocument> summaries = summaries(claim.getId());
+        if (summaries.stream().anyMatch(d -> d.getLayoutVersion() >= ClaimSummaryPdf.LAYOUT_VERSION)) {
+            throw new ConflictException("Claim " + ref + " already has its claim summary. "
+                    + "A summary is issued once per claim.");
+        }
+        replace(claim, summaries, staff.getUsername());
         return views(em, claim.getId());
+    }
+
+    /** Ids of the closed claims holding a summary made in an older layout, for {@link DocumentLayoutUpgrade}. */
+    @Transactional(readOnly = true)
+    public List<Long> closedClaimsWithOldSummaries() {
+        return em.createQuery("select distinct d.claimId from ClaimDocument d, InsuranceClaim c "
+                        + "where c.id = d.claimId and c.status in :closed and d.documentType = :type "
+                        + "and d.layoutVersion < :layout order by d.claimId", Long.class)
+                .setParameter("closed", CLOSED)
+                .setParameter("type", SUMMARY_TYPE)
+                .setParameter("layout", ClaimSummaryPdf.LAYOUT_VERSION)
+                .getResultList();
+    }
+
+    /**
+     * Replaces the old-layout summaries on a closed claim with one in the current layout, credited to whoever
+     * issued the first. Does nothing if the claim has reopened or another instance got there first.
+     */
+    @Transactional
+    public int replaceOldSummaries(Long claimId) {
+        InsuranceClaim claim = em.find(InsuranceClaim.class, claimId, LockModeType.PESSIMISTIC_WRITE);
+        if (claim == null || !CLOSED.contains(claim.getStatus())) {
+            return 0;
+        }
+        List<ClaimDocument> summaries = summaries(claimId);
+        if (summaries.isEmpty()
+                || summaries.stream().anyMatch(d -> d.getLayoutVersion() >= ClaimSummaryPdf.LAYOUT_VERSION)) {
+            return 0;
+        }
+        replace(claim, summaries, summaries.get(0).getUploadedBy());
+        return summaries.size();
+    }
+
+    private List<ClaimDocument> summaries(Long claimId) {
+        return em.createQuery("select d from ClaimDocument d where d.claimId = :claim and d.documentType = :type "
+                        + "order by d.id", ClaimDocument.class)
+                .setParameter("claim", claimId)
+                .setParameter("type", SUMMARY_TYPE)
+                .getResultList();
+    }
+
+    /** Removes the given old summaries (their files once this commits) and files one new summary. */
+    private void replace(InsuranceClaim claim, List<ClaimDocument> old, String issuedBy) {
+        List<String> oldFiles = old.stream().map(ClaimDocument::getStoragePath).toList();
+        old.forEach(em::remove);
+        em.flush();
+        List<PortfolioViews.DocumentView> evidence = views(em, claim.getId());
+        List<PortfolioViews.HistoryView> timeline = history.of(WorkflowHistory.CLAIM, claim.getRef()).stream()
+                .filter(h -> !"Summary Generated".equals(h.action()))
+                .toList();
+        InsurancePolicy policy = em.createQuery("select p from InsurancePolicy p where p.ref = :ref",
+                        InsurancePolicy.class)
+                .setParameter("ref", claim.getPolicyRef())
+                .getResultStream()
+                .findFirst()
+                .orElse(null);
+        byte[] pdf = ClaimSummaryPdf.render(claim, policy, ClaimWorkflow.results(claim), evidence, timeline, issuedBy);
+        String fileName = claim.getRef() + "-summary-" + LocalDateTime.now().format(FILE_STAMP) + ".pdf";
+        save(claim, pdf, fileName, "pdf", "application/pdf", SUMMARY_TYPE, issuedBy, "Summary Generated",
+                ClaimSummaryPdf.LAYOUT_VERSION, old.isEmpty() ? null
+                        : "replaces " + old.size() + (old.size() == 1 ? " summary" : " summaries") + " in the old layout");
+        if (!oldFiles.isEmpty()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    oldFiles.forEach(files::deleteQuietly);
+                }
+            });
+        }
     }
 
     // ── customer portal ──────────────────────────────────────────────────────────────────────────────
@@ -164,23 +245,24 @@ public class ClaimDocumentService {
             throw new IllegalArgumentException("Only PDF, JPG and PNG files can be uploaded.");
         }
         save(claim, bytes, fileName, extension.equals("jpeg") ? "jpg" : extension, contentType, documentType,
-                uploadedBy, "Document Added");
+                uploadedBy, "Document Added", 0, null);
     }
 
     /** Writes the bytes to disk, then the row and a history entry; the file is removed again if the row fails. */
     private void save(InsuranceClaim claim, byte[] bytes, String fileName, String extension, String contentType,
-            String documentType, String uploadedBy, String historyAction) {
+            String documentType, String uploadedBy, String historyAction, int layoutVersion, String note) {
         String storagePath = files.write(claim.getRef(), extension, bytes);
         try {
             em.persist(new ClaimDocument(claim.getId(), documentType, fileName, contentType, bytes.length,
-                    storagePath, uploadedBy));
+                    storagePath, uploadedBy, layoutVersion));
             em.flush();
         } catch (RuntimeException e) {
             files.deleteQuietly(storagePath);
             throw e;
         }
         history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), historyAction,
-                claim.getStatus(), claim.getStatus(), documentType + ": " + fileName, uploadedBy);
+                claim.getStatus(), claim.getStatus(),
+                documentType + ": " + fileName + (note == null ? "" : " · " + note), uploadedBy);
     }
 
     private StoredFile open(InsuranceClaim claim, Long id) {

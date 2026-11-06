@@ -244,7 +244,7 @@ class RbacAndAuditIntegrationTest {
         send("admin", delete("/roles/" + roleId), 200);
         long superRoleId = 0;
         for (JsonNode role : send("admin", get("/roles"), 200)) {
-            if ("Super user".equals(role.get("name").asText())) {
+            if ("Super Admin".equals(role.get("name").asText())) {
                 superRoleId = role.get("id").asLong();
             }
         }

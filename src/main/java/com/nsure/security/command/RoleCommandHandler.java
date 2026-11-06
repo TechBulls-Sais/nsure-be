@@ -82,11 +82,11 @@ public class RoleCommandHandler implements CommandHandler {
         Role role = roles.findById(request.resourceId())
                 .orElseThrow(() -> new NotFoundException("Role not found"));
         RoleBody body = read(request.json(), RoleBody.class);
-        boolean superUser = "Super user".equalsIgnoreCase(role.getName());
+        boolean superUser = AppUser.SUPER_ADMIN_ROLE.equalsIgnoreCase(role.getName());
         if (body.name() != null) {
             String name = requiredText(body.name(), "Role name", 100);
-            if (superUser && !"Super user".equalsIgnoreCase(name)) {
-                throw new IllegalArgumentException("The Super user role cannot be renamed");
+            if (superUser && !AppUser.SUPER_ADMIN_ROLE.equalsIgnoreCase(name)) {
+                throw new IllegalArgumentException("The Super Admin role cannot be renamed");
             }
             role.setName(name);
         }
@@ -95,7 +95,7 @@ public class RoleCommandHandler implements CommandHandler {
         }
         if (body.disabled() != null) {
             if (superUser && body.disabled()) {
-                throw new IllegalArgumentException("The Super user role cannot be disabled");
+                throw new IllegalArgumentException("The Super Admin role cannot be disabled");
             }
             role.setDisabled(body.disabled());
         }
@@ -106,8 +106,8 @@ public class RoleCommandHandler implements CommandHandler {
     private CommandResult delete(CommandRequest request) {
         Role role = roles.findById(request.resourceId())
                 .orElseThrow(() -> new NotFoundException("Role not found"));
-        if ("Super user".equalsIgnoreCase(role.getName())) {
-            throw new IllegalArgumentException("The Super user role cannot be deleted");
+        if (AppUser.SUPER_ADMIN_ROLE.equalsIgnoreCase(role.getName())) {
+            throw new IllegalArgumentException("The Super Admin role cannot be deleted");
         }
         for (AppUser user : users.findAll()) {
             if (user.getRoles() != null) {
@@ -129,13 +129,13 @@ public class RoleCommandHandler implements CommandHandler {
             throw new IllegalArgumentException("permissions is required");
         }
         AppUser caller = security.authenticatedUser();
-        boolean superUser = "Super user".equalsIgnoreCase(role.getName());
+        boolean superUser = AppUser.SUPER_ADMIN_ROLE.equalsIgnoreCase(role.getName());
         for (Map.Entry<String, Boolean> entry : body.permissions().entrySet()) {
             Permission permission = permissions.findByCodeIgnoreCase(entry.getKey())
                     .orElseThrow(() -> new IllegalArgumentException("Unknown permission " + entry.getKey()));
             boolean selected = Boolean.TRUE.equals(entry.getValue());
             if (superUser && permission.hasCode("ALL_FUNCTIONS") && !selected) {
-                throw new IllegalArgumentException("The Super user role must keep ALL_FUNCTIONS");
+                throw new IllegalArgumentException("The Super Admin role must keep ALL_FUNCTIONS");
             }
             if (selected && !caller.hasPermissionTo(permission.getCode())) {
                 throw new NoAuthorizationException("User has no authority to grant " + permission.getCode());

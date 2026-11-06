@@ -35,6 +35,9 @@ class ClaimWorkflowApiTest {
     @Autowired
     private TransactionTemplate tx;
 
+    @Autowired
+    private ClaimWorkflow claims;
+
     @Test
     void aClaimThatPassesEveryCheckUnderTheCeilingIsApprovedStraightThrough() throws Exception {
         customer("Boitumelo Kgosi", "boitumelo");
@@ -197,6 +200,136 @@ class ClaimWorkflowApiTest {
         mockMvc.perform(get("/portfolio/history/claim/" + claim).with(httpBasic("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Approved')].details").value(org.hamcrest.Matchers.hasItem(
                         org.hamcrest.Matchers.containsString("four-eyes overridden"))));
+    }
+
+    @Test
+    void anEventBeforeCoverStartedFailsTheHardChecksAndCanOnlyBeRejected() throws Exception {
+        customer("Kitso Molapo", "kitso");
+        String policy = activePolicy("Kitso Molapo", 50000, 0);
+        beneficiary(policy, "Dineo Molapo");
+        // Cover started today; the event was 3 days ago.
+        String body = mockMvc.perform(json(post("/portfolio/claims"), "assessor", lodgement(policy, "Dineo Molapo", 3)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Under Review"))
+                .andExpect(jsonPath("$.checks[?(@.name == 'Policy Active')].result").value(org.hamcrest.Matchers.hasItem("Fail")))
+                // Premiums paid before cover started bought no cover for an earlier event.
+                .andExpect(jsonPath("$.checks[?(@.name == 'Premiums Paid')].result").value(org.hamcrest.Matchers.hasItem("Fail")))
+                .andReturn().getResponse().getContentAsString();
+        String claim = JsonPath.read(body, "$.id");
+
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(httpBasic("admin", "password")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString(
+                        "Policy Active, Waiting Period, Premiums Paid failed, so there was no valid cover")));
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reject"), "assessor", "{\"reason\":\"Event before cover\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.auditFlag").value(""));
+    }
+
+    @Test
+    void aFailedSoftCheckIsApprovedOnlyWithAReasonThatIsKept() throws Exception {
+        customer("Gaone Tau", "gaone");
+        String policy = activePolicy("Gaone Tau", 50000, 60);
+        beneficiary(policy, "Masego Tau");
+        // The claimant is not a named beneficiary: Beneficiary Match fails, the payee is the beneficiary.
+        String claim = staffLodge(policy, "Uncle Tau");
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(httpBasic("assessor", "password")))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/approve").with(httpBasic("admin", "password")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString(
+                        "Beneficiary Match failed")));
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
+                        "{\"overrideReason\":\"Paid to the named beneficiary, verified against the ID\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Approved"))
+                .andExpect(jsonPath("$.checkOverrideReason").value("Paid to the named beneficiary, verified against the ID"))
+                // Following the rule is not an audit case.
+                .andExpect(jsonPath("$.auditFlag").value(""));
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(httpBasic("admin", "password")))
+                .andExpect(jsonPath("$[?(@.action == 'Approved')].details").value(org.hamcrest.Matchers.hasItem(
+                        org.hamcrest.Matchers.containsString("approved despite Beneficiary Match"))));
+    }
+
+    @Test
+    void aDuplicateIsAnEarlierClaimForTheSameEventNotAnyClaimOnThePolicy() throws Exception {
+        customer("Refentse Bole", "refentse");
+        String policy = activePolicy("Refentse Bole", 50000, 60);
+        beneficiary(policy, "Kagiso Bole");
+        String first = staffLodge(policy, "Kagiso Bole");
+        // A different event on the same policy is not a duplicate...
+        String other = JsonPath.read(mockMvc.perform(json(post("/portfolio/claims"), "assessor",
+                        lodgement(policy, "Kagiso Bole", 5))).andReturn().getResponse().getContentAsString(), "$.id");
+        // ...the same event again is.
+        String again = staffLodge(policy, "Kagiso Bole");
+        for (String[] expected : new String[][] {{first, "Pass"}, {other, "Pass"}, {again, "Fail"}}) {
+            mockMvc.perform(get("/portfolio/claims").with(httpBasic("admin", "password")))
+                    .andExpect(jsonPath("$[?(@.id == '" + expected[0] + "')].checks[?(@.name == 'No Duplicate')].result")
+                            .value(org.hamcrest.Matchers.hasItem(expected[1])));
+        }
+    }
+
+    @Test
+    void aClaimPaidDespiteAFailedHardCheckIsFlaggedForAudit() throws Exception {
+        customer("Lerato Phiri", "leratop");
+        String policy = activePolicy("Lerato Phiri", 50000, 60);
+        beneficiary(policy, "Tebogo Phiri");
+        String claim = staffLodge(policy, "Tebogo Phiri");
+        // As claims were paid before the rule: recorded as Paid with Policy Active failed.
+        tx.executeWithoutResult(s -> em.createQuery("update InsuranceClaim c set c.status = 'Paid',"
+                        + " c.checkPolicyActive = 'Fail' where c.ref = :ref")
+                .setParameter("ref", claim)
+                .executeUpdate());
+        mockMvc.perform(get("/portfolio/claims").with(httpBasic("admin", "password")))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].auditFlag").value(org.hamcrest.Matchers.hasItem(
+                        "Paid despite failed checks: Policy Active")));
+    }
+
+    @Test
+    void resultsFromTheOldRulesAreReRunOnceWithoutMovingTheClaim() throws Exception {
+        customer("Ditiro Kebonye", "ditiro");
+        String policy = activePolicy("Ditiro Kebonye", 50000, 0);
+        beneficiary(policy, "Neo Kebonye");
+        String claim = JsonPath.read(mockMvc.perform(json(post("/portfolio/claims"), "assessor",
+                lodgement(policy, "Neo Kebonye", 3))).andReturn().getResponse().getContentAsString(), "$.id");
+        // As the old rules left it: paid, with Premiums Paid passed for an event before cover started.
+        tx.executeWithoutResult(s -> em.createQuery("update InsuranceClaim c set c.status = 'Paid',"
+                        + " c.checkPremiumsPaid = 'Pass', c.checkRulesVersion = 1 where c.ref = :ref")
+                .setParameter("ref", claim)
+                .executeUpdate());
+        Long id = tx.execute(s -> em.createQuery("select c.id from InsuranceClaim c where c.ref = :ref", Long.class)
+                .setParameter("ref", claim).getSingleResult());
+        org.assertj.core.api.Assertions.assertThat(claims.claimsWithOldCheckResults()).contains(id);
+
+        org.assertj.core.api.Assertions.assertThat(claims.refreshChecks(id)).containsExactly("Premiums Paid: Pass → Fail");
+        org.assertj.core.api.Assertions.assertThat(claims.refreshChecks(id)).isEmpty();
+
+        mockMvc.perform(get("/portfolio/claims").with(httpBasic("admin", "password")))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].status").value(org.hamcrest.Matchers.hasItem("Paid")))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].auditFlag").value(org.hamcrest.Matchers.hasItem(
+                        "Paid despite failed checks: Policy Active, Waiting Period, Premiums Paid")));
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(httpBasic("admin", "password")))
+                .andExpect(jsonPath("$[?(@.action == 'Checks Re-run')].details").value(org.hamcrest.Matchers.hasItem(
+                        "Check rules updated · Premiums Paid: Pass → Fail")));
+    }
+
+    @Test
+    void aDecidedClaimWithNoChecksShowsNotRun() throws Exception {
+        customer("Oratile Sello", "oratile");
+        String policy = activePolicy("Oratile Sello", 50000, 60);
+        beneficiary(policy, "Kabo Sello");
+        String claim = staffLodge(policy, "Kabo Sello");
+        tx.executeWithoutResult(s -> em.createQuery("update InsuranceClaim c set c.status = 'Paid', c.checkPolicyActive = null,"
+                        + " c.checkWaitingPeriod = null, c.checkPremiumsPaid = null, c.checkBeneficiaryMatch = null,"
+                        + " c.checkNoDuplicate = null where c.ref = :ref")
+                .setParameter("ref", claim)
+                .executeUpdate());
+        mockMvc.perform(get("/portfolio/claims").with(httpBasic("admin", "password")))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].checks[*].result").value(
+                        org.hamcrest.Matchers.everyItem(org.hamcrest.Matchers.is("Not run"))))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].auditFlag").value(org.hamcrest.Matchers.hasItem(
+                        "Paid without checks")));
     }
 
     private void customer(String name, String username) throws Exception {

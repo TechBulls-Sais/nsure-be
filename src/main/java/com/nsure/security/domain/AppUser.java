@@ -28,6 +28,9 @@ import org.springframework.security.core.userdetails.UserDetails;
 @Table(name = "app_user")
 public class AppUser extends AuditableEntity implements UserDetails {
 
+    /** The one top role (043-single-super-admin-role): every permission, and it cannot be renamed or removed. */
+    public static final String SUPER_ADMIN_ROLE = "Super Admin";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -121,7 +124,7 @@ public class AppUser extends AuditableEntity implements UserDetails {
     }
 
     public boolean hasPermissionTo(String permissionCode) {
-        // Super Admin and Super user may perform every function, even if their role lost ALL_FUNCTIONS.
+        // Super Admin may perform every function, even if its role lost ALL_FUNCTIONS.
         if (isSuperAdmin() || hasAllFunctions()) {
             return true;
         }
@@ -251,9 +254,7 @@ public class AppUser extends AuditableEntity implements UserDetails {
             return false;
         }
         for (Role role : roles) {
-            if (!role.isDisabled()
-                    && ("Super user".equalsIgnoreCase(role.getName())
-                            || "Super Admin".equalsIgnoreCase(role.getName()))) {
+            if (!role.isDisabled() && SUPER_ADMIN_ROLE.equalsIgnoreCase(role.getName())) {
                 return true;
             }
         }

@@ -19,7 +19,7 @@ import org.springframework.http.HttpMethod;
  * change who may call what.
  *
  * <ul>
- *   <li>Super Admin and Super user pass every rule ({@link ApiAccess}).</li>
+ *   <li>Super Admin passes every rule ({@link ApiAccess}).</li>
  *   <li>Every other user needs a permission code their roles hold. Default holders today: Claims Assessor holds
  *       the claim codes, Onboarding Specialist the customer review codes, Product Configurator and Actuary the
  *       product and rate table codes. Grant a code to any role in Access admin and that role gets the endpoint.</li>
@@ -210,7 +210,7 @@ public final class ApiAccessRules {
             // ── organisation ───────────────────────────────────────────────────────────────────────────
             rule(GET, "/offices", anyOf("READ_OFFICE")),
 
-            // ── access administration: Super Admin / Super user only ───────────────────────────────────
+            // ── access administration: Super Admin only ───────────────────────────────────────────────
             rule(GET, "/users", superAdmin()),
             rule(GET, "/users/*", superAdmin()),
             rule(POST, "/users", superAdmin()),

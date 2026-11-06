@@ -37,7 +37,6 @@ final class PdfReport {
     private final String footer;
     private PDPageContentStream page;
     private float y;
-    private int pages;
 
     /** Starts page one with the title block. */
     PdfReport(String documentTitle, String heading, String subtitle) {
@@ -64,8 +63,8 @@ final class PdfReport {
 
     void section(String title) {
         try {
-            need(40);
-            y -= 18;
+            need(46);
+            y -= 24;
             text(bold, 12, GREEN, MARGIN, title);
             y -= 6;
         } catch (IOException e) {
@@ -95,6 +94,123 @@ final class PdfReport {
         }
     }
 
+    /**
+     * A shaded box of headline facts, three to a row: a small grey label over the value in bold. Facts with an
+     * empty value are left out.
+     */
+    void keyFacts(String[][] facts) {
+        List<String[]> shown = new ArrayList<>();
+        for (String[] fact : facts) {
+            if (fact[1] != null && !fact[1].isBlank()) {
+                shown.add(fact);
+            }
+        }
+        if (shown.isEmpty()) {
+            return;
+        }
+        try {
+            int rows = (shown.size() + 2) / 3;
+            float cell = 36;
+            float height = rows * cell + 8;
+            need(height + 16);
+            y -= 16;
+            page.setNonStrokingColor(0.945f, 0.969f, 0.953f);
+            page.addRect(MARGIN, y - height, WIDTH, height);
+            page.fill();
+            float column = WIDTH / 3;
+            float top = y;
+            for (int i = 0; i < shown.size(); i++) {
+                float x = MARGIN + 12 + (i % 3) * column;
+                y = top - 8 - (i / 3) * cell - 9;
+                text(regular, 8, GREY, x, shown.get(i)[0].toUpperCase(Locale.ENGLISH));
+                y -= 14;
+                text(bold, 11, null, x, fit(shown.get(i)[1], bold, 11, column - 18));
+            }
+            y = top - height;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /**
+     * A table: a header row, then rows whose cells wrap within their column. {@code widths} are fractions of the
+     * page width. With {@code totalRow}, the last row is drawn in bold above a rule, as a total.
+     */
+    void table(String[] headers, float[] widths, List<String[]> rows, boolean totalRow) {
+        try {
+            need(40);
+            y -= 6;
+            tableHeader(headers, widths);
+            for (int r = 0; r < rows.size(); r++) {
+                boolean total = totalRow && r == rows.size() - 1;
+                PDType1Font font = total ? bold : regular;
+                List<List<String>> cells = new ArrayList<>();
+                int lines = 1;
+                for (int c = 0; c < headers.length; c++) {
+                    String value = rows.get(r)[c] == null ? "" : rows.get(r)[c];
+                    List<String> wrapped = wrap(safe(value), font, 9.5f, widths[c] * WIDTH - 8);
+                    cells.add(wrapped);
+                    lines = Math.max(lines, wrapped.size());
+                }
+                float height = lines * 12 + 6;
+                if (y - height < MARGIN + 20) {
+                    newPage();
+                    tableHeader(headers, widths);
+                }
+                if (total) {
+                    rule(y, 0.6f);
+                }
+                float top = y;
+                float x = MARGIN;
+                for (int c = 0; c < headers.length; c++) {
+                    y = top - 12;
+                    for (String line : cells.get(c)) {
+                        text(font, 9.5f, null, x, line);
+                        y -= 12;
+                    }
+                    x += widths[c] * WIDTH;
+                }
+                y = top - height;
+                if (!total && r < rows.size() - 1) {
+                    rule(y + 3, 0.3f);
+                }
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** A full-width paragraph in body type. */
+    void paragraph(String value) {
+        try {
+            y -= 2;
+            for (String line : wrap(safe(value), regular, 10, WIDTH)) {
+                need(13);
+                y -= 13;
+                text(regular, 10, null, MARGIN, line);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** A bulleted line in body type; long text wraps under itself. */
+    void bullet(String value) {
+        try {
+            List<String> lines = wrap(safe(value), regular, 10, WIDTH - 14);
+            need(lines.size() * 13); // a bullet is kept on one page
+            for (int i = 0; i < lines.size(); i++) {
+                y -= 13;
+                if (i == 0) {
+                    text(bold, 10, GREEN, MARGIN + 2, "•");
+                }
+                text(regular, 10, null, MARGIN + 14, lines.get(i));
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
     /** A full-width paragraph in small grey type, such as a note or disclaimer. */
     void note(String value) {
         try {
@@ -111,6 +227,19 @@ final class PdfReport {
     byte[] bytes() {
         try {
             page.close();
+            // Footers go on last, when the page count is known.
+            int total = pdf.getNumberOfPages();
+            for (int i = 0; i < total; i++) {
+                try (PDPageContentStream footerStream = new PDPageContentStream(pdf, pdf.getPage(i),
+                        PDPageContentStream.AppendMode.APPEND, true, true)) {
+                    page = footerStream;
+                    rule(MARGIN + 2, 0.5f);
+                    y = MARGIN - 10;
+                    text(regular, 8, GREY, MARGIN, footer);
+                    String count = "Page " + (i + 1) + " of " + total;
+                    text(regular, 8, GREY, MARGIN + WIDTH - regular.getStringWidth(count) / 1000 * 8, count);
+                }
+            }
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             pdf.save(out);
             pdf.close();
@@ -118,6 +247,31 @@ final class PdfReport {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    /** "5 November 2026" from an ISO date or date-time ("2026-11-05...") or a record date ("05 Nov 2026"). */
+    static String longDate(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String v = value.trim();
+        DateTimeFormatter longForm = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.ENGLISH);
+        try {
+            return java.time.LocalDate.parse(v.length() > 10 ? v.substring(0, 10) : v).format(longForm);
+        } catch (RuntimeException notIso) {
+            try {
+                return java.time.LocalDate.parse(v, DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.ENGLISH))
+                        .format(longForm);
+            } catch (RuntimeException e) {
+                return v;
+            }
+        }
+    }
+
+    /** Identity and account numbers are shown by their last four characters only. */
+    static String last4(String value) {
+        String v = value.trim();
+        return v.length() <= 4 ? v : v.substring(v.length() - 4);
     }
 
     static String money(Number amount) {
@@ -152,10 +306,39 @@ final class PdfReport {
         PDPage next = new PDPage(PDRectangle.A4);
         pdf.addPage(next);
         page = new PDPageContentStream(pdf, next);
-        pages++;
-        y = MARGIN - 10;
-        text(regular, 8, GREY, MARGIN, footer + " · page " + pages);
         y = PDRectangle.A4.getHeight() - MARGIN;
+    }
+
+    private void tableHeader(String[] headers, float[] widths) throws IOException {
+        y -= 12;
+        float x = MARGIN;
+        for (int c = 0; c < headers.length; c++) {
+            text(bold, 8.5f, GREY, x, headers[c].toUpperCase(Locale.ENGLISH));
+            x += widths[c] * WIDTH;
+        }
+        y -= 5;
+        rule(y, 0.8f);
+    }
+
+    /** A thin horizontal line across the page at the given height. */
+    private void rule(float at, float weight) throws IOException {
+        page.setLineWidth(weight);
+        page.setStrokingColor(0.82f, 0.85f, 0.83f);
+        page.moveTo(MARGIN, at);
+        page.lineTo(MARGIN + WIDTH, at);
+        page.stroke();
+    }
+
+    /** The value cut with an ellipsis-like "..." so it fits on one line of the given width. */
+    private String fit(String value, PDType1Font font, float size, float width) throws IOException {
+        String v = safe(value);
+        if (font.getStringWidth(v) / 1000 * size <= width) {
+            return v;
+        }
+        while (v.length() > 1 && font.getStringWidth(v + "...") / 1000 * size > width) {
+            v = v.substring(0, v.length() - 1);
+        }
+        return v.trim() + "...";
     }
 
     private List<String> wrap(String value, PDType1Font font, float size, float width) throws IOException {

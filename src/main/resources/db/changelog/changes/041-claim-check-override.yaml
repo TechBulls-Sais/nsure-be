@@ -1,0 +1,12 @@
+databaseChangeLog:
+  - changeSet:
+      id: 041-claim-check-override
+      author: nsure
+      comment: >-
+        Why a claim was approved although a soft check (Beneficiary Match or No Duplicate) failed. A failed hard
+        check (Policy Active, Waiting Period, Premiums Paid) cannot be overridden: the claim can only be rejected.
+      changes:
+        - addColumn:
+            tableName: ins_claim
+            columns:
+              - column: {name: check_override_reason, type: varchar(500)}

@@ -113,3 +113,18 @@ databaseChangeLog:
   - include:
       file: changes/038-insurer-deployment-and-configuration.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/039-policy-document-layout.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/040-claim-document-layout.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/041-claim-check-override.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/042-claim-check-rules-version.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/043-single-super-admin-role.yaml
+      relativeToChangelogFile: true

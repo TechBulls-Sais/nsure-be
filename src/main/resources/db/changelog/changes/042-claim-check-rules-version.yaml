@@ -1,0 +1,14 @@
+databaseChangeLog:
+  - changeSet:
+      id: 042-claim-check-rules-version
+      author: nsure
+      comment: >-
+        Which version of the claim check rules a claim's stored results came from (ClaimWorkflow.CHECK_RULES_VERSION).
+        Every claim before this change is version 1: Premiums Paid passed an event before cover started, and No
+        Duplicate failed on any earlier approved claim on the policy. On start-up, ClaimCheckRefresh re-runs the checks
+        once on each claim that has an event date and a policy, records what changed in its history, and never moves it.
+      changes:
+        - addColumn:
+            tableName: ins_claim
+            columns:
+              - column: {name: check_rules_version, type: int, defaultValueNumeric: 1, constraints: {nullable: false}}

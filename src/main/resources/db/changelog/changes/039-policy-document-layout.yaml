@@ -1,0 +1,13 @@
+databaseChangeLog:
+  - changeSet:
+      id: 039-policy-document-layout
+      author: nsure
+      comment: >-
+        Which layout of the policy schedule a document was made with. Every schedule on file before this change is
+        layout 1 (the old snapshot with history, several allowed per policy). On start-up, PolicyScheduleUpgrade
+        replaces them with one schedule per policy in the current layout.
+      changes:
+        - addColumn:
+            tableName: ins_policy_document
+            columns:
+              - column: {name: layout_version, type: int, defaultValueNumeric: 1, constraints: {nullable: false}}

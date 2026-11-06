@@ -1,5 +1,6 @@
 package com.nsure.security;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -31,9 +32,9 @@ class ApiAccessIntegrationTest {
     private ObjectMapper json;
 
     @Test
-    void superUserRoleAloneOpensEveryApi() throws Exception {
-        // No capability roles and no other app roles: only the "Super user" role.
-        String username = createUser("super" + suffix(), roleId("Super user"));
+    void superAdminRoleAloneOpensEveryApi() throws Exception {
+        // No capability roles and no other app roles: only the "Super Admin" role.
+        String username = createUser("superadmin" + suffix(), roleId("Super Admin"));
         for (String path : new String[] {
                 "/portfolio/claims", "/portfolio/customers", "/portfolio/policies", "/portfolio/applications",
                 "/portfolio/product-configs", "/admin/rate-tables", "/admin/controls", "/audits",
@@ -43,12 +44,20 @@ class ApiAccessIntegrationTest {
     }
 
     @Test
-    void superAdminRoleAloneOpensEveryApi() throws Exception {
-        String username = createUser("superadmin" + suffix(), roleId("Super Admin"));
-        send(username, get("/admin/rate-tables"), 200);
-        send(username, get("/admin/controls"), 200);
-        send(username, get("/portfolio/claims"), 200);
-        send(username, get("/users"), 200);
+    void thereIsOneTopRoleAndItHoldsEveryPermission() throws Exception {
+        JsonNode roles = json.readTree(mockMvc.perform(get("/roles").with(httpBasic("admin", "password")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        JsonNode permissions = json.readTree(mockMvc.perform(get("/permissions").with(httpBasic("admin", "password")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        JsonNode superAdmin = null;
+        for (JsonNode role : roles) {
+            assertThat(role.get("name").asText()).isNotEqualToIgnoringCase("Super user");
+            if ("Super Admin".equals(role.get("name").asText())) {
+                superAdmin = role;
+            }
+        }
+        assertThat(superAdmin).isNotNull();
+        assertThat(superAdmin.get("permissions").size()).isEqualTo(permissions.size());
     }
 
     @Test

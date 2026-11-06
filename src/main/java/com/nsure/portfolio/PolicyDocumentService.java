@@ -1,10 +1,12 @@
 package com.nsure.portfolio;
 
+import com.nsure.common.exception.ConflictException;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.service.PlatformSecurityContext;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -13,10 +15,14 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
- * Documents filed on a policy. Today that is the generated policy schedule: a PDF snapshot of the policy, kept so
- * each version stays on record. Staff need a policy permission; a customer may only touch their own policies.
+ * Documents filed on a policy. Today that is the policy schedule: the PDF that sets out the policy's cover, premium,
+ * lives and beneficiaries. It is issued once per policy, after the first premium starts cover; a new or renewed
+ * policy has its own number and gets its own schedule. Staff need a policy permission; a customer may only touch
+ * their own policies.
  */
 @Service
 public class PolicyDocumentService {
@@ -113,8 +119,73 @@ public class PolicyDocumentService {
         return policy;
     }
 
-    /** Builds the schedule from the policy as it stands now, files it, and records it in the policy history. */
+    /**
+     * Issues the policy's one schedule, files it, and records it in the policy history. Refused before cover starts
+     * and once a schedule is on file; the row lock means a double click, or two users at once, issue only one.
+     */
     private void schedule(InsurancePolicy policy, String generatedBy) {
+        em.lock(policy, LockModeType.PESSIMISTIC_WRITE);
+        if (policy.getCoverStartDate() == null) {
+            throw new ConflictException("Policy " + policy.getRef() + " is " + policy.getStatus()
+                    + ". Its schedule is issued once the first premium is paid and cover starts.");
+        }
+        Long existing = em.createQuery("select count(d) from PolicyDocument d where d.policyId = :policy "
+                        + "and d.documentType = :type", Long.class)
+                .setParameter("policy", policy.getId())
+                .setParameter("type", SCHEDULE_TYPE)
+                .getSingleResult();
+        if (existing > 0) {
+            throw new ConflictException("Policy " + policy.getRef() + " already has its policy schedule. "
+                    + "A schedule is issued once per policy; a new or renewed policy gets its own.");
+        }
+        issue(policy, generatedBy, null);
+    }
+
+    /** Ids of the policies holding a schedule made in an older layout, for {@link DocumentLayoutUpgrade}. */
+    @Transactional(readOnly = true)
+    public List<Long> policiesWithOldSchedules() {
+        return em.createQuery("select distinct d.policyId from PolicyDocument d where d.documentType = :type "
+                        + "and d.layoutVersion < :layout order by d.policyId", Long.class)
+                .setParameter("type", SCHEDULE_TYPE)
+                .setParameter("layout", PolicySchedulePdf.LAYOUT_VERSION)
+                .getResultList();
+    }
+
+    /**
+     * Replaces every schedule on the policy with one in the current layout, built from the policy as it stands
+     * now and credited to whoever issued the first one. The old files are removed only once the change commits.
+     * Does nothing if another instance got there first.
+     */
+    @Transactional
+    public int replaceOldSchedules(Long policyId) {
+        InsurancePolicy policy = em.find(InsurancePolicy.class, policyId, LockModeType.PESSIMISTIC_WRITE);
+        if (policy == null) {
+            return 0;
+        }
+        List<PolicyDocument> schedules = em.createQuery("select d from PolicyDocument d where d.policyId = :policy "
+                        + "and d.documentType = :type order by d.id", PolicyDocument.class)
+                .setParameter("policy", policyId)
+                .setParameter("type", SCHEDULE_TYPE)
+                .getResultList();
+        if (schedules.stream().allMatch(d -> d.getLayoutVersion() >= PolicySchedulePdf.LAYOUT_VERSION)) {
+            return 0;
+        }
+        List<String> oldFiles = schedules.stream().map(PolicyDocument::getStoragePath).toList();
+        schedules.forEach(em::remove);
+        em.flush();
+        issue(policy, schedules.get(0).getUploadedBy(), "replaces " + schedules.size()
+                + (schedules.size() == 1 ? " schedule" : " schedules") + " in the old layout");
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                oldFiles.forEach(files::deleteQuietly);
+            }
+        });
+        return schedules.size();
+    }
+
+    /** Renders the schedule from the policy as it stands now, files it, and records it in the policy history. */
+    private void issue(InsurancePolicy policy, String generatedBy, String note) {
         CustomerAccount customer = em.createQuery(
                         "select c from CustomerAccount c where c.name = :name order by c.displayOrder, c.id",
                         CustomerAccount.class)
@@ -131,20 +202,21 @@ public class PolicyDocumentService {
                 .findFirst()
                 .orElse(null);
         byte[] pdf = PolicySchedulePdf.render(portfolio.policyView(policy), customer, product,
-                history.of(WorkflowHistory.POLICY, policy.getRef()), generatedBy);
+                policies.months(policy), generatedBy);
 
         String fileName = policy.getRef() + "-schedule-" + LocalDateTime.now().format(FILE_STAMP) + ".pdf";
         String storagePath = files.write(policy.getRef(), "pdf", pdf);
         try {
             em.persist(new PolicyDocument(policy.getId(), SCHEDULE_TYPE, fileName, "application/pdf", pdf.length,
-                    storagePath, generatedBy));
+                    storagePath, generatedBy, PolicySchedulePdf.LAYOUT_VERSION));
             em.flush();
         } catch (RuntimeException e) {
             files.deleteQuietly(storagePath);
             throw e;
         }
         history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Schedule Generated",
-                policy.getStatus(), policy.getStatus(), SCHEDULE_TYPE + ": " + fileName, generatedBy);
+                policy.getStatus(), policy.getStatus(),
+                SCHEDULE_TYPE + ": " + fileName + (note == null ? "" : " · " + note), generatedBy);
     }
 
     private ClaimDocumentService.StoredFile open(InsurancePolicy policy, Long id) {
