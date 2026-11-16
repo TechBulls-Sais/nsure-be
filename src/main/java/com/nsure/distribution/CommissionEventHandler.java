@@ -42,7 +42,7 @@ public class CommissionEventHandler implements DomainEventHandler {
 
     @Override
     public Set<String> eventTypes() {
-        return Set.of(Events.PREMIUM_RECEIVED, Events.POLICY_CANCELLED);
+        return Set.of(Events.PREMIUM_RECEIVED, Events.POLICY_CANCELLED, Events.PAYMENT_RETURNED);
     }
 
     @Override
@@ -51,6 +51,30 @@ public class CommissionEventHandler implements DomainEventHandler {
             accrue(event);
         } else if (Events.POLICY_CANCELLED.equals(event.eventType())) {
             clawBack(event);
+        } else if (Events.PAYMENT_RETURNED.equals(event.eventType())) {
+            returned(event);
+        }
+    }
+
+    /** AT-SH06-01: a returned premium takes back the commission it earned, once. */
+    private void returned(DomainEvent event) {
+        List<Commission> open = em.createQuery("select c from Commission c join fetch c.intermediary"
+                        + " where c.policyRef = :ref and c.kind = :accrual"
+                        + " and not exists (select r.id from Commission r where r.reverses = c) order by c.id desc",
+                        Commission.class)
+                .setParameter("ref", event.text("policyRef"))
+                .setParameter("accrual", Commission.ACCRUAL)
+                .setMaxResults(1)
+                .getResultList();
+        for (Commission original : open) {
+            Commission line = Commission.clawback(original, event.eventId());
+            if (exists(line.getSourceEventId())) {
+                continue;
+            }
+            em.persist(line);
+            em.flush();
+            line.numbered();
+            publish(Events.COMMISSION_REVERSED, line, original.getAmount(), event);
         }
     }
 

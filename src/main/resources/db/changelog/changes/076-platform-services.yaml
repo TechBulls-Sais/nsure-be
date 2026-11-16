@@ -1,0 +1,92 @@
+databaseChangeLog:
+  # Shared services: party merges (SH01), the wording library (SH09A), governed data extracts (SH08, SH13) and the
+  # register and log of governed assistants (specification section 15).
+  - changeSet:
+      id: 076-platform-services
+      author: nsure
+      changes:
+        - createTable:
+            tableName: pty_merge
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: surviving_ref, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: merged_ref, type: varchar(40), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_pty_merge_merged}}
+              - column: {name: merged_name, type: varchar(150)}
+              - column: {name: reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: records_moved, type: int, constraints: {nullable: false}}
+              - column: {name: merged_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: merged_at, type: timestamp(6), constraints: {nullable: false}}
+        - createTable:
+            tableName: doc_wording
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: version_no, type: int, constraints: {nullable: false}}
+              - column: {name: product, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: clause_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: title, type: varchar(200), constraints: {nullable: false}}
+              - column: {name: body, type: varchar(4000), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: effective_from, type: date}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: timestamp(6)}
+        - addUniqueConstraint:
+            tableName: doc_wording
+            columnNames: record_ref, version_no
+            constraintName: uk_doc_wording_version
+        - createTable:
+            tableName: rpt_extract_run
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_rpt_extract_ref}}
+              - column: {name: extract_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: as_of, type: date, constraints: {nullable: false}}
+              - column: {name: record_count, type: int, constraints: {nullable: false}}
+              - column: {name: control_total, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: checksum, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: run_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: run_at, type: timestamp(6), constraints: {nullable: false}}
+        - createTable:
+            tableName: ai_use_case
+            columns:
+              - column: {name: code, type: varchar(40), constraints: {primaryKey: true, nullable: false}}
+              - column: {name: name, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: purpose, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: owner, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: model_version, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: enabled, type: boolean, constraints: {nullable: false}}
+              - column: {name: updated_by, type: varchar(100)}
+              - column: {name: updated_at, type: timestamp(6)}
+        - createTable:
+            tableName: ai_interaction
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: use_case, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: subject_ref, type: varchar(40)}
+              - column: {name: model_version, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: output, type: varchar(4000), constraints: {nullable: false}}
+              - column: {name: sources, type: varchar(1000)}
+              - column: {name: confidence, type: int}
+              - column: {name: review_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: reviewed_by, type: varchar(100)}
+              - column: {name: review_note, type: varchar(500)}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: timestamp(6), constraints: {nullable: false}}
+        - sql:
+            sql: |
+              INSERT INTO ai_use_case (code, name, purpose, owner, model_version, enabled) VALUES
+              ('APPLICATION_CHECK', 'Application completeness check', 'Lists what an application still needs before underwriting or issue, with the source of each finding.', 'Head of New Business', 'rules-1.0', TRUE),
+              ('CLAIM_SUMMARY', 'Claim case summary', 'Summarises a claim from its own record for the assessor: cover, event, evidence and open points.', 'Head of Claims', 'rules-1.0', TRUE),
+              ('DRAFT_MESSAGE', 'Draft customer message', 'Drafts a service message from approved wording for a member of staff to review before sending.', 'Head of Customer Service', 'rules-1.0', TRUE),
+              ('RISK_SCORE', 'Underwriting and lapse risk indicators', 'Rule-based indicators shown to underwriters and retention staff. Advisory only: never a decision.', 'Chief Underwriter', 'rules-1.0', TRUE);
+
+              INSERT INTO doc_wording (record_ref, version_no, product, clause_type, title, body, status, effective_from, created_by, created_at, approved_by, approved_at)
+              SELECT seed.r, 1, seed.p, seed.c, seed.t, seed.b, 'APPROVED', DATE '2026-01-01', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP FROM (
+                SELECT 'WRD-0001' r, 'Term Life' p, 'BENEFIT' c, 'Death benefit' t, 'The sum assured is payable on the death of the life insured during the term of the policy, provided premiums are paid to date.' b UNION ALL
+                SELECT 'WRD-0002', 'Term Life', 'EXCLUSION', 'Suicide within 24 months', 'No benefit is payable where death results from suicide within 24 months of the cover start date or of any reinstatement.' UNION ALL
+                SELECT 'WRD-0003', 'Family Funeral', 'BENEFIT', 'Funeral benefit', 'The funeral benefit for a covered life is payable on that life''s death after the waiting period. Accidental death is covered immediately.' UNION ALL
+                SELECT 'WRD-0004', 'Care Cash', 'BENEFIT', 'Hospital cash benefit', 'The daily benefit is payable for each day of a hospital admission of two or more consecutive nights, subject to the policy''s day limits.' UNION ALL
+                SELECT 'WRD-0005', 'Individual Credit', 'BENEFIT', 'Outstanding balance', 'On death or permanent disability of the borrower the outstanding loan balance is paid to the lender; any surplus is paid to the estate.'
+              ) seed;

@@ -1,0 +1,109 @@
+package com.nsure.platform;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import java.util.List;
+import java.util.Map;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/** Shared services: party merges, the wording library, data extracts and governed assistants. */
+@RestController
+@RequestMapping("/platform")
+public class PlatformController {
+
+    private final PlatformService platform;
+
+    public PlatformController(PlatformService platform) {
+        this.platform = platform;
+    }
+
+    @GetMapping("/parties/duplicates")
+    public List<Map<String, Object>> duplicates() {
+        return platform.duplicates();
+    }
+
+    @GetMapping("/parties/merges")
+    public List<Map<String, Object>> merges() {
+        return platform.merges();
+    }
+
+    @PostMapping("/parties/merges")
+    public Map<String, Object> merge(@RequestBody JsonNode body) {
+        return platform.merge(body);
+    }
+
+    @GetMapping("/wordings")
+    public List<Map<String, Object>> wordings() {
+        return platform.wordings();
+    }
+
+    @PostMapping("/wordings")
+    public Map<String, Object> saveWording(@RequestBody JsonNode body) {
+        return platform.saveWording(body);
+    }
+
+    @PostMapping("/wordings/{ref}/versions/{version}/approval")
+    public Map<String, Object> approveWording(@PathVariable String ref, @PathVariable int version) {
+        return platform.approveWording(ref, version);
+    }
+
+    @GetMapping("/metrics")
+    public List<Map<String, String>> metrics() {
+        return platform.metrics();
+    }
+
+    @GetMapping("/extracts")
+    public List<Map<String, Object>> extractRuns() {
+        return platform.extractRuns();
+    }
+
+    @PostMapping("/extracts")
+    public Map<String, Object> extract(@RequestBody JsonNode body) {
+        return platform.extract(body);
+    }
+
+    @GetMapping("/assistants")
+    public List<Map<String, Object>> useCases() {
+        return platform.useCases();
+    }
+
+    @PutMapping("/assistants/{code}")
+    public List<Map<String, Object>> switchUseCase(@PathVariable String code, @RequestBody JsonNode body) {
+        return platform.switchUseCase(code, body);
+    }
+
+    @GetMapping("/assistants/log")
+    public List<Map<String, Object>> interactions() {
+        return platform.interactions();
+    }
+
+    @PostMapping("/assistants/application-check/{ref}")
+    public Map<String, Object> applicationCheck(@PathVariable String ref) {
+        return platform.applicationCheck(ref);
+    }
+
+    @PostMapping("/assistants/claim-summary/{ref}")
+    public Map<String, Object> claimSummary(@PathVariable String ref) {
+        return platform.claimSummary(ref);
+    }
+
+    @PostMapping("/assistants/draft-message")
+    public Map<String, Object> draftMessage(@RequestBody JsonNode body) {
+        return platform.draftMessage(body);
+    }
+
+    @PostMapping("/assistants/risk-indicators/{customerRef}")
+    public Map<String, Object> riskIndicators(@PathVariable String customerRef) {
+        return platform.riskIndicators(customerRef);
+    }
+
+    @PostMapping("/assistants/log/{id}/review")
+    public Map<String, Object> review(@PathVariable Long id, @RequestBody JsonNode body) {
+        return platform.review(id, body);
+    }
+}

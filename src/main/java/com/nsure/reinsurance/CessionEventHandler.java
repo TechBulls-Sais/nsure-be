@@ -43,7 +43,7 @@ public class CessionEventHandler implements DomainEventHandler {
 
     @Override
     public Set<String> eventTypes() {
-        return Set.of(Events.PREMIUM_RECEIVED, Events.CLAIM_PAID);
+        return Set.of(Events.PREMIUM_RECEIVED, Events.CLAIM_PAID, Events.PAYMENT_RETURNED);
     }
 
     @Override
@@ -52,7 +52,30 @@ public class CessionEventHandler implements DomainEventHandler {
             cede(event);
         } else if (Events.CLAIM_PAID.equals(event.eventType())) {
             recover(event);
+        } else if (Events.PAYMENT_RETURNED.equals(event.eventType())) {
+            adjust(event);
         }
+    }
+
+    /** AT-SH07-02: a returned premium gets a linked ceded-premium adjustment, once; the original cession stays. */
+    private void adjust(DomainEvent event) {
+        if (!em.createQuery("select c.id from Cession c where c.sourceEventId = :id", Long.class)
+                .setParameter("id", event.eventId()).setMaxResults(1).getResultList().isEmpty()) {
+            return;
+        }
+        List<Cession> latest = em.createQuery("select c from Cession c where c.policyRef = :ref order by c.id desc",
+                Cession.class).setParameter("ref", event.text("policyRef")).setMaxResults(1).getResultList();
+        if (latest.isEmpty()) {
+            return;
+        }
+        Cession original = latest.get(0);
+        BigDecimal premium = event.amount("amount").setScale(2, RoundingMode.HALF_UP).negate();
+        Cession adjustment = new Cession(original.getTreaty(), original.getPolicyRef(), original.getProduct(),
+                event.eventId(), original.getSumAssured(), BigDecimal.ZERO.setScale(2), premium,
+                premium.multiply(original.getCededShare()).setScale(2, RoundingMode.HALF_UP), original.getCededShare());
+        em.persist(adjustment);
+        em.flush();
+        adjustment.numbered();
     }
 
     private void cede(DomainEvent event) {

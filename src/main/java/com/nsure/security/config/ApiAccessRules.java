@@ -302,6 +302,20 @@ public final class ApiAccessRules {
             rule(POST, "/group-life/schemes/*/credit-loans", anyOf("PROCESS_CENSUS")),
             rule(POST, "/group-life/credit-loans/*/settlement", anyOf("BILL_SCHEME")),
 
+            // ── shared services: party merges, wordings, extracts, governed assistants ─────────────────
+            rule(GET, "/platform/parties/**", anyOf("READ_CUSTOMER")),
+            rule(POST, "/platform/parties/merges", anyOf("KYC_CUSTOMER")),
+            rule(GET, "/platform/wordings", anyOf("READ_PRODUCT")),
+            rule(POST, "/platform/wordings", anyOf("UPDATE_PRODUCT")),
+            rule(POST, "/platform/wordings/*/versions/*/approval", anyOf("ACTIVATE_PRODUCT")),
+            rule(GET, "/platform/metrics", anyOf("READ_REPORT")),
+            rule(GET, "/platform/extracts", anyOf("READ_REPORT")),
+            rule(POST, "/platform/extracts", anyOf("READ_REPORT")),
+            rule(GET, "/platform/assistants/log", anyOf("READ_AUDIT")),
+            rule(GET, "/platform/assistants", staff()),
+            rule(PUT, "/platform/assistants/*", anyOf("MANAGE_CONFIG")),
+            rule(POST, "/platform/assistants/**", staff()),
+
             // ── reinsurance SH07 (Reinsurance Officer) ─────────────────────────────────────────────────
             rule(GET, "/reinsurance/**", anyOf("READ_REINSURANCE")),
             rule(POST, "/reinsurance/treaties", anyOf("MANAGE_REINSURANCE")),
