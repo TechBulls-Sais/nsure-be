@@ -224,3 +224,6 @@ databaseChangeLog:
   - include:
       file: changes/076-platform-services.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/077-operations.yaml
+      relativeToChangelogFile: true

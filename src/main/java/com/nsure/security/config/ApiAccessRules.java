@@ -316,6 +316,23 @@ public final class ApiAccessRules {
             rule(PUT, "/platform/assistants/*", anyOf("MANAGE_CONFIG")),
             rule(POST, "/platform/assistants/**", staff()),
 
+            // ── partner portals, work queue, document register, payouts ────────────────────────────────
+            rule(GET, "/ops/portal", anyOf("USE_PARTNER_PORTAL")),
+            rule(POST, "/ops/portal/requests", anyOf("USE_PARTNER_PORTAL")),
+            rule(GET, "/ops/portal-accounts", anyOf("READ_USER")),
+            rule(PUT, "/ops/portal-accounts", anyOf("UPDATE_USER")),
+            rule(GET, "/ops/portal-requests", staff()),
+            rule(POST, "/ops/portal-requests/*/close", staff()),
+            rule(GET, "/ops/workflow", staff()),
+            rule(PUT, "/ops/workflow/**", anyOf("MANAGE_CONFIG")),
+            rule(GET, "/ops/queue", staff()),
+            rule(POST, "/ops/queue/claim", staff()),
+            rule(DELETE, "/ops/queue/claim", staff()),
+            rule(GET, "/ops/documents", anyOf("READ_POLICY")),
+            rule(PUT, "/ops/documents/hold", anyOf("UPDATE_POLICY")),
+            rule(PUT, "/ops/documents/retention", anyOf("MANAGE_CONFIG")),
+            rule(GET, "/ops/payouts", anyOf("READ_CLAIM")),
+
             // ── reinsurance SH07 (Reinsurance Officer) ─────────────────────────────────────────────────
             rule(GET, "/reinsurance/**", anyOf("READ_REINSURANCE")),
             rule(POST, "/reinsurance/treaties", anyOf("MANAGE_REINSURANCE")),

@@ -1,0 +1,127 @@
+databaseChangeLog:
+  # Partner portals (specification section 04), workflow definitions with team queues and an SLA calendar (SH10), and
+  # document retention and legal holds (SH09A).
+  - changeSet:
+      id: 077-operations
+      author: nsure
+      changes:
+        - createTable:
+            tableName: portal_account
+            columns:
+              - column: {name: username, type: varchar(100), constraints: {primaryKey: true, nullable: false}}
+              # AGENT, EMPLOYER or LENDER, and the one intermediary, scheme or lender this login may see.
+              - column: {name: portal_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: scope_ref, type: varchar(40)}
+        - createTable:
+            tableName: portal_request
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_portal_request_ref}}
+              - column: {name: portal_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: scope_ref, type: varchar(40)}
+              - column: {name: request_type, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: detail, type: varchar(2000), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: handled_by, type: varchar(100)}
+              - column: {name: handled_note, type: varchar(500)}
+        - createTable:
+            tableName: wf_definition
+            columns:
+              - column: {name: code, type: varchar(30), constraints: {primaryKey: true, nullable: false}}
+              - column: {name: name, type: varchar(120), constraints: {nullable: false}}
+              - column: {name: team, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: sla_hours, type: int, constraints: {nullable: false}}
+              - column: {name: steps, type: varchar(1000), constraints: {nullable: false}}
+              - column: {name: version_no, type: int, constraints: {nullable: false}}
+              - column: {name: updated_by, type: varchar(100)}
+              - column: {name: updated_at, type: timestamp(6)}
+        - createTable:
+            tableName: wf_calendar
+            columns:
+              - column: {name: id, type: int, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: work_start_hour, type: int, constraints: {nullable: false}}
+              - column: {name: work_end_hour, type: int, constraints: {nullable: false}}
+              - column: {name: working_days, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: holidays, type: varchar(1000)}
+        - createTable:
+            tableName: wf_assignment
+            columns:
+              - column: {name: item_key, type: varchar(60), constraints: {primaryKey: true, nullable: false}}
+              - column: {name: owner, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: claimed_at, type: timestamp(6), constraints: {nullable: false}}
+        - createTable:
+            tableName: doc_retention
+            columns:
+              - column: {name: document_class, type: varchar(60), constraints: {primaryKey: true, nullable: false}}
+              - column: {name: retain_years, type: int, constraints: {nullable: false}}
+        - createTable:
+            tableName: doc_control
+            columns:
+              - column: {name: doc_key, type: varchar(30), constraints: {primaryKey: true, nullable: false}}
+              - column: {name: legal_hold, type: boolean, constraints: {nullable: false}}
+              - column: {name: hold_reason, type: varchar(300)}
+              - column: {name: held_by, type: varchar(100)}
+              - column: {name: held_at, type: timestamp(6)}
+        - sql:
+            sql: |
+              INSERT INTO wf_calendar (id, work_start_hour, work_end_hour, working_days, holidays)
+              VALUES (1, 8, 17, 'MON,TUE,WED,THU,FRI', '2026-12-25,2026-12-26,2027-01-01');
+
+              INSERT INTO wf_definition (code, name, team, sla_hours, steps, version_no) VALUES
+              ('UNDERWRITING', 'Underwriting referral', 'Underwriting', 16, 'Assess referral reasons > Request or record evidence > Decide within authority > Record applicant''s answer to any offer', 1),
+              ('ENDORSEMENT', 'Endorsement held for review', 'Policy servicing', 8, 'Check the preview > Confirm authority > Approve or reject', 1),
+              ('BENEFIT', 'Contractual benefit due', 'Claims', 24, 'Confirm the policy was in force > Approve or decline > Record payment', 1),
+              ('CARE_CASH', 'Hospital cash event', 'Claims', 16, 'Check the benefit trace > Second person approves > Record payment', 1),
+              ('SCHEME_EVENT', 'Scheme renewal or closure', 'Group administration', 40, 'Review the impact > Second person decides > Apply', 1),
+              ('GROUP_QUOTE', 'Scheme quotation approval', 'Group underwriting', 24, 'Check the census and rate > Approve or decline', 1),
+              ('PORTAL_REQUEST', 'Partner portal request', 'Operations', 8, 'Acknowledge > Action in the owning module > Close with a note', 1);
+
+              INSERT INTO doc_retention (document_class, retain_years) VALUES
+              ('Policy document', 10), ('Claim evidence', 7);
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT 'portal', 'USE_PARTNER_PORTAL', 'PARTNER_PORTAL', 'USE', FALSE, 'Use the agent, employer or lender portal for the linked partner'
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = 'USE_PARTNER_PORTAL');
+
+              INSERT INTO app_role (name, description, disabled)
+              SELECT seed.n, seed.d, FALSE FROM (
+                SELECT 'Agent / Broker' n, 'An intermediary: sees only the applications, policies and commission of its own portfolio.' d UNION ALL
+                SELECT 'Employer', 'A scheme sponsor: sees only its own scheme''s members, invoices and certificates, never medical evidence.' UNION ALL
+                SELECT 'Lender', 'A lender: sees only its own loans, balances and refunds.'
+              ) seed WHERE NOT EXISTS (SELECT 1 FROM app_role r WHERE r.name = seed.n);
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code = 'USE_PARTNER_PORTAL'
+              WHERE r.name IN ('Agent / Broker', 'Employer', 'Lender', 'Super Admin')
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+  - changeSet:
+      id: 077-portal-demo-users
+      author: nsure
+      context: demo
+      comment: Demo partner logins (password "password"), each tied to one partner record.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_user (username, password, enabled)
+              SELECT seed.u, '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG', TRUE
+              FROM (SELECT 'agent' u UNION ALL SELECT 'employer' UNION ALL SELECT 'lender') seed
+              WHERE NOT EXISTS (SELECT 1 FROM app_user x WHERE x.username = seed.u);
+
+              INSERT INTO app_user_role (user_id, role_id)
+              SELECT u.id, r.id FROM app_user u JOIN app_role r ON (
+                   (u.username = 'agent' AND r.name = 'Agent / Broker')
+                OR (u.username = 'employer' AND r.name = 'Employer')
+                OR (u.username = 'lender' AND r.name = 'Lender'))
+              WHERE NOT EXISTS (SELECT 1 FROM app_user_role x WHERE x.user_id = u.id AND x.role_id = r.id);
+
+              INSERT INTO portal_account (username, portal_type, scope_ref)
+              SELECT 'agent', 'AGENT', (SELECT MIN(record_ref) FROM dist_intermediary)
+              WHERE NOT EXISTS (SELECT 1 FROM portal_account x WHERE x.username = 'agent');
+              INSERT INTO portal_account (username, portal_type, scope_ref)
+              SELECT 'employer', 'EMPLOYER', (SELECT MIN(record_ref) FROM ins_scheme)
+              WHERE NOT EXISTS (SELECT 1 FROM portal_account x WHERE x.username = 'employer');
+              INSERT INTO portal_account (username, portal_type, scope_ref)
+              SELECT 'lender', 'LENDER', 'LND-0001'
+              WHERE NOT EXISTS (SELECT 1 FROM portal_account x WHERE x.username = 'lender');

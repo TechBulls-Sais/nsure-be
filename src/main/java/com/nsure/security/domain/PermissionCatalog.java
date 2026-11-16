@@ -57,6 +57,8 @@ public enum PermissionCatalog {
     MANAGE_CREDIT(null),
     PAY_CREDIT_REFUND(null),
     MANAGE_CREDIT_RULE(null),
+    // Partner portals (specification section 04): scoped to one intermediary, scheme or lender.
+    USE_PARTNER_PORTAL(null),
 
     // ── spec 04 capabilities ────────────────────────────────────────────────────────────────────────────
     READ_DASHBOARD("dashboard.read"),

@@ -90,6 +90,8 @@ so a replay never posts, pays or messages twice. Only the roles in the Nsure rol
 reinsurance and integration modules are reached through the Super Admin role's explicit grants until their codes are granted to a spec role. Customer
 Support Representative (`support`) and Compliance & Auditor (`compliance`) come from migration 045; demo password `password`.
 
+Partner portal logins come from migration 077: `agent` (intermediary INT-00001), `employer` (scheme SCH-001) and `lender` (LND-0001), each with only `USE_PARTNER_PORTAL` and tied to that one partner through `portal_account`. The same migration adds the work queue (`/ops/queue`), workflow definitions and business calendar (`/ops/workflow`), the document register with retention and legal hold (`/ops/documents`; the upload scan result is fixed at Clean because no scanner is connected) and the combined benefit payouts list (`/ops/payouts`).
+
 ### Adding an endpoint
 
 1. Add the controller method.
