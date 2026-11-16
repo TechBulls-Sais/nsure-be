@@ -13,8 +13,8 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * The claim summary as an A4 PDF: the one record of a claim as decided, issued once the claim is paid or rejected
- * (see {@link ClaimDocumentService}). It sets out what was claimed, the checks made, the decision and why, the
+ * The claim summary as an A4 PDF (see {@link ClaimDocumentService}). On a closed claim it is the final summary, the one
+ * record of the claim as decided; on an open claim it is an interim summary of the claim so far, marked as such. It sets out what was claimed, the checks made, the decision and why, the
  * payment and who received it, the evidence on file and the claim's timeline. The claimant can download it too,
  * so account numbers are masked.
  */
@@ -40,18 +40,21 @@ final class ClaimSummaryPdf {
             List<PortfolioViews.DocumentView> documents, List<PortfolioViews.HistoryView> history, String issuedBy) {
         boolean paid = ClaimWorkflow.PAID.equals(c.getStatus());
         boolean rejected = ClaimWorkflow.REJECTED.equals(c.getStatus());
+        boolean interim = !paid && !rejected;
         String decided = c.getResolvedAt() == null ? null : longDate(c.getResolvedAt().toString());
+        String title = interim ? "Interim claim summary" : "Claim summary";
 
-        PdfReport pdf = new PdfReport("Claim summary " + c.getRef(), "Claim summary",
+        PdfReport pdf = new PdfReport(title + " " + c.getRef(), title,
                 c.getRef() + " · " + c.getProduct() + " · issued " + LocalDateTime.now().format(STAMP) + " by " + issuedBy);
 
         pdf.keyFacts(new String[][] {
                 {"Claim number", c.getRef()},
-                {"Outcome", paid ? "Paid" : rejected ? "Rejected" : c.getStatus()},
+                {"Outcome", paid ? "Paid" : rejected ? "Rejected" : "Not yet decided (" + c.getStatus() + ")"},
                 {"Policy", c.getPolicyRef()},
                 {"Amount claimed", money(c.getAmount())},
-                {"Amount paid", paid && c.getPayoutAmount() != null ? money(c.getPayoutAmount()) : "Nothing paid"},
-                {rejected ? "Rejected on" : "Decided on", decided},
+                {"Amount paid", paid && c.getPayoutAmount() != null ? money(c.getPayoutAmount())
+                        : interim ? "Nothing paid yet" : "Nothing paid"},
+                {rejected ? "Rejected on" : "Decided on", interim ? null : decided},
         });
 
         // 1 ── the claim
@@ -87,7 +90,8 @@ final class ClaimSummaryPdf {
 
         // 4 ── the decision
         pdf.section("4. Decision");
-        pdf.row("Outcome", paid ? "Approved and paid" : rejected ? "Rejected" : c.getStatus());
+        pdf.row("Outcome", paid ? "Approved and paid" : rejected ? "Rejected"
+                : "Not yet decided. The claim is " + c.getStatus().toLowerCase(Locale.ENGLISH) + ".");
         pdf.row("Reason", rejected ? c.getRejectionReason() : null);
         pdf.row("Approved despite", blank(c.getCheckOverrideReason()) ? null
                 : String.join(" and ", ClaimWorkflow.failedSoftChecks(c)) + " failing, because: "
@@ -149,7 +153,10 @@ final class ClaimSummaryPdf {
 
         // 8 ── what to know
         pdf.section("8. Important");
-        pdf.bullet("This summary records the claim as decided. It is issued once, after the claim is paid or rejected.");
+        pdf.bullet(interim
+                ? "This is an interim summary of the claim so far, not a decision. The final summary is issued once"
+                        + " the claim is paid or rejected, and replaces this one."
+                : "This summary records the claim as decided. It is issued once, after the claim is paid or rejected.");
         if (rejected) {
             pdf.bullet("If you disagree with this decision, contact Nsure and quote claim number " + c.getRef()
                     + ". You may be asked for more evidence.");

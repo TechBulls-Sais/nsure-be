@@ -1,0 +1,29 @@
+databaseChangeLog:
+  - changeSet:
+      id: 046-remove-actuary-profile
+      author: nsure
+      comment: >-
+        The actuary profile table (016-actuary) and its CREATE/READ/UPDATE/DELETE_ACTUARY permission codes are not
+        in the Nsure spec (docs/spec/.../04-roles-and-capabilities.md treats Actuary as a role only) and nothing
+        reads or writes them. Role grants go first, then the codes, then the table. The Actuary role stays.
+      changes:
+        - sql:
+            sql: |
+              DELETE FROM app_role_permission
+              WHERE permission_id IN (SELECT id FROM app_permission WHERE code IN (
+                'CREATE_ACTUARY', 'READ_ACTUARY', 'UPDATE_ACTUARY', 'DELETE_ACTUARY'));
+        - sql:
+            sql: |
+              DELETE FROM app_permission
+              WHERE code IN ('CREATE_ACTUARY', 'READ_ACTUARY', 'UPDATE_ACTUARY', 'DELETE_ACTUARY');
+  - changeSet:
+      id: 046-drop-actuary-table
+      author: nsure
+      preConditions:
+        - onFail: MARK_RAN
+        - tableExists:
+            tableName: actuary
+      changes:
+        - dropTable:
+            tableName: actuary
+            cascadeConstraints: true

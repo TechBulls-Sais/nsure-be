@@ -157,10 +157,24 @@ class ClaimDocumentApiTest {
         mockMvc.perform(upload("/portfolio/shop/claims/" + claim + "/documents", "refilwe", "password1",
                         file("certificate.pdf", PDF)).param("type", "Death certificate"))
                 .andExpect(status().isOk());
-        // Not while the claim is open: its outcome is not final yet.
+        // While the claim is open it is an interim summary; issuing again replaces it rather than adding another.
         mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(httpBasic("assessor", "password")))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.message").value(Matchers.containsString("once the claim is paid or rejected")));
+                .andExpect(status().isOk());
+        String interim = mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary")
+                        .with(httpBasic("assessor", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[1].type").value("Interim claim summary"))
+                .andExpect(jsonPath("$[1].fileName").value(Matchers.startsWith(claim + "-interim-summary-")))
+                .andReturn().getResponse().getContentAsString();
+        byte[] interimPdf = mockMvc.perform(get("/portfolio/claims/" + claim + "/documents/"
+                        + JsonPath.read(interim, "$[1].id")).with(httpBasic("assessor", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsByteArray();
+        try (org.apache.pdfbox.pdmodel.PDDocument doc = org.apache.pdfbox.Loader.loadPDF(interimPdf)) {
+            assertThat(new org.apache.pdfbox.text.PDFTextStripper().getText(doc))
+                    .contains("Interim claim summary", "Not yet decided", "This is an interim summary");
+        }
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reject"), "assessor",
                         "{\"reason\":\"Event before cover → not covered\"}"))
                 .andExpect(status().isOk());

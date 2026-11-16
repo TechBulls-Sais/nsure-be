@@ -134,3 +134,6 @@ databaseChangeLog:
   - include:
       file: changes/045-support-and-compliance-roles.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/046-remove-actuary-profile.yaml
+      relativeToChangelogFile: true
