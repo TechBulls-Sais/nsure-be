@@ -52,6 +52,11 @@ public enum PermissionCatalog {
     BACKDATE_ENDORSEMENT(null),
     APPROVE_BENEFIT(null),
     MANAGE_BENEFIT_RULE(null),
+    // IL05 individual credit life (Nsure Life NS-IL05-001..006).
+    READ_CREDIT(null),
+    MANAGE_CREDIT(null),
+    PAY_CREDIT_REFUND(null),
+    MANAGE_CREDIT_RULE(null),
 
     // ── spec 04 capabilities ────────────────────────────────────────────────────────────────────────────
     READ_DASHBOARD("dashboard.read"),

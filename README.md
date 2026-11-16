@@ -37,6 +37,8 @@ How a request is decided:
 | Claims Assessor | dashboard, claim.read/create/assess/approve/reject, policy/payment read, controls.read | `assessor`, `assessor2` |
 | Customer Support Representative | dashboard, claim.read/create, policy.read/create/write, payment.read, customer.read (+ service desk, communications) | `support` |
 | Compliance & Auditor | read-only: dashboard, claims, policies, payments, customers, audit, rates, controls, reports, finance + finance.export | `compliance` |
+| Underwriter | underwriting cases: evidence, decisions within the role's authority limit, risk-increase endorsements | `underwriter` |
+| Credit Life Administrator | lenders, loans, disbursements, balances, credit claims and early settlements | `credit` |
 | Policyholder / End User | **none** — protected role, access by ownership only | `customer` |
 
 Demo passwords are `password`. Break-glass codes — `UPDATE_CONTROL` (controls.write), `OVERRIDE_CLAIM_FOUR_EYES`
@@ -94,3 +96,15 @@ Support Representative (`support`) and Compliance & Auditor (`compliance`) come 
 2. Add its rule to `ApiAccessRules`. `EndpointCoverageTest` fails the build if you forget, and also fails if a
    rule names a permission code that is not seeded in `app_permission`.
 3. For a new code, seed it in a Liquibase changeset and grant it to the roles that need it.
+
+## Individual Life modules (Nsure Life IL02–IL05)
+
+| Module | Package | API | What it does |
+|---|---|---|---|
+| IL02 Underwriting | `com.nsure.underwriting` | `/underwriting/**` | A case per submitted application. Rules accept a case inside every limit; the rest are referred for evidence and a decision within authority. Changed terms are a numbered offer the applicant accepts before issue. |
+| IL03/IL04 Policy servicing | `com.nsure.servicing` | `/servicing/**` | Previewed endorsements (payer, ownership, sum assured, frequency, lives), dated insured lives and age reviews, product-defined contractual benefits (cashback, return of premium, maturity, surrender, paid-up), reinstatement approval and reasoned termination. |
+| IL05 Credit life | `com.nsure.credit` | `/credit/**` | Lenders and loans with their own credit life policy; cover on disbursement plus first premium; idempotent lender balances with exceptions; claim split between lender and estate; early settlement with one refund. |
+
+Rules that drive these modules are data, editable in the workspace: underwriting rule sets and authority limits,
+product benefit and servicing rules, and the credit product rule. The seeded values are starting points for the
+insurer's approved figures.

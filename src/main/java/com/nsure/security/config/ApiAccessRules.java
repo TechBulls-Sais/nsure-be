@@ -278,6 +278,12 @@ public final class ApiAccessRules {
             rule(PUT, "/servicing/benefit-rules", anyOf("MANAGE_BENEFIT_RULE")),
             rule(PUT, "/servicing/rules/*", anyOf("MANAGE_BENEFIT_RULE")),
 
+            // ── individual credit life IL05 (Credit Life Administrator) ────────────────────────────────
+            rule(GET, "/credit/**", anyOf("READ_CREDIT")),
+            rule(PUT, "/credit/rule", anyOf("MANAGE_CREDIT_RULE")),
+            rule(POST, "/credit/refunds/*/payment", anyOf("PAY_CREDIT_REFUND")),
+            rule(POST, "/credit/**", anyOf("MANAGE_CREDIT")),
+
             // ── reinsurance SH07 (Reinsurance Officer) ─────────────────────────────────────────────────
             rule(GET, "/reinsurance/**", anyOf("READ_REINSURANCE")),
             rule(POST, "/reinsurance/treaties", anyOf("MANAGE_REINSURANCE")),

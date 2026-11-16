@@ -67,6 +67,11 @@ public final class Events {
     public static final String BENEFIT_DUE = "ContractualBenefitDue";
     public static final String BENEFIT_PAID = "ContractualBenefitPaid";
     public static final String PREMIUM_REFUNDED = "PremiumRefunded";
+    // IL05 individual credit life.
+    public static final String LOAN_DISBURSED = "LoanDisbursed";
+    public static final String LOAN_BALANCE_UPDATED = "LoanBalanceUpdated";
+    public static final String LOAN_SETTLED = "LoanSettled";
+    public static final String CREDIT_COVER_TERMINATED = "CreditCoverTerminated";
     public static final String OFFER_ACCEPTED = "OfferAccepted";
 
     // Collections and claims (spec SH04, SH05).

@@ -212,3 +212,6 @@ databaseChangeLog:
   - include:
       file: changes/072-policy-servicing.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/073-individual-credit-life.yaml
+      relativeToChangelogFile: true
