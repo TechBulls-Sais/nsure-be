@@ -32,6 +32,57 @@ public class InsurancePolicy extends CoverRecord implements TieredCover {
 
     // NS-IL01-006: the application this policy was issued from (issued once), and the key that makes staff issue
     // idempotent.
+    @Column(name = "payer_name", length = 100)
+    private String payerName;
+
+    @Column(name = "payer_relationship", length = 60)
+    private String payerRelationship;
+
+    @Column(name = "premium_frequency", nullable = false, length = 20)
+    private String premiumFrequency = "MONTHLY";
+
+    /** Why the contract ended (NS-IL03): DEATH, CANCELLATION, EXPIRY, LAPSE, SURRENDER, MATURITY or OTHER. */
+    @Column(name = "termination_reason", length = 30)
+    private String terminationReason;
+
+    @Column(name = "terminated_on")
+    private LocalDate terminatedOn;
+
+    public String getPayerName() {
+        return payerName;
+    }
+
+    public String getPayerRelationship() {
+        return payerRelationship;
+    }
+
+    public void setPayer(String name, String relationship) {
+        this.payerName = name;
+        this.payerRelationship = relationship;
+    }
+
+    public String getPremiumFrequency() {
+        return premiumFrequency;
+    }
+
+    public void setPremiumFrequency(String premiumFrequency) {
+        this.premiumFrequency = premiumFrequency;
+    }
+
+    public String getTerminationReason() {
+        return terminationReason;
+    }
+
+    public LocalDate getTerminatedOn() {
+        return terminatedOn;
+    }
+
+    /** Records why and when the contract ended. */
+    public void terminated(String reason, LocalDate on) {
+        this.terminationReason = reason;
+        this.terminatedOn = on;
+    }
+
     /** Terms underwriting attached at issue: loading and exclusions (NS-IL02-005). */
     @Column(name = "uw_terms", length = 1000)
     private String uwTerms;

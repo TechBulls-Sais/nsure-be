@@ -1,0 +1,202 @@
+databaseChangeLog:
+  # IL03 policy administration and IL04 family administration (Nsure Life NS-IL03-002..006, NS-IL04-001..006):
+  # previewed endorsements with authority and effective dates, dated insured lives, product-defined contractual
+  # benefits (cashback, return of premium, maturity, surrender, paid-up) and reasoned terminations.
+  - changeSet:
+      id: 072-policy-servicing-columns
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ins_policy
+            columns:
+              - column: {name: payer_name, type: varchar(100)}
+              - column: {name: payer_relationship, type: varchar(60)}
+              - column: {name: premium_frequency, type: varchar(20), defaultValue: MONTHLY, constraints: {nullable: false}}
+              # Why the contract ended: DEATH, CANCELLATION, EXPIRY, LAPSE, SURRENDER, MATURITY or OTHER.
+              - column: {name: termination_reason, type: varchar(30)}
+              - column: {name: terminated_on, type: date}
+        - addColumn:
+            tableName: ins_policy_life_cover
+            columns:
+              - column: {name: life_status, type: varchar(20), defaultValue: ACTIVE, constraints: {nullable: false}}
+              - column: {name: effective_from, type: date}
+              - column: {name: effective_to, type: date}
+              # Waiting periods run from here. A life removed and added again keeps its original date.
+              - column: {name: waiting_period_start, type: date}
+              - column: {name: cease_reason, type: varchar(300)}
+  - changeSet:
+      id: 072-policy-servicing-tables
+      author: nsure
+      changes:
+        - createTable:
+            tableName: pol_endorsement
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_pol_endorsement_ref}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: endorsement_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: effective_date, type: date, constraints: {nullable: false}}
+              - column: {name: backdated, type: boolean, defaultValueBoolean: false, constraints: {nullable: false}}
+              - column: {name: status, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: changes_json, type: varchar(4000), constraints: {nullable: false}}
+              - column: {name: before_summary, type: varchar(1000)}
+              - column: {name: after_summary, type: varchar(1000)}
+              - column: {name: old_sum_assured, type: 'decimal(19,2)'}
+              - column: {name: new_sum_assured, type: 'decimal(19,2)'}
+              - column: {name: old_premium, type: 'decimal(19,2)'}
+              - column: {name: new_premium, type: 'decimal(19,2)'}
+              - column: {name: premium_adjustment, type: 'decimal(19,2)'}
+              - column: {name: commission_effect, type: 'decimal(19,2)'}
+              - column: {name: reinsurance_effect, type: 'decimal(19,2)'}
+              - column: {name: hold_reason, type: varchar(500)}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: timestamp(6)}
+              - column: {name: decision_note, type: varchar(500)}
+              - column: {name: applied_at, type: timestamp(6)}
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - createIndex:
+            tableName: pol_endorsement
+            indexName: ix_pol_endorsement_policy
+            columns:
+              - column: {name: policy_ref}
+        - createTable:
+            tableName: prod_benefit_rule
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: product, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: benefit_type, type: varchar(30), constraints: {nullable: false}}
+              # CASHBACK: every interval_months, premium_multiple monthly premiums.
+              # RETURN_OF_PREMIUM / MATURITY: at term_years, percent of premiums paid (or of the sum assured).
+              # SURRENDER / PAID_UP: after min_months in force, percent of premiums paid.
+              - column: {name: interval_months, type: int}
+              - column: {name: premium_multiple, type: 'decimal(7,2)'}
+              - column: {name: percent, type: 'decimal(7,2)'}
+              - column: {name: min_months, type: int}
+              - column: {name: term_years, type: int}
+              - column: {name: description, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: active, type: boolean, defaultValueBoolean: true, constraints: {nullable: false}}
+              - column: {name: updated_by, type: varchar(100)}
+              - column: {name: updated_at, type: timestamp(6)}
+        - addUniqueConstraint:
+            tableName: prod_benefit_rule
+            columnNames: product, benefit_type
+            constraintName: uk_prod_benefit_rule
+        - createTable:
+            tableName: prod_servicing_rule
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: product, type: varchar(60), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_prod_servicing_rule}}
+              # A premium paid while cover is off restores cover by itself only when this is false.
+              - column: {name: reinstatement_needs_approval, type: boolean, defaultValueBoolean: false, constraints: {nullable: false}}
+              - column: {name: max_backdate_days, type: int, defaultValueNumeric: 90, constraints: {nullable: false}}
+              # A dependent child's cover is reviewed at this age; a life's cover ceases at max_cover_age.
+              - column: {name: child_review_age, type: int, defaultValueNumeric: 21, constraints: {nullable: false}}
+              - column: {name: max_cover_age, type: int, defaultValueNumeric: 70, constraints: {nullable: false}}
+              - column: {name: updated_by, type: varchar(100)}
+              - column: {name: updated_at, type: timestamp(6)}
+        - createTable:
+            tableName: pol_benefit_event
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_pol_benefit_ref}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: customer_name, type: varchar(150)}
+              - column: {name: product, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: benefit_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: due_date, type: date, constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: basis, type: varchar(1000), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: timestamp(6)}
+              - column: {name: decision_note, type: varchar(500)}
+              - column: {name: paid_by, type: varchar(100)}
+              - column: {name: paid_at, type: timestamp(6)}
+              - column: {name: payment_reference, type: varchar(60)}
+        - addUniqueConstraint:
+            tableName: pol_benefit_event
+            columnNames: policy_ref, benefit_type, due_date
+            constraintName: uk_pol_benefit_event
+        - createTable:
+            tableName: pol_life_review
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: life_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: life_name, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: review_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: due_date, type: date, constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: note, type: varchar(500)}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: closed_by, type: varchar(100)}
+              - column: {name: closed_at, type: timestamp(6)}
+        - addUniqueConstraint:
+            tableName: pol_life_review
+            columnNames: life_id, review_type
+            constraintName: uk_pol_life_review
+  - changeSet:
+      id: 072-policy-servicing-seed
+      author: nsure
+      comment: >-
+        Contractual benefits as the product sign-offs describe them (specification section 06): Term Life cashback of
+        10 monthly premiums every 36 months and return of premiums on survival to the end of the term, Whole of Life
+        cashback of 10 premiums every 36 months, Care Cash cashback of 3 premiums every 36 months. No product has a
+        surrender or paid-up rule, so none offers one. The insurer's approved values replace these (D05).
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO prod_benefit_rule (product, benefit_type, interval_months, premium_multiple, percent, min_months, term_years, description, active, updated_by, updated_at)
+              SELECT seed.p, seed.b, seed.i, seed.m, seed.pc, seed.mm, seed.t, seed.d, TRUE, 'system', CURRENT_TIMESTAMP FROM (
+                SELECT 'Term Life' p, 'CASHBACK' b, 36 i, 10 m, CAST(NULL AS DECIMAL(7,2)) pc, CAST(NULL AS INT) mm, CAST(NULL AS INT) t,
+                       'Cashback of 10 monthly premiums after every 36 months in force' d UNION ALL
+                SELECT 'Term Life', 'RETURN_OF_PREMIUM', NULL, NULL, 100, NULL, 15,
+                       'Return of the premiums paid on survival to the end of the 15-year term' UNION ALL
+                SELECT 'Whole of Life', 'CASHBACK', 36, 10, NULL, NULL, NULL,
+                       'Cashback of 10 monthly premiums after every 36 months in force' UNION ALL
+                SELECT 'Care Cash', 'CASHBACK', 36, 3, NULL, NULL, NULL,
+                       'Cashback of 3 monthly premiums after every 36 months in force'
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM prod_benefit_rule x WHERE x.product = seed.p AND x.benefit_type = seed.b);
+
+              INSERT INTO prod_servicing_rule (product, reinstatement_needs_approval, max_backdate_days, child_review_age, max_cover_age, updated_by, updated_at)
+              SELECT p.name, FALSE, 90, 21, 70, 'system', CURRENT_TIMESTAMP FROM ins_product p
+              WHERE NOT EXISTS (SELECT 1 FROM prod_servicing_rule x WHERE x.product = p.name);
+
+              INSERT INTO fin_posting_rule (event_type, debit_account, credit_account, amount_field, business_domain,
+                description, status, version, updated_by, updated_at, effective_from, approval_status, approved_by, approved_at)
+              SELECT seed.e, seed.dr, seed.cr, 'amount', 'INDIVIDUAL', seed.d, 'ACTIVE', 1, 'system', CURRENT_TIMESTAMP,
+                     DATE '2000-01-01', 'APPROVED', 'system', CURRENT_TIMESTAMP FROM (
+                SELECT 'ContractualBenefitPaid' e, '5000' dr, '1000' cr, 'Contractual benefit paid (cashback, maturity, surrender)' d UNION ALL
+                SELECT 'PremiumRefunded', '4000', '1000', 'Premium refunded to the payer'
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM fin_posting_rule x WHERE x.event_type = seed.e);
+  - changeSet:
+      id: 072-policy-servicing-permissions
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT 'servicing', seed.c, seed.e, seed.a, FALSE, seed.f FROM (
+                SELECT 'READ_SERVICING' c, 'SERVICING' e, 'READ' a, 'View policy servicing: endorsements, lives and contractual benefits' f UNION ALL
+                SELECT 'MANAGE_SERVICING', 'SERVICING', 'MANAGE', 'Request endorsements, change insured lives and run servicing jobs' UNION ALL
+                SELECT 'APPROVE_ENDORSEMENT', 'ENDORSEMENT', 'APPROVE', 'Approve endorsements held for review and reinstatements' UNION ALL
+                SELECT 'BACKDATE_ENDORSEMENT', 'ENDORSEMENT', 'BACKDATE', 'Request an endorsement with an effective date in the past' UNION ALL
+                SELECT 'APPROVE_BENEFIT', 'BENEFIT', 'APPROVE', 'Approve and pay contractual benefits' UNION ALL
+                SELECT 'MANAGE_BENEFIT_RULE', 'BENEFIT_RULE', 'MANAGE', 'Maintain product benefit and servicing rules'
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = seed.c);
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON (
+                   (r.name = 'Super Admin' AND p.code IN ('READ_SERVICING', 'MANAGE_SERVICING', 'APPROVE_ENDORSEMENT',
+                        'BACKDATE_ENDORSEMENT', 'APPROVE_BENEFIT', 'MANAGE_BENEFIT_RULE'))
+                OR (r.name = 'Customer Support Representative' AND p.code IN ('READ_SERVICING', 'MANAGE_SERVICING'))
+                OR (r.name = 'Claims Assessor' AND p.code IN ('READ_SERVICING', 'APPROVE_BENEFIT'))
+                OR (r.name = 'Underwriter' AND p.code IN ('READ_SERVICING', 'READ_POLICY', 'APPROVE_ENDORSEMENT')))
+              WHERE NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);

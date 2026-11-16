@@ -47,6 +47,9 @@ public class PolicyWorkflow {
     public static final String ACTIVE_NO_COVER = "Active - No Cover";
     /** Spec 10 W-7: terminated by a paid claim (TC-24). */
     public static final String CLAIMED = "Claimed";
+    /** A premium arrived while cover was off, on a product whose rules need the reinstatement approved (NS-IL03-004). */
+    public static final String REINSTATEMENT_PENDING = "Reinstatement Pending";
+    public static final String TERMINATED = "Terminated";
     /** TC-18 / TC-20: months a policy stays in force without cover before it lapses. */
     static final int NO_COVER_MONTHS = 3;
     /** TC-23: cooling-off period after the policy start date. */
@@ -128,6 +131,7 @@ public class PolicyWorkflow {
         Period period = nextPeriod(policy);
         assertPeriodOpen(policy, period);
         String details;
+        boolean reinstatementHeld = false;
         switch (previous) {
             case PENDING_PAYMENT -> {
                 setCoverDates(policy, today);
@@ -156,11 +160,14 @@ public class PolicyWorkflow {
                 // TC-18: cover resumes immediately; the original cover start stands, so no new waiting period.
                 billing.waiveBefore(policy.getRef(), today, actor);
                 LocalDate next = today.plusMonths(months(policy));
-                policy.setStatus(ACTIVE);
+                // NS-IL03-004: a late premium restores cover by itself only where the product's rules allow it.
+                reinstatementHeld = reinstatementNeedsApproval(policy.getProduct());
+                policy.setStatus(reinstatementHeld ? REINSTATEMENT_PENDING : ACTIVE);
                 policy.setNextPremiumDue(next);
                 policy.setGracePeriodEnd(next.plusDays(terms(policy).getGracePeriodDays()));
-                details = "Premium " + bwp(policy.getPremium()) + " by " + paymentMethod
-                        + " · cover resumed from " + today + " with no new waiting period · next due " + next;
+                details = "Premium " + bwp(policy.getPremium()) + " by " + paymentMethod + (reinstatementHeld
+                        ? " · received while cover was off: reinstatement awaits approval · next due " + next
+                        : " · cover resumed from " + today + " with no new waiting period · next due " + next);
             }
             default -> throw new IllegalArgumentException(
                     "Policy " + ref + " is " + previous + " and can no longer be paid. Please buy a new policy.");
@@ -201,6 +208,9 @@ public class PolicyWorkflow {
         premium.put("receiptRef", receiptRef);
         premium.put("firstPremium", first);
         outbox.publish(Events.PREMIUM_RECEIVED, ref, premium, actor);
+        if (ACTIVE_NO_COVER.equals(previous) && !reinstatementHeld) {
+            publishReinstated(policy, "Premium received", actor);
+        }
         return policy;
     }
 
@@ -274,6 +284,7 @@ public class PolicyWorkflow {
         boolean coolingOff = !PENDING_PAYMENT.equals(previous) && policy.getCoverStartDate() != null
                 && !LocalDate.now().isAfter(policy.getCoverStartDate().plusDays(COOLING_OFF_DAYS));
         policy.setStatus(CANCELLED);
+        policy.terminated("CANCELLATION", LocalDate.now().plusDays(1));
         policy.setPaymentDueBy(null);
         policy.review(actor, note);
         // Cover runs to the end of the day it is cancelled: the cancellation applies from the next day.
@@ -285,6 +296,7 @@ public class PolicyWorkflow {
                 LocalDate.now().plusDays(1));
         outbox.publish(Events.POLICY_CANCELLED, ref, Map.of("policyRef", ref, "customerName",
                 policy.getCustomerName(), "product", policy.getProduct(), "reason", note), actor);
+        publishTerminated(policy, "CANCELLATION", note, actor);
         return policy;
     }
 
@@ -328,6 +340,12 @@ public class PolicyWorkflow {
                             + policy.getNextPremiumDue() + " unpaid. The policy stays in force without cover for "
                             + NO_COVER_MONTHS + " months; paying resumes cover with no new waiting period.",
                     WorkflowHistory.SYSTEM, policy.getGracePeriodEnd().plusDays(1));
+            Map<String, Object> lapsed = new LinkedHashMap<>();
+            lapsed.put("policyRef", policy.getRef());
+            lapsed.put("customerName", policy.getCustomerName());
+            lapsed.put("product", policy.getProduct());
+            lapsed.put("coverEndedOn", policy.getGracePeriodEnd().plusDays(1).toString());
+            outbox.publish(Events.COVER_LAPSED, policy.getRef(), lapsed, WorkflowHistory.SYSTEM);
             moved.add(policy.getRef());
         }
         List<InsurancePolicy> noCover = em.createQuery(
@@ -342,6 +360,9 @@ public class PolicyWorkflow {
             }
             policy.setStatus(LAPSED);
             policy.setLapseDate(today);
+            policy.terminated("LAPSE", today);
+            publishTerminated(policy, "LAPSE", "No premium within " + NO_COVER_MONTHS + " months of cover ending",
+                    WorkflowHistory.SYSTEM);
             history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Lapsed", ACTIVE_NO_COVER,
                     LAPSED, "No premium within " + NO_COVER_MONTHS + " months of cover ending on " + coverEnd
                             + ". Lapse is final: re-enrolling starts a new policy with new waiting periods.",
@@ -372,6 +393,8 @@ public class PolicyWorkflow {
         }
         String previous = policy.getStatus();
         policy.setStatus(CLAIMED);
+        policy.terminated("DEATH", LocalDate.now());
+        publishTerminated(policy, "DEATH", "Ended by claim " + claim.getRef(), actor);
         // The claim's event ended the cover: nothing after it is covered.
         LocalDate ended;
         try {
@@ -389,9 +412,87 @@ public class PolicyWorkflow {
             return false;
         }
         policy.setStatus(EXPIRED);
+        policy.terminated("EXPIRY", LocalDate.now());
         history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Expired", PENDING_PAYMENT,
                 EXPIRED, "Not paid by " + policy.getPaymentDueBy().withNano(0), WorkflowHistory.SYSTEM);
         return true;
+    }
+
+    // ── reinstatement and termination (NS-IL03-004, IL03 events) ──────────────────────────────────
+
+    /** Whether the product's servicing rule holds a late premium's reinstatement for approval. */
+    private boolean reinstatementNeedsApproval(String product) {
+        return em.createQuery("select r.reinstatementNeedsApproval from ServicingRule r where r.product = :product",
+                        Boolean.class)
+                .setParameter("product", product).getResultStream().findFirst().orElse(false);
+    }
+
+    /** Approves a held reinstatement: cover resumes today with no new waiting period. */
+    @Transactional
+    public InsurancePolicy approveReinstatement(String ref, String note, String actor) {
+        InsurancePolicy policy = policy(ref);
+        if (!REINSTATEMENT_PENDING.equals(policy.getStatus())) {
+            throw new IllegalArgumentException("Policy " + ref + " has no reinstatement awaiting approval.");
+        }
+        policy.setStatus(ACTIVE);
+        history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Reinstated", REINSTATEMENT_PENDING, ACTIVE,
+                "Reinstatement approved: " + note, actor, LocalDate.now());
+        publishReinstated(policy, note, actor);
+        return policy;
+    }
+
+    /** Declines a held reinstatement: the policy stays in force without cover and the premium is refundable. */
+    @Transactional
+    public InsurancePolicy declineReinstatement(String ref, String note, String actor) {
+        InsurancePolicy policy = policy(ref);
+        if (!REINSTATEMENT_PENDING.equals(policy.getStatus())) {
+            throw new IllegalArgumentException("Policy " + ref + " has no reinstatement awaiting approval.");
+        }
+        policy.setStatus(ACTIVE_NO_COVER);
+        history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Reinstatement Declined",
+                REINSTATEMENT_PENDING, ACTIVE_NO_COVER, "Cover stays off; the premium received is refundable: " + note,
+                actor);
+        return policy;
+    }
+
+    /**
+     * Ends an in-force contract for a stated cause (SURRENDER, MATURITY, DEATH or OTHER), from the given day. The
+     * cause is kept on the policy and published, so no reader has to infer it from the status.
+     */
+    @Transactional
+    public InsurancePolicy terminate(String ref, String cause, String note, LocalDate on, String actor) {
+        InsurancePolicy policy = policy(ref);
+        String previous = policy.getStatus();
+        if (!Set.of(ACTIVE, ACTIVE_NO_COVER, REINSTATEMENT_PENDING).contains(previous)) {
+            throw new IllegalArgumentException("Policy " + ref + " is " + previous + " and cannot be terminated.");
+        }
+        policy.setStatus(TERMINATED);
+        policy.terminated(cause, on);
+        history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Terminated", previous, TERMINATED,
+                cause.charAt(0) + cause.substring(1).toLowerCase(Locale.ROOT).replace('_', ' ') + ": " + note, actor, on);
+        publishTerminated(policy, cause, note, actor);
+        return policy;
+    }
+
+    private void publishReinstated(InsurancePolicy policy, String note, String actor) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("policyRef", policy.getRef());
+        data.put("customerName", policy.getCustomerName());
+        data.put("product", policy.getProduct());
+        data.put("reinstatedOn", LocalDate.now().toString());
+        data.put("note", note == null ? "" : note);
+        outbox.publish(Events.POLICY_REINSTATED, policy.getRef(), data, actor);
+    }
+
+    private void publishTerminated(InsurancePolicy policy, String cause, String note, String actor) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("policyRef", policy.getRef());
+        data.put("customerName", policy.getCustomerName());
+        data.put("product", policy.getProduct());
+        data.put("reason", cause);
+        data.put("terminatedOn", String.valueOf(policy.getTerminatedOn()));
+        data.put("note", note == null ? "" : note);
+        outbox.publish(Events.POLICY_TERMINATED, policy.getRef(), data, actor);
     }
 
     // ── beneficiaries ─────────────────────────────────────────────────────────────────────────────

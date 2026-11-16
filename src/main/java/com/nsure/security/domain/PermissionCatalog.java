@@ -45,6 +45,13 @@ public enum PermissionCatalog {
     READ_UNDERWRITING(null),
     UNDERWRITE_APPLICATION(null),
     MANAGE_UNDERWRITING(null),
+    // IL03/IL04 policy servicing (Nsure Life NS-IL03-002..006, NS-IL04-001..006).
+    READ_SERVICING(null),
+    MANAGE_SERVICING(null),
+    APPROVE_ENDORSEMENT(null),
+    BACKDATE_ENDORSEMENT(null),
+    APPROVE_BENEFIT(null),
+    MANAGE_BENEFIT_RULE(null),
 
     // ── spec 04 capabilities ────────────────────────────────────────────────────────────────────────────
     READ_DASHBOARD("dashboard.read"),

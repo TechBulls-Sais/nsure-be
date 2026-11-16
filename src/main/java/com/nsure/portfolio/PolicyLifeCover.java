@@ -60,7 +60,71 @@ public class PolicyLifeCover {
     @Column(name = "display_order", nullable = false)
     private int displayOrder;
 
+    /** ACTIVE or CEASED (NS-IL04-001): a removed life stays on the record with its history. */
+    @Column(name = "life_status", nullable = false, length = 20)
+    private String lifeStatus = "ACTIVE";
+
+    @Column(name = "effective_from")
+    private LocalDate effectiveFrom;
+
+    @Column(name = "effective_to")
+    private LocalDate effectiveTo;
+
+    /** Waiting periods run from here; a life removed and added again keeps its original date (NS-IL04-003). */
+    @Column(name = "waiting_period_start")
+    private LocalDate waitingPeriodStart;
+
+    @Column(name = "cease_reason", length = 300)
+    private String ceaseReason;
+
     protected PolicyLifeCover() {
+    }
+
+    /** A life added to an in-force policy by endorsement. */
+    public PolicyLifeCover(InsurancePolicy policy, RateTableService.PricedLife line, int displayOrder,
+            LocalDate effectiveFrom, LocalDate waitingPeriodStart) {
+        this(policy, line, displayOrder);
+        this.effectiveFrom = effectiveFrom;
+        this.waitingPeriodStart = waitingPeriodStart;
+    }
+
+    public boolean isActiveLife() {
+        return "ACTIVE".equals(lifeStatus);
+    }
+
+    public String getLifeStatus() {
+        return lifeStatus;
+    }
+
+    public LocalDate getEffectiveFrom() {
+        return effectiveFrom;
+    }
+
+    public LocalDate getEffectiveTo() {
+        return effectiveTo;
+    }
+
+    public LocalDate getWaitingPeriodStart() {
+        return waitingPeriodStart;
+    }
+
+    public String getCeaseReason() {
+        return ceaseReason;
+    }
+
+    public RelationshipType getRelationship() {
+        return relationship;
+    }
+
+    /** Ends this life's cover; the row and everything claimed under it stay (NS-IL04-004). */
+    public void cease(LocalDate on, String reason) {
+        this.lifeStatus = "CEASED";
+        this.effectiveTo = on;
+        this.ceaseReason = reason;
+    }
+
+    public void setMonthlyPremium(BigDecimal monthlyPremium) {
+        this.monthlyPremium = monthlyPremium;
     }
 
     PolicyLifeCover(CoverRecord record, RateTableService.PricedLife line, int displayOrder) {

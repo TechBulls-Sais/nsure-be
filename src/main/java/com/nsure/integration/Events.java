@@ -56,6 +56,17 @@ public final class Events {
     public static final String UNDERWRITING_DECIDED = "UnderwritingDecided";
     public static final String OFFER_REVISED = "OfferRevised";
     public static final String OFFER_ANSWERED = "OfferAnswered";
+    // IL03/IL04 policy servicing.
+    public static final String POLICY_CHANGED = "PolicyChanged";
+    public static final String COVER_LAPSED = "CoverLapsed";
+    public static final String POLICY_REINSTATED = "PolicyReinstated";
+    public static final String POLICY_TERMINATED = "PolicyTerminated";
+    public static final String INSURED_LIFE_ADDED = "InsuredLifeAdded";
+    public static final String INSURED_LIFE_CEASED = "InsuredLifeCeased";
+    public static final String DEPENDANT_ELIGIBILITY_CHANGED = "DependantEligibilityChanged";
+    public static final String BENEFIT_DUE = "ContractualBenefitDue";
+    public static final String BENEFIT_PAID = "ContractualBenefitPaid";
+    public static final String PREMIUM_REFUNDED = "PremiumRefunded";
     public static final String OFFER_ACCEPTED = "OfferAccepted";
 
     // Collections and claims (spec SH04, SH05).

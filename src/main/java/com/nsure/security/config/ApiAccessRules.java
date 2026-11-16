@@ -261,6 +261,23 @@ public final class ApiAccessRules {
             rule(PUT, "/underwriting/rules/*", anyOf("MANAGE_UNDERWRITING")),
             rule(PUT, "/underwriting/authorities/*", anyOf("MANAGE_UNDERWRITING")),
 
+            // ── policy servicing IL03/IL04 ─────────────────────────────────────────────────────────────
+            rule(GET, "/servicing/**", anyOf("READ_SERVICING")),
+            rule(POST, "/servicing/policies/*/endorsements/preview", anyOf("MANAGE_SERVICING")),
+            rule(POST, "/servicing/policies/*/endorsements", anyOf("MANAGE_SERVICING")),
+            rule(POST, "/servicing/endorsements/*/decision", anyOf("APPROVE_ENDORSEMENT", "UNDERWRITE_APPLICATION")),
+            rule(POST, "/servicing/policies/*/reinstatement", anyOf("APPROVE_ENDORSEMENT")),
+            rule(POST, "/servicing/policies/*/termination", anyOf("APPROVE_ENDORSEMENT")),
+            rule(POST, "/servicing/policies/*/paid-up", anyOf("APPROVE_ENDORSEMENT")),
+            rule(POST, "/servicing/policies/*/surrender", anyOf("MANAGE_SERVICING")),
+            rule(POST, "/servicing/benefit-events/run", anyOf("MANAGE_SERVICING")),
+            rule(POST, "/servicing/benefit-events/*/decision", anyOf("APPROVE_BENEFIT")),
+            rule(POST, "/servicing/benefit-events/*/payment", anyOf("APPROVE_BENEFIT")),
+            rule(POST, "/servicing/life-reviews/run", anyOf("MANAGE_SERVICING")),
+            rule(POST, "/servicing/life-reviews/*/close", anyOf("MANAGE_SERVICING")),
+            rule(PUT, "/servicing/benefit-rules", anyOf("MANAGE_BENEFIT_RULE")),
+            rule(PUT, "/servicing/rules/*", anyOf("MANAGE_BENEFIT_RULE")),
+
             // ── reinsurance SH07 (Reinsurance Officer) ─────────────────────────────────────────────────
             rule(GET, "/reinsurance/**", anyOf("READ_REINSURANCE")),
             rule(POST, "/reinsurance/treaties", anyOf("MANAGE_REINSURANCE")),

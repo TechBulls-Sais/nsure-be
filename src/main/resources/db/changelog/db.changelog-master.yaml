@@ -209,3 +209,6 @@ databaseChangeLog:
   - include:
       file: changes/071-individual-underwriting.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/072-policy-servicing.yaml
+      relativeToChangelogFile: true
