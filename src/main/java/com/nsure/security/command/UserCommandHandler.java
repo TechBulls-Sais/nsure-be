@@ -1,5 +1,6 @@
 package com.nsure.security.command;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nsure.audit.service.CommandHandler;
@@ -7,16 +8,13 @@ import com.nsure.audit.service.CommandRequest;
 import com.nsure.audit.service.CommandResult;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.security.domain.AppUser;
-import com.nsure.security.domain.Office;
 import com.nsure.security.domain.Permission;
 import com.nsure.security.domain.Role;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.repository.AppUserRepository;
-import com.nsure.security.repository.OfficeRepository;
 import com.nsure.security.repository.RoleRepository;
-import com.nsure.security.service.OfficeAccessValidator;
 import com.nsure.security.service.PlatformSecurityContext;
-import com.nsure.security.service.SuperAdminGuard;
+import com.nsure.security.service.PortalCustomerLinks;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -28,29 +26,23 @@ public class UserCommandHandler implements CommandHandler {
 
     private final AppUserRepository users;
     private final RoleRepository roles;
-    private final OfficeRepository offices;
     private final PlatformSecurityContext security;
-    private final OfficeAccessValidator access;
     private final PasswordEncoder passwordEncoder;
-    private final SuperAdminGuard superAdmins;
+    private final PortalCustomerLinks portalLinks;
     private final ObjectMapper mapper;
 
     public UserCommandHandler(
             AppUserRepository users,
             RoleRepository roles,
-            OfficeRepository offices,
             PlatformSecurityContext security,
-            OfficeAccessValidator access,
             PasswordEncoder passwordEncoder,
-            SuperAdminGuard superAdmins,
+            PortalCustomerLinks portalLinks,
             ObjectMapper mapper) {
         this.users = users;
         this.roles = roles;
-        this.offices = offices;
         this.security = security;
-        this.access = access;
         this.passwordEncoder = passwordEncoder;
-        this.superAdmins = superAdmins;
+        this.portalLinks = portalLinks;
         this.mapper = mapper;
     }
 
@@ -66,7 +58,6 @@ public class UserCommandHandler implements CommandHandler {
 
     @Override
     public CommandResult handle(CommandRequest request) {
-        superAdmins.require();
         return switch (request.actionName()) {
             case "CREATE" -> create(request);
             case "UPDATE" -> update(request);
@@ -85,10 +76,10 @@ public class UserCommandHandler implements CommandHandler {
         user.setUsername(username);
         user.setPassword(passwordEncoder.encode(requiredPassword(body.password())));
         user.setEnabled(body.enabled() == null || body.enabled());
-        user.setOffice(resolveOffice(body.officeId(), true));
         if (body.roleIds() != null) {
             Set<Role> assigned = loadRoles(body.roleIds());
             assertMayGrant(assigned);
+            assertPortalScope(username, assigned);
             user.replaceRoles(assigned);
         }
         user = users.save(user);
@@ -98,9 +89,7 @@ public class UserCommandHandler implements CommandHandler {
     private CommandResult update(CommandRequest request) {
         AppUser user = users.findById(request.resourceId())
                 .orElseThrow(() -> new NotFoundException("User not found"));
-        if (user.getOffice() != null) {
-            access.validateAccess(user.getOffice().getHierarchy(), access.hierarchyOf(security.authenticatedUser()));
-        }
+        assertMayManage(user);
         UserBody body = read(request.json());
         if (body.username() != null) {
             String username = requiredUsername(body.username());
@@ -118,15 +107,13 @@ public class UserCommandHandler implements CommandHandler {
             }
             user.setEnabled(body.enabled());
         }
-        if (body.officeId() != null) {
-            user.setOffice(resolveOffice(body.officeId(), true));
-        }
         if (body.roleIds() != null) {
             Set<Role> assigned = loadRoles(body.roleIds());
             assertMayGrant(assigned);
+            assertPortalScope(user.getUsername(), assigned);
             user.replaceRoles(assigned);
-            if ("admin".equalsIgnoreCase(user.getUsername()) && !user.hasPermissionTo("ALL_FUNCTIONS")) {
-                throw new IllegalArgumentException("The admin account must keep ALL_FUNCTIONS");
+            if ("admin".equalsIgnoreCase(user.getUsername()) && !user.isSuperAdmin()) {
+                throw new IllegalArgumentException("The admin account must keep the Super Admin role");
             }
         }
         users.save(user);
@@ -136,6 +123,7 @@ public class UserCommandHandler implements CommandHandler {
     private CommandResult delete(CommandRequest request) {
         AppUser user = users.findById(request.resourceId())
                 .orElseThrow(() -> new NotFoundException("User not found"));
+        assertMayManage(user);
         if (isReserved(user.getUsername())) {
             throw new IllegalArgumentException("This account cannot be deleted");
         }
@@ -144,19 +132,6 @@ public class UserCommandHandler implements CommandHandler {
         }
         users.delete(user);
         return new CommandResult(user.getId(), idJson(user.getId()));
-    }
-
-    private Office resolveOffice(Long officeId, boolean required) {
-        if (officeId == null) {
-            if (required) {
-                throw new IllegalArgumentException("officeId is required");
-            }
-            return null;
-        }
-        Office office = offices.findById(officeId)
-                .orElseThrow(() -> new IllegalArgumentException("Office not found"));
-        access.validateAccess(office.getHierarchy(), access.hierarchyOf(security.authenticatedUser()));
-        return office;
     }
 
     private Set<Role> loadRoles(Set<Long> roleIds) {
@@ -168,9 +143,36 @@ public class UserCommandHandler implements CommandHandler {
         return assigned;
     }
 
+    /** A super admin account is managed only by another super admin: UPDATE_USER alone cannot reset its password. */
+    private void assertMayManage(AppUser target) {
+        if (target.isSuperAdmin() && !security.authenticatedUser().isSuperAdmin()) {
+            throw new NoAuthorizationException("Only a super admin can change a super admin account.");
+        }
+    }
+
+    /**
+     * Spec 04 A-19: a login linked to a customer record is a portal customer. It may hold only roles with no
+     * permission and no desk access, or it would carry staff powers into the portal (or stop being scoped).
+     */
+    private void assertPortalScope(String username, Set<Role> assigned) {
+        if (username == null || !portalLinks.isLinked(username)) {
+            return;
+        }
+        for (Role role : assigned) {
+            boolean armed = role.isDeskAccess() || (role.getPermissions() != null && !role.getPermissions().isEmpty());
+            if (armed || AppUser.SUPER_ADMIN_ROLE.equalsIgnoreCase(role.getName())) {
+                throw new IllegalArgumentException(username + " is linked to a customer record, so it cannot hold "
+                        + role.getName() + ": that role has permissions or desk access.");
+            }
+        }
+    }
+
     private void assertMayGrant(Set<Role> assigned) {
         AppUser caller = security.authenticatedUser();
         for (Role role : assigned) {
+            if (AppUser.SUPER_ADMIN_ROLE.equalsIgnoreCase(role.getName()) && !caller.isSuperAdmin()) {
+                throw new NoAuthorizationException("Only a super admin can assign the Super Admin role.");
+            }
             if (role.isDisabled() || role.getPermissions() == null) {
                 continue;
             }
@@ -223,6 +225,7 @@ public class UserCommandHandler implements CommandHandler {
         }
     }
 
-    private record UserBody(String username, String password, Boolean enabled, Long officeId, Set<Long> roleIds) {
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record UserBody(String username, String password, Boolean enabled, Set<Long> roleIds) {
     }
 }

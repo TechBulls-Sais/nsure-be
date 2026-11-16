@@ -22,8 +22,8 @@ public class AppUserDetailsService implements UserDetailsService {
     public UserDetails loadUserByUsername(String username) {
         AppUser user = users.findByUsername(username)
                 .orElseThrow(() -> new UsernameNotFoundException(username));
-        // Resolve both role collections before the session closes. Hibernate defers the
-        // second eager collection until it is touched, and Spring Security reads
+        // Resolve the role and emergency-grant collections before the session closes. Hibernate defers
+        // eager collections until they are touched, and Spring Security reads
         // authorities only after this method returns.
         user.getAuthorities();
         return user;

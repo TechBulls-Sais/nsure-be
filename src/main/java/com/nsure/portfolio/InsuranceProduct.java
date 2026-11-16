@@ -91,6 +91,10 @@ public class InsuranceProduct {
     @Column(name = "grace_period_days", nullable = false)
     private int gracePeriodDays = 14;
 
+    /** Spec 01 BR-23 / 09 D5: the most beneficiaries a policy may name. Default 5; Tap Cover 1 (TC-40). */
+    @Column(name = "max_beneficiaries", nullable = false)
+    private int maxBeneficiaries = 5;
+
     public Long getId() {
         return id;
     }
@@ -189,5 +193,9 @@ public class InsuranceProduct {
 
     public int getGracePeriodDays() {
         return gracePeriodDays;
+    }
+
+    public int getMaxBeneficiaries() {
+        return maxBeneficiaries;
     }
 }

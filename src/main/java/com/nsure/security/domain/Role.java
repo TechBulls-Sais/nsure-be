@@ -18,6 +18,14 @@ import java.util.Set;
 @Table(name = "app_role")
 public class Role extends AuditableEntity {
 
+    /**
+     * Roles that may never hold a permission, desk access or a claim approval limit (spec 04 A-1). Hardcoded on
+     * purpose: a configuration row would itself be editable, so it could not be the guard. A grant to the portal
+     * role would hand that permission to every customer at once.
+     */
+    public static final java.util.Set<String> PROTECTED_ROLES = java.util.Set.of(
+            "Policyholder / End User", "Guest", "All");
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -30,6 +38,10 @@ public class Role extends AuditableEntity {
 
     @Column(nullable = false)
     private boolean disabled;
+
+    /** Spec 04 §2: a desk-access role makes its holder staff; without one a user is a scoped portal customer. */
+    @Column(name = "desk_access", nullable = false)
+    private boolean deskAccess = true;
 
     @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(
@@ -83,6 +95,18 @@ public class Role extends AuditableEntity {
 
     public void setDisabled(boolean disabled) {
         this.disabled = disabled;
+    }
+
+    public boolean isDeskAccess() {
+        return deskAccess;
+    }
+
+    public void setDeskAccess(boolean deskAccess) {
+        this.deskAccess = deskAccess;
+    }
+
+    public boolean isProtectedRole() {
+        return name != null && PROTECTED_ROLES.stream().anyMatch(name::equalsIgnoreCase);
     }
 
     public Set<Permission> getPermissions() {

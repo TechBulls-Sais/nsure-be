@@ -1,0 +1,146 @@
+databaseChangeLog:
+  # Alignment with the Nsure Life Detailed Product Specification v1.0 (docs/SPEC_IMPLEMENTATION_PLAN.md §8b):
+  # deny by default with explicit grants only (NS-SH11-002/003), no self-approval for anyone (NS-UX-004, AT-SH10-01),
+  # emergency access that is time-limited, justified, alerted and reviewed (NS-SH11-003), and no office/branch tree.
+  - changeSet:
+      id: 055-emergency-access-codes
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT seed.g, seed.c, seed.e, seed.a, FALSE, seed.f
+              FROM (
+                SELECT 'authorisation' g, 'GRANT_EMERGENCY_ACCESS' c, 'EMERGENCY_ACCESS' e, 'GRANT' a,
+                       'Grant time-limited emergency access to a break-glass permission' f UNION ALL
+                SELECT 'authorisation', 'REVIEW_EMERGENCY_ACCESS', 'EMERGENCY_ACCESS', 'REVIEW',
+                       'Review emergency access that was granted'
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = seed.c);
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code = 'GRANT_EMERGENCY_ACCESS'
+              WHERE r.name = 'Super Admin'
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code = 'REVIEW_EMERGENCY_ACCESS'
+              WHERE r.name = 'Compliance & Auditor'
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+  - changeSet:
+      id: 055-remove-blanket-permissions
+      author: nsure
+      comment: >-
+        ALL_FUNCTIONS, ALL_FUNCTIONS_READ and CHECKER_SUPER_USER granted everything, every read, or every approval.
+        The administrator role already holds explicit grants for each code it needs; the wildcards and their grants go.
+      changes:
+        - sql:
+            sql: |
+              DELETE FROM app_role_permission WHERE permission_id IN (SELECT id FROM app_permission
+                  WHERE code IN ('ALL_FUNCTIONS', 'ALL_FUNCTIONS_READ', 'CHECKER_SUPER_USER',
+                                 'CREATE_OFFICE', 'READ_OFFICE', 'UPDATE_OFFICE', 'DELETE_OFFICE'));
+              DELETE FROM app_permission WHERE code IN ('ALL_FUNCTIONS', 'ALL_FUNCTIONS_READ', 'CHECKER_SUPER_USER',
+                                 'CREATE_OFFICE', 'READ_OFFICE', 'UPDATE_OFFICE', 'DELETE_OFFICE');
+  - changeSet:
+      id: 055-super-admin-explicit-grants
+      author: nsure
+      comment: >-
+        With the wildcards gone, the administrator role holds each code it uses as an explicit grant, including codes
+        added after 047. Break-glass codes are never held by a role (they come only through emergency access), and
+        reviewing emergency access stays with Compliance so the reviewer is independent of the granter.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id
+              FROM app_role r
+              CROSS JOIN app_permission p
+              WHERE r.name = 'Super Admin'
+                AND p.code NOT IN ('UPDATE_CONTROL', 'OVERRIDE_CLAIM_FOUR_EYES', 'PUBLISH_OWN_RATE_TABLE',
+                                   'REVIEW_EMERGENCY_ACCESS')
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+  - changeSet:
+      id: 055-emergency-access-grant
+      author: nsure
+      changes:
+        - createTable:
+            tableName: emergency_access_grant
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: user_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: permission_code, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(1000), constraints: {nullable: false}}
+              - column: {name: granted_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: granted_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: expires_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: revoked_by, type: varchar(100)}
+              - column: {name: revoked_at, type: timestamp(6)}
+              - column: {name: reviewed_by, type: varchar(100)}
+              - column: {name: reviewed_at, type: timestamp(6)}
+              - column: {name: review_note, type: varchar(1000)}
+        - addForeignKeyConstraint:
+            baseTableName: emergency_access_grant
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_emergency_access_user
+        - createIndex:
+            tableName: emergency_access_grant
+            indexName: ix_emergency_access_user
+            columns:
+              - column: {name: user_id}
+              - column: {name: expires_at}
+  - changeSet:
+      id: 055-remove-office-hierarchy
+      author: nsure
+      comment: >-
+        The office/branch tree is a microfinance concept the Nsure Life specification never asks for. Access is role
+        permissions combined with the party relationship (NS-SH11-002), so users, audits and maker-checker no longer
+        carry an office.
+      changes:
+        - dropForeignKeyConstraint:
+            baseTableName: command_source
+            constraintName: fk_command_office
+        - dropIndex:
+            tableName: command_source
+            indexName: idx_command_office
+        - dropColumn:
+            tableName: command_source
+            columnName: office_id
+        - dropForeignKeyConstraint:
+            baseTableName: app_user
+            constraintName: fk_app_user_office
+        - dropColumn:
+            tableName: app_user
+            columnName: office_id
+        - dropForeignKeyConstraint:
+            baseTableName: office
+            constraintName: fk_office_parent
+        - dropTable:
+            tableName: office
+  - changeSet:
+      id: 055-second-administrator
+      author: nsure
+      context: demo
+      comment: >-
+        Changes to roles and users need a second person (no self-approval, NS-UX-004). A second administrator demo
+        login checks the first one's changes. Password "password".
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_user (username, password, enabled)
+              SELECT 'secadmin', '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG', TRUE
+              WHERE NOT EXISTS (SELECT 1 FROM app_user x WHERE x.username = 'secadmin');
+              INSERT INTO app_user_role (user_id, role_id)
+              SELECT u.id, r.id FROM app_user u JOIN app_role r ON r.name = 'Super Admin'
+              WHERE u.username = 'secadmin'
+                AND NOT EXISTS (SELECT 1 FROM app_user_role x WHERE x.user_id = u.id AND x.role_id = r.id);
+  - changeSet:
+      id: 055-super-admin-description
+      author: nsure
+      comment: The administrator role no longer passes every check or approves its own work (NS-SH11-002, NS-UX-004).
+      changes:
+        - sql:
+            sql: |
+              UPDATE app_role
+              SET description = 'Identity and platform administration through explicit grants. Never approves their own change; break-glass permissions only through emergency access.'
+              WHERE name = 'Super Admin';

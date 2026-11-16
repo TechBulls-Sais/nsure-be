@@ -16,8 +16,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class CommunicationController {
 
     private final CommunicationService communications;
+    private final MessagingWebhooks webhooks;
+    private final PremiumReminders reminders;
 
-    public CommunicationController(CommunicationService communications) {
+    public CommunicationController(CommunicationService communications, MessagingWebhooks webhooks,
+            PremiumReminders reminders) {
+        this.webhooks = webhooks;
+        this.reminders = reminders;
         this.communications = communications;
     }
 
@@ -68,5 +73,47 @@ public class CommunicationController {
     public CommunicationViews.CustomerPreferencesView setPreference(@PathVariable String customerRef,
             @RequestBody JsonNode body) {
         return communications.setPreference(customerRef, body);
+    }
+
+    // ── inbound correspondence and triage (Blueprint §5) ──
+
+    @GetMapping("/inbound")
+    public List<CommunicationViews.InboundView> inbound(@RequestParam(required = false) String status) {
+        return webhooks.list(status);
+    }
+
+    /** Body: {@code {"customerRef": "CUS-1001"}}: who an unmatched message is from. */
+    @PostMapping("/inbound/{id}/assign")
+    public CommunicationViews.InboundView assign(@PathVariable Long id, @RequestBody(required = false) JsonNode body) {
+        return webhooks.assign(id, body);
+    }
+
+    // ── bulk operational notices (maker-checker) ──
+
+    @GetMapping("/bulk-notices")
+    public List<CommunicationViews.BulkNoticeView> bulkNotices() {
+        return communications.bulkNotices();
+    }
+
+    /** Body: {@code {"templateId", "policyStatus", "product", "reason"}}. */
+    @PostMapping("/bulk-notices")
+    public CommunicationViews.BulkNoticeView requestBulkNotice(@RequestBody(required = false) JsonNode body) {
+        return communications.requestBulkNotice(body);
+    }
+
+    @PostMapping("/bulk-notices/{ref}/approve")
+    public CommunicationViews.BulkNoticeView approveBulkNotice(@PathVariable String ref) {
+        return communications.approveBulkNotice(ref);
+    }
+
+    @PostMapping("/bulk-notices/{ref}/reject")
+    public CommunicationViews.BulkNoticeView rejectBulkNotice(@PathVariable String ref) {
+        return communications.rejectBulkNotice(ref);
+    }
+
+    /** Runs the premium-reminder sweep now; it also runs every morning. */
+    @PostMapping("/reminders/run")
+    public java.util.Map<String, Integer> runReminders() {
+        return java.util.Map.of("published", reminders.runNow());
     }
 }

@@ -41,7 +41,7 @@ class CustomerPortalApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.customerPortal").value(true))
                 .andExpect(jsonPath("$.canReviewKyc").value(false))
-                .andExpect(jsonPath("$.roles[0]").value("Policyholder"));
+                .andExpect(jsonPath("$.roles[0]").value("Policyholder / End User"));
 
         mockMvc.perform(get("/me").with(httpBasic("onboarding", "password")))
                 .andExpect(status().isOk())

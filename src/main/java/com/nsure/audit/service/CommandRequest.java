@@ -8,7 +8,6 @@ public record CommandRequest(
         Long resourceId,
         String json,
         String idempotencyKey,
-        Long officeId,
         boolean idempotencyRetry) {
 
     public String permissionCode() {

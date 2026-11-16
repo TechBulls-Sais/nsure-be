@@ -15,3 +15,11 @@ nsure:
     display-name: ${NSURE_INSURER_NAME}
     # Identity is bound by provisioning (the migrate job), never by an application that happens to start first.
     bind-on-first-start: false
+  # Declaration codes go out through the messaging provider only; never in an API response.
+  declaration:
+    expose-otp: false
+  payments:
+    # Card payments go to the configured provider; the hosted-checkout simulator is for development only.
+    card-gateway: ${NSURE_CARD_GATEWAY:SIMULATOR}
+    public-base-url: ${NSURE_PUBLIC_BASE_URL}
+    ui-base-url: ${NSURE_UI_BASE_URL}

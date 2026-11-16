@@ -138,7 +138,7 @@ class ReinsuranceApiTest {
                 .andReturn().getResponse().getContentAsString();
         String surplus = JsonPath.read(body, "$.ref");
 
-        // Four eyes: the drafter cannot approve. Super Admin can approve a treaty they drafted.
+        // Four eyes: the drafter cannot approve, the administrator included (Nsure Life NS-UX-004).
         mockMvc.perform(post("/reinsurance/treaties/" + surplus + "/approve").with(httpBasic("reinsurance", "password")))
                 .andExpect(status().isForbidden());
         String own = JsonPath.read(mockMvc.perform(json(post("/reinsurance/treaties"), "admin", treaty(
@@ -148,9 +148,11 @@ class ReinsuranceApiTest {
                 .andExpect(jsonPath("$.createdBy").value("admin"))
                 .andReturn().getResponse().getContentAsString(), "$.ref");
         mockMvc.perform(post("/reinsurance/treaties/" + own + "/approve").with(httpBasic("admin", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/reinsurance/treaties/" + own + "/approve").with(httpBasic("secadmin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPROVED"))
-                .andExpect(jsonPath("$.approvedBy").value("admin"));
+                .andExpect(jsonPath("$.approvedBy").value("secadmin"));
         mockMvc.perform(post("/reinsurance/treaties/" + surplus + "/approve").with(httpBasic("finance", "password")))
                 .andExpect(status().isForbidden());
         mockMvc.perform(post("/reinsurance/treaties/" + surplus + "/approve").with(httpBasic("admin", "password")))

@@ -1,8 +1,6 @@
 package com.nsure.security.domain;
 
 import com.nsure.audit.domain.AuditableEntity;
-import com.nsure.security.capability.CapabilityGrant;
-import com.nsure.security.capability.NsureRole;
 import com.nsure.security.exception.NoAuthorizationException;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -13,23 +11,34 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.JoinTable;
 import jakarta.persistence.ManyToMany;
-import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
+/**
+ * The signed-in principal. Users hold roles, roles hold permission codes; the spec's roles and grant matrix are data on
+ * top of that one model. Access is deny by default (Nsure Life NS-SH11-002): a code is held only through an enabled
+ * role that grants it or an active emergency grant (NS-SH11-003). There is no wildcard code and no role that passes
+ * every check, so making, approving and administering stay separable duties.
+ */
 @Entity
 @Table(name = "app_user")
 public class AppUser extends AuditableEntity implements UserDetails {
 
-    /** The one top role (043-single-super-admin-role): every permission, and it cannot be renamed or removed. */
+    /** The administrator role. Only its holders change it or its membership; it grants nothing by name. */
     public static final String SUPER_ADMIN_ROLE = "Super Admin";
+
+    /** The portal customer role (spec 04 §2, role 1). Protected: it never holds a permission (A-1, A-2). */
+    public static final String PORTAL_ROLE = "Policyholder / End User";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -44,10 +53,6 @@ public class AppUser extends AuditableEntity implements UserDetails {
     @Column(nullable = false)
     private boolean enabled = true;
 
-    @ManyToOne(fetch = FetchType.EAGER)
-    @JoinColumn(name = "office_id")
-    private Office office;
-
     @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(
             name = "app_user_role",
@@ -55,34 +60,27 @@ public class AppUser extends AuditableEntity implements UserDetails {
             inverseJoinColumns = @JoinColumn(name = "role_id"))
     private Set<Role> roles = new HashSet<>();
 
-    @ManyToMany(fetch = FetchType.EAGER)
-    @JoinTable(
-            name = "nsure_user_role",
-            joinColumns = @JoinColumn(name = "user_id"),
-            inverseJoinColumns = @JoinColumn(name = "role_id"))
-    private Set<NsureRole> capabilityRoles = new HashSet<>();
+    /** Emergency grants; an active one counts as a held permission while it lasts (NS-SH11-003). */
+    @OneToMany(mappedBy = "user", fetch = FetchType.EAGER)
+    private Set<EmergencyAccessGrant> emergencyGrants = new HashSet<>();
 
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
         List<GrantedAuthority> authorities = new ArrayList<>();
-        if (roles == null) {
-            return authorities;
-        }
-        for (Role role : roles) {
-            if (role.isDisabled()) {
-                continue;
-            }
-            for (Permission permission : role.getPermissions()) {
-                authorities.add(new SimpleGrantedAuthority(permission.getCode()));
-            }
-        }
-        if (capabilityRoles != null) {
-            for (NsureRole capabilityRole : capabilityRoles) {
-                if (!capabilityRole.isEnabled() || capabilityRole.getGrants() == null) {
+        if (roles != null) {
+            for (Role role : roles) {
+                if (role.isDisabled() || role.getPermissions() == null) {
                     continue;
                 }
-                for (CapabilityGrant grant : capabilityRole.getGrants()) {
-                    authorities.add(new SimpleGrantedAuthority(grant.getCapability()));
+                for (Permission permission : role.getPermissions()) {
+                    authorities.add(new SimpleGrantedAuthority(permission.getCode()));
+                }
+            }
+        }
+        if (emergencyGrants != null) {
+            for (EmergencyAccessGrant grant : emergencyGrants) {
+                if (grant.isActive()) {
+                    authorities.add(new SimpleGrantedAuthority(grant.getPermissionCode()));
                 }
             }
         }
@@ -90,53 +88,84 @@ public class AppUser extends AuditableEntity implements UserDetails {
     }
 
     public void validateHasReadPermission(String entity) {
-        validateHasPermission("READ", entity);
+        validateHasPermissionTo(PermissionCode.code("READ", entity));
     }
 
     public void validateHasCreatePermission(String entity) {
-        validateHasPermission("CREATE", entity);
+        validateHasPermissionTo(PermissionCode.code("CREATE", entity));
     }
 
     public void validateHasUpdatePermission(String entity) {
-        validateHasPermission("UPDATE", entity);
+        validateHasPermissionTo(PermissionCode.code("UPDATE", entity));
     }
 
     public void validateHasDeletePermission(String entity) {
-        validateHasPermission("DELETE", entity);
+        validateHasPermissionTo(PermissionCode.code("DELETE", entity));
     }
 
     public void validateHasPermissionTo(String permissionCode) {
         if (!hasPermissionTo(permissionCode)) {
-            throw new NoAuthorizationException("User has no authority to: " + permissionCode);
+            throw new NoAuthorizationException("You do not have permission to do this (" + permissionCode + ").");
         }
     }
 
-    private void validateHasPermission(String action, String entity) {
-        String code = PermissionCode.code(action, entity);
-        if ("READ".equals(action)) {
-            if (hasAny("ALL_FUNCTIONS", "ALL_FUNCTIONS_READ", code)) {
+    /** At least one of the codes ({@code requireAny}, spec 04 §5.1). */
+    public void validateHasAnyPermission(String... permissionCodes) {
+        for (String code : permissionCodes) {
+            if (hasPermissionTo(code)) {
                 return;
             }
-        } else if (hasAny("ALL_FUNCTIONS", code)) {
-            return;
         }
-        throw new NoAuthorizationException("User has no authority to " + action + " " + entity);
+        throw new NoAuthorizationException(
+                "You do not have permission to do this (" + String.join(" or ", permissionCodes) + ").");
     }
 
+    /**
+     * Whether this user may perform {@code permissionCode}: deny by default. Held through an enabled role that grants
+     * it, or through an active emergency grant. An unknown code is a programming error (spec 04 A-4).
+     */
     public boolean hasPermissionTo(String permissionCode) {
-        // Super Admin may perform every function, even if its role lost ALL_FUNCTIONS.
-        if (isSuperAdmin() || hasAllFunctions()) {
-            return true;
+        String code = PermissionCatalog.require(permissionCode);
+        if (roles != null) {
+            for (Role role : roles) {
+                if (role.hasPermissionTo(code)) {
+                    return true;
+                }
+            }
         }
-        if (roles == null) {
-            return false;
-        }
-        for (Role role : roles) {
-            if (role.hasPermissionTo(permissionCode)) {
-                return true;
+        if (emergencyGrants != null) {
+            for (EmergencyAccessGrant grant : emergencyGrants) {
+                if (grant.isActive() && grant.getPermissionCode().equalsIgnoreCase(code)) {
+                    return true;
+                }
             }
         }
         return false;
+    }
+
+    /** Every code this user may perform now. */
+    public SortedSet<String> effectivePermissions() {
+        SortedSet<String> codes = new TreeSet<>();
+        for (String code : PermissionCatalog.codes()) {
+            if (hasPermissionTo(code)) {
+                codes.add(code);
+            }
+        }
+        return codes;
+    }
+
+    /** Keeps the in-memory side in step when a grant is created (the table side is the grant's user_id). */
+    void attachEmergencyGrant(EmergencyAccessGrant grant) {
+        if (emergencyGrants == null) {
+            emergencyGrants = new HashSet<>();
+        }
+        emergencyGrants.add(grant);
+    }
+
+    /** The emergency grants active now. */
+    public List<EmergencyAccessGrant> activeEmergencyGrants() {
+        return emergencyGrants == null ? List.of()
+                : emergencyGrants.stream().filter(EmergencyAccessGrant::isActive).toList();
     }
 
     public void replaceRoles(Set<Role> assigned) {
@@ -147,27 +176,6 @@ public class AppUser extends AuditableEntity implements UserDetails {
         if (assigned != null) {
             roles.addAll(assigned);
         }
-    }
-
-    private boolean hasAllFunctions() {
-        if (roles == null) {
-            return false;
-        }
-        for (Role role : roles) {
-            if (role.hasPermissionTo("ALL_FUNCTIONS")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean hasAny(String... codes) {
-        for (String code : codes) {
-            if (hasPermissionTo(code)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     @Override
@@ -220,14 +228,6 @@ public class AppUser extends AuditableEntity implements UserDetails {
         this.id = id;
     }
 
-    public Office getOffice() {
-        return office;
-    }
-
-    public void setOffice(Office office) {
-        this.office = office;
-    }
-
     public Set<Role> getRoles() {
         return roles;
     }
@@ -244,21 +244,34 @@ public class AppUser extends AuditableEntity implements UserDetails {
         return false;
     }
 
-    /** A customer login: it may use the customer portal only, never the staff workspace or its API. */
-    public boolean isPortalCustomer() {
-        return hasRole("Policyholder") && !isSuperAdmin();
-    }
-
-    public boolean isSuperAdmin() {
+    /**
+     * Staff: holds at least one enabled role with desk access. The test is positive (spec 04 A-11): an account that is
+     * not explicitly staff is a scoped portal customer, and an account with no role at all reaches nothing but the
+     * portal.
+     */
+    public boolean isStaffUser() {
         if (roles == null) {
             return false;
         }
         for (Role role : roles) {
-            if (!role.isDisabled() && SUPER_ADMIN_ROLE.equalsIgnoreCase(role.getName())) {
+            if (!role.isDisabled() && role.isDeskAccess()) {
                 return true;
             }
         }
         return false;
+    }
+
+    /** A customer login: it may use the customer portal only, never the staff workspace or its API. */
+    public boolean isPortalCustomer() {
+        return !isStaffUser();
+    }
+
+    /**
+     * Holds the administrator role. This decides only who may change that role and its holders; it never grants a
+     * permission (every check is an explicit code).
+     */
+    public boolean isSuperAdmin() {
+        return hasRole(SUPER_ADMIN_ROLE);
     }
 
     @Override

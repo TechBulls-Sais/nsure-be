@@ -79,26 +79,49 @@ public class RateTableService {
      */
     @Transactional
     public RateTableViews.Detail saveGrid(String ref, RateTableViews.GridSave body) {
+        return saveDraft(ref, body, "MANUAL");
+    }
+
+    /**
+     * Spec 11 E-13: a live version is never edited in place. Saving writes the table's DRAFT (cut from the live
+     * version if there is none yet); a DRAFT is mutable until it is submitted. The live price changes only when an
+     * approved version is published.
+     */
+    @Transactional
+    public RateTableViews.Detail saveDraft(String ref, RateTableViews.GridSave body, String source) {
         RateTable table = table(ref);
-        RateTableVersion current = currentVersion(table).orElse(null);
-        if (body.baseVersion() != null && current != null && body.baseVersion() != current.getVersionNo()) {
-            throw new ConflictException(table.getTitle() + " changed to v" + current.getVersionNo()
+        RateTableVersion published = currentVersion(table).orElse(null);
+        RateTableVersion draft = openDraft(table).orElse(null);
+        RateTableVersion base = draft != null ? draft : published;
+        if (body.baseVersion() != null && base != null && body.baseVersion() != base.getVersionNo()) {
+            throw new ConflictException(table.getTitle() + " changed to v" + base.getVersionNo()
                     + " while you were editing v" + body.baseVersion() + ". Reload to see the latest rates.");
         }
         List<LifeAssuredRule> rules = rules(table.getTier());
         List<Row> rows = validate(table, rules, body.rows() == null ? List.of() : body.rows());
-        List<RateTableItem> before = current == null ? List.of() : items(current);
-        if (current != null && signature(before).equals(signature(rows))) {
-            return detail(table, versions(table), current);
+        List<RateTableItem> live = published == null ? List.of() : items(published);
+        if (draft == null && published != null && signature(live).equals(signature(rows))) {
+            return detail(table, versions(table), published);
         }
+        inFlight(table).ifPresent(pending -> {
+            throw new ConflictException(pending.getLabel() + " is " + pending.getStatus().toLowerCase().replace('_', ' ')
+                    + ". Reject or cancel it before starting another change.");
+        });
         LocalDate today = LocalDate.now();
-        int next = current == null ? 1 : versions(table).stream().mapToInt(RateTableVersion::getVersionNo).max().orElse(0) + 1;
-        if (current != null) {
-            current.close(today);
+        int next = versions(table).stream().mapToInt(RateTableVersion::getVersionNo).max().orElse(0) + 1;
+        RateTableVersion version;
+        if (draft == null) {
+            version = new RateTableVersion(table, next, today, username(), changeSummary(published, live, next, rows));
+            version.touch();
+            version.source(source);
+            em.persist(version);
+        } else {
+            version = draft;
+            em.createQuery("delete from RateTableItem i where i.version = :version")
+                    .setParameter("version", version).executeUpdate();
+            version.edited(changeSummary(published, live, version.getVersionNo(), rows), username());
+            version.source(source);
         }
-        RateTableVersion version = new RateTableVersion(table, next, today, username(),
-                changeSummary(current, before, next, rows));
-        em.persist(version);
         Map<String, Integer> order = new HashMap<>();
         for (LifeAssuredRule rule : rules) {
             order.put(rule.getRelationship().getRelationshipName(), rule.getDisplayOrder());
@@ -126,6 +149,15 @@ public class RateTableService {
         if (version.isEmpty()) {
             return Optional.empty();
         }
+        return priceWith(tier, lives, onDate, version);
+    }
+
+    /**
+     * Prices against one given version. The impact preview (spec 11 E-21) uses this same function against a draft,
+     * so the preview can never drift from the price it predicts.
+     */
+    Optional<PolicyPrice> priceWith(CoverTier tier, List<LifeToPrice> lives, LocalDate onDate,
+            Optional<RateTableVersion> version) {
         String plan = tier.getName();
         LocalDate today = onDate == null ? LocalDate.now() : onDate;
         Map<String, LifeAssuredRule> rules = new LinkedHashMap<>();
@@ -250,9 +282,10 @@ public class RateTableService {
     public record Priced(String rateTable, String version, BigDecimal fromPremium) {
     }
 
-    private RateTableViews.Detail detail(RateTable table, List<RateTableVersion> versions, RateTableVersion shown) {
+    RateTableViews.Detail detail(RateTable table, List<RateTableVersion> versions, RateTableVersion shown) {
         List<LifeAssuredRule> rules = rules(table.getTier());
-        RateTableVersion current = versions.stream().filter(v -> v.getValidTo() == null)
+        RateTableVersion current = versions.stream()
+                .filter(v -> RateTableVersion.PUBLISHED.equals(v.getStatus()))
                 .max(Comparator.comparingInt(RateTableVersion::getVersionNo)).orElse(null);
         List<RateTableViews.VersionSummary> history = new ArrayList<>();
         for (RateTableVersion version : versions) {
@@ -260,7 +293,11 @@ public class RateTableService {
                     version.getVersionNo(), version.getLabel(), version.getValidFrom().toString(),
                     version.getValidTo() == null ? "" : version.getValidTo().toString(),
                     version.getSource(), blank(version.getCreatedBy()), blank(version.getChangeSummary()),
-                    items(version).size(), version == current));
+                    items(version).size(), version == current, version.getStatus(),
+                    version.getEffectiveFrom() == null ? "" : version.getEffectiveFrom().toString(),
+                    blank(version.getSubmittedBy()), blank(version.getApprovedBy()),
+                    blank(version.getRejectionReason()), blank(version.getOverrideReason()),
+                    version.getUpdatedAt() == null ? "" : version.getUpdatedAt().toString()));
         }
         return new RateTableViews.Detail(
                 table.getRef(), table.getTitle(), table.getProduct().getName(),
@@ -293,11 +330,12 @@ public class RateTableService {
                 .map(e -> new RateTableViews.Band(bandAges.get(e.getKey())[0], bandAges.get(e.getKey())[1], e.getValue()))
                 .toList();
         return new RateTableViews.Grid(version.getVersionNo(), version.getLabel(), current,
-                List.copyOf(lifeTypes), cover, rows, gaps(items, rules));
+                List.copyOf(lifeTypes), cover, rows, java.util.stream.Stream.concat(
+                        gaps(items, rules).stream(), warnings(items).stream()).toList());
     }
 
     /** Ages a life type's rule allows that no band prices; they would fail at quote time (spec 03 section 5 note). */
-    private List<String> gaps(List<RateTableItem> items, List<LifeAssuredRule> rules) {
+    List<String> gaps(List<RateTableItem> items, List<LifeAssuredRule> rules) {
         List<String> issues = new ArrayList<>();
         for (LifeAssuredRule rule : rules) {
             String lifeType = rule.getRelationship().getRelationshipName();
@@ -326,8 +364,39 @@ public class RateTableService {
         return issues;
     }
 
+    /**
+     * Spec 11 V10 (cover consistency) and V11 (monotonicity): warnings only, never errors — a banded cover structure or
+     * a deliberately flat young-age curve are legitimate. The system flags; the Actuary decides (E-23).
+     */
+    List<String> warnings(List<RateTableItem> items) {
+        List<String> warnings = new ArrayList<>();
+        Map<String, List<RateTableItem>> byType = new LinkedHashMap<>();
+        items.forEach(item -> byType.computeIfAbsent(item.getLifeType().getRelationshipName(), k -> new ArrayList<>())
+                .add(item));
+        byType.forEach((lifeType, rows) -> {
+            Set<String> covers = new java.util.TreeSet<>();
+            rows.forEach(row -> covers.add(pula(row.getCoverAmount())));
+            if (covers.size() > 1) {
+                warnings.add("Warning: " + lifeType + " has rows with differing cover amounts (" + String.join(", ", covers)
+                        + "). Confirm this is intended.");
+            }
+            List<RateTableItem> sorted = rows.stream().sorted(Comparator.comparingInt(RateTableItem::getAgeFrom)).toList();
+            for (int i = 1; i < sorted.size(); i++) {
+                RateTableItem before = sorted.get(i - 1);
+                RateTableItem after = sorted.get(i);
+                if (after.getMonthlyPremium().compareTo(before.getMonthlyPremium()) < 0) {
+                    warnings.add("Warning: " + lifeType + ": premium falls from " + pula(before.getMonthlyPremium())
+                            + " to " + pula(after.getMonthlyPremium()) + " between bands "
+                            + range(before.getAgeFrom(), before.getAgeTo()) + " and "
+                            + range(after.getAgeFrom(), after.getAgeTo()) + ".");
+                }
+            }
+        });
+        return warnings;
+    }
+
     /** Rules V3-V8 (spec 03 section 5) plus a positive cover amount. Collects every error before refusing. */
-    private List<Row> validate(RateTable table, List<LifeAssuredRule> rules, List<RateTableViews.RowInput> input) {
+    List<Row> validate(RateTable table, List<LifeAssuredRule> rules, List<RateTableViews.RowInput> input) {
         String plan = table.getTier().getName();
         if (rules.isEmpty()) {
             throw new IllegalArgumentException("Plan '" + plan
@@ -449,7 +518,7 @@ public class RateTableService {
                 .getResultList();
     }
 
-    private RateTable table(String ref) {
+    RateTable table(String ref) {
         return em.createQuery(
                         "select t from RateTable t join fetch t.product join fetch t.tier where t.ref = :ref", RateTable.class)
                 .setParameter("ref", ref)
@@ -466,7 +535,7 @@ public class RateTableService {
                 .findFirst();
     }
 
-    private List<RateTableVersion> versions(RateTable table) {
+    List<RateTableVersion> versions(RateTable table) {
         return em.createQuery(
                         "select v from RateTableVersion v where v.rateTable = :table order by v.versionNo desc",
                         RateTableVersion.class)
@@ -474,11 +543,25 @@ public class RateTableService {
                 .getResultList();
     }
 
-    private Optional<RateTableVersion> currentVersion(RateTable table) {
-        return versions(table).stream().filter(v -> v.getValidTo() == null).findFirst();
+    /** The live version: the one PUBLISHED version that quotes use (spec 11 E-14). */
+    Optional<RateTableVersion> currentVersion(RateTable table) {
+        return versions(table).stream().filter(v -> RateTableVersion.PUBLISHED.equals(v.getStatus())).findFirst();
     }
 
-    private List<RateTableItem> items(RateTableVersion version) {
+    /** The version being edited: a DRAFT, or a REJECTED one returned to its author. */
+    Optional<RateTableVersion> openDraft(RateTable table) {
+        return versions(table).stream().filter(RateTableVersion::isEditable).findFirst();
+    }
+
+    /** A version submitted or approved but not yet live. */
+    Optional<RateTableVersion> inFlight(RateTable table) {
+        return versions(table).stream()
+                .filter(v -> RateTableVersion.PENDING_APPROVAL.equals(v.getStatus())
+                        || RateTableVersion.SCHEDULED.equals(v.getStatus()))
+                .findFirst();
+    }
+
+    List<RateTableItem> items(RateTableVersion version) {
         return em.createQuery(
                         "select i from RateTableItem i join fetch i.lifeType where i.version = :version"
                                 + " order by i.displayOrder, i.id", RateTableItem.class)
@@ -486,7 +569,7 @@ public class RateTableService {
                 .getResultList();
     }
 
-    private List<LifeAssuredRule> rules(CoverTier tier) {
+    List<LifeAssuredRule> rules(CoverTier tier) {
         return em.createQuery(
                         "select r from LifeAssuredRule r join fetch r.relationship where r.tier.id = :tier"
                                 + " order by r.displayOrder, r.id", LifeAssuredRule.class)
@@ -522,6 +605,6 @@ public class RateTableService {
         return Objects.requireNonNullElse(value, "");
     }
 
-    private record Row(RelationshipType lifeType, int ageFrom, int ageTo, BigDecimal cover, BigDecimal premium) {
+    record Row(RelationshipType lifeType, int ageFrom, int ageTo, BigDecimal cover, BigDecimal premium) {
     }
 }

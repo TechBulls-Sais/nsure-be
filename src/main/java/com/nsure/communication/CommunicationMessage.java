@@ -22,6 +22,8 @@ public class CommunicationMessage {
     public static final String DELIVERED = "DELIVERED";
     public static final String FAILED = "FAILED";
     public static final String SUPPRESSED = "SUPPRESSED";
+    // Blueprint §5: read is reported by the provider where available. It is not proof the customer accepted anything.
+    public static final String READ = "READ";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -87,6 +89,12 @@ public class CommunicationMessage {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    @Column(name = "delivered_at")
+    private LocalDateTime deliveredAt;
+
+    @Column(name = "read_at")
+    private LocalDateTime readAt;
+
     protected CommunicationMessage() {
     }
 
@@ -127,12 +135,63 @@ public class CommunicationMessage {
         this.ref = String.format("MSG-%06d", id);
     }
 
-    void delivered(String providerMessageId) {
+    /** The provider accepted the message (Blueprint §5: submitted is not yet delivered). */
+    void submitted(String providerMessageId) {
         attempts++;
-        status = DELIVERED;
+        status = SUBMITTED;
         this.providerMessageId = providerMessageId;
         lastError = null;
         updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * A provider status callback. States only move forward (submitted → delivered → read); a late or repeated
+     * callback for an earlier state is ignored, so out-of-order delivery cannot undo a later state. Failure is accepted
+     * only before delivery. Returns whether anything changed.
+     */
+    boolean providerStatus(String reported, String detail) {
+        int current = rank(status);
+        int next = rank(reported);
+        if (FAILED.equals(reported)) {
+            if (!SUBMITTED.equals(status)) {
+                return false;
+            }
+            status = FAILED;
+            lastError = cut(detail == null ? "Provider reported the message as failed" : detail, 500);
+            updatedAt = LocalDateTime.now();
+            return true;
+        }
+        if (next <= current || current < rank(SUBMITTED)) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        if (deliveredAt == null) {
+            deliveredAt = now;
+        }
+        if (READ.equals(reported)) {
+            readAt = now;
+        }
+        status = reported;
+        updatedAt = now;
+        return true;
+    }
+
+    private static int rank(String state) {
+        return switch (state == null ? "" : state) {
+            case QUEUED -> 0;
+            case SUBMITTED -> 1;
+            case DELIVERED -> 2;
+            case READ -> 3;
+            default -> -1;
+        };
+    }
+
+    public LocalDateTime getDeliveredAt() {
+        return deliveredAt;
+    }
+
+    public LocalDateTime getReadAt() {
+        return readAt;
     }
 
     /** A provider error: stays queued for the next run until maxAttempts, then lands in the failed queue. */

@@ -1,0 +1,45 @@
+databaseChangeLog:
+  # Solution Blueprint §8 (SH-09A): an issued document records what was provided. Later layout or wording changes never
+  # overwrite it; a correction is a controlled replacement with a reason that links to the superseded record. Each file
+  # carries a content hash so its integrity can be checked, and every download is logged.
+  - changeSet:
+      id: 056-document-custody-columns
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ins_policy_document
+            columns:
+              - column: {name: sha256, type: varchar(64)}
+              - column: {name: status, type: varchar(20), defaultValue: CURRENT, constraints: {nullable: false}}
+              - column: {name: superseded_by, type: bigint}
+              - column: {name: superseded_reason, type: varchar(500)}
+              - column: {name: superseded_at, type: timestamp(6)}
+        - addColumn:
+            tableName: ins_claim_document
+            columns:
+              - column: {name: sha256, type: varchar(64)}
+              - column: {name: status, type: varchar(20), defaultValue: CURRENT, constraints: {nullable: false}}
+              - column: {name: superseded_by, type: bigint}
+              - column: {name: superseded_reason, type: varchar(500)}
+              - column: {name: superseded_at, type: timestamp(6)}
+  - changeSet:
+      id: 056-document-access-log
+      author: nsure
+      changes:
+        - createTable:
+            tableName: document_access_log
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: document_kind, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: document_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: owner_ref, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: file_name, type: varchar(255), constraints: {nullable: false}}
+              - column: {name: username, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: accessed_at, type: timestamp(6), constraints: {nullable: false}}
+        - createIndex:
+            tableName: document_access_log
+            indexName: ix_document_access_owner
+            columns:
+              - column: {name: owner_ref}
+              - column: {name: accessed_at}

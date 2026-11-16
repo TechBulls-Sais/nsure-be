@@ -106,6 +106,32 @@ public class Subledger {
         return reversal;
     }
 
+    /**
+     * Posts an approved manual journal (Blueprint §7): the given lines, which must balance, dated in the period of
+     * {@code accountingDate} or the next one that is not closed. Idempotent on the manual journal reference.
+     */
+    Journal postManual(String manualRef, String description, LocalDate accountingDate, List<BigDecimal[]> amounts,
+            List<String> accounts, BigDecimal total, String actor) {
+        Optional<Journal> existing = journalByKey("MANUAL:" + manualRef);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        AccountingPeriod period = postingPeriod(accountingDate, actor);
+        LocalDate posted = period.getCode().equals(YearMonth.from(accountingDate).toString())
+                ? accountingDate : YearMonth.parse(period.getCode()).atDay(1);
+        Journal journal = new Journal(nextRef("JNL-", Journal.class), "MANUAL:" + manualRef, "ManualJournal",
+                manualRef, "SHARED", accountingDate, posted, period.getCode(), total,
+                "Manual journal " + manualRef + " · " + description, 0, actor);
+        for (int i = 0; i < accounts.size(); i++) {
+            journal.addLine(accounts.get(i), amounts.get(i)[0], amounts.get(i)[1]);
+        }
+        if (!journal.isBalanced()) {
+            throw new IllegalArgumentException("Manual journal " + manualRef + " does not balance.");
+        }
+        em.persist(journal);
+        return journal;
+    }
+
     /** The period an entry dated {@code date} posts to: its own, or the next one that is not closed. */
     AccountingPeriod postingPeriod(LocalDate date, String actor) {
         YearMonth month = YearMonth.from(date);

@@ -1,0 +1,33 @@
+databaseChangeLog:
+  # Spec 11 §3, §7: a rate version is DRAFT → PENDING_APPROVAL → SCHEDULED → PUBLISHED → SUPERSEDED (REJECTED with a
+  # reason). Only PUBLISHED prices quotes; editing a live version cuts a new DRAFT (E-13).
+  - changeSet:
+      id: 052-rate-version-workflow
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ins_rate_table_version
+            columns:
+              - column: {name: status, type: varchar(20), defaultValue: PUBLISHED, constraints: {nullable: false}}
+              - column: {name: submitted_by, type: varchar(100)}
+              - column: {name: submitted_at, type: timestamp(6)}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: timestamp(6)}
+              - column: {name: rejection_reason, type: varchar(500)}
+              - column: {name: notice_issued_at, type: date}
+              - column: {name: effective_from, type: date}
+              - column: {name: override_reason, type: varchar(500)}
+              # E-30: the optimistic-concurrency token for partial cell patches.
+              - column: {name: updated_at, type: timestamp(6)}
+        # Step 4 of 11 §10: every open version is the live one; every closed one is history.
+        - sql:
+            sql: |
+              UPDATE ins_rate_table_version SET status = 'PUBLISHED', effective_from = valid_from WHERE valid_to IS NULL;
+              UPDATE ins_rate_table_version SET status = 'SUPERSEDED', effective_from = valid_from WHERE valid_to IS NOT NULL;
+              UPDATE ins_rate_table_version SET updated_at = CURRENT_TIMESTAMP;
+        - createIndex:
+            tableName: ins_rate_table_version
+            indexName: ix_rate_version_status
+            columns:
+              - column: {name: status}
+              - column: {name: effective_from}

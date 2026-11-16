@@ -1,0 +1,288 @@
+databaseChangeLog:
+  # One RBAC model (docs/IMPLEMENT_RBAC.md) carrying the spec's roles and grant matrix
+  # (spec 04 §4, 11 §2.2, 12 §3.3). The second, parallel model (nsure_role / capability_grant / nsure_user_role)
+  # is folded into app_role / app_permission and dropped. Each spec capability is realised by one or more
+  # permission codes, recorded in app_permission.capability so the matrix stays visible and testable.
+  - changeSet:
+      id: 047-rbac-columns
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: app_role
+            columns:
+              # Spec 04 §2 / A-11: a role with desk access makes its holder staff. Everyone else is a scoped
+              # portal customer (fail closed).
+              - column: {name: desk_access, type: boolean, defaultValueBoolean: true, constraints: {nullable: false}}
+        - addColumn:
+            tableName: app_permission
+            columns:
+              # The spec capability this code realises (claim.approve, rate.publish …); NULL for codes outside spec 04.
+              - column: {name: capability, type: varchar(64)}
+  - changeSet:
+      id: 047-rbac-columns-mysql
+      author: nsure
+      dbms: mysql
+      changes:
+        - modifyDataType:
+            tableName: app_role
+            columnName: desk_access
+            newDataType: bit
+        - addNotNullConstraint:
+            tableName: app_role
+            columnName: desk_access
+            columnDataType: bit
+            defaultNullValue: 1
+        - addDefaultValue:
+            tableName: app_role
+            columnName: desk_access
+            columnDataType: bit
+            defaultValueBoolean: true
+  - changeSet:
+      id: 047-rbac-new-codes
+      author: nsure
+      comment: Codes the spec vocabulary needs that the catalog did not have yet.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT seed.g, seed.c, seed.e, seed.a, FALSE, seed.f
+              FROM (
+                SELECT 'dashboard' g, 'READ_DASHBOARD' c, 'DASHBOARD' e, 'READ' a, 'View the dashboard, KPIs and recent activity' f UNION ALL
+                SELECT 'payments', 'READ_PAYMENT', 'PAYMENT', 'READ', 'View premium payments, receipts and payment gateway logs' UNION ALL
+                SELECT 'product', 'ACTIVATE_PRODUCT', 'PRODUCT', 'ACTIVATE', 'Activate or deactivate catalogue entities' UNION ALL
+                SELECT 'product', 'UPDATE_TIER', 'TIER', 'UPDATE', 'Add, edit and remove cover tiers' UNION ALL
+                SELECT 'controls', 'UPDATE_CONTROL', 'CONTROL', 'UPDATE', 'Enable, disable or re-value an operational control' UNION ALL
+                SELECT 'claims', 'OVERRIDE_CLAIM_FOUR_EYES', 'CLAIM_FOUR_EYES', 'OVERRIDE', 'Break-glass: approve a claim you assessed, with a written reason' UNION ALL
+                SELECT 'rating', 'PUBLISH_OWN_RATE_TABLE', 'OWN_RATE_TABLE', 'PUBLISH', 'Break-glass: publish a rate version you authored, with a written reason'
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = seed.c);
+  - changeSet:
+      id: 047-rbac-capability-map
+      author: nsure
+      comment: Which spec capability each permission code realises (spec 04 §3, §3.1).
+      changes:
+        - sql:
+            sql: |
+              UPDATE app_permission SET capability = 'dashboard.read' WHERE code = 'READ_DASHBOARD';
+              UPDATE app_permission SET capability = 'claim.read' WHERE code = 'READ_CLAIM';
+              UPDATE app_permission SET capability = 'claim.create' WHERE code = 'CREATE_CLAIM';
+              UPDATE app_permission SET capability = 'claim.assess' WHERE code IN ('ASSESS_CLAIM', 'UPDATE_CLAIM');
+              UPDATE app_permission SET capability = 'claim.approve' WHERE code IN ('APPROVE_CLAIM', 'SETTLE_CLAIM');
+              UPDATE app_permission SET capability = 'claim.reject' WHERE code = 'REJECT_CLAIM';
+              UPDATE app_permission SET capability = 'policy.read' WHERE code IN ('READ_POLICY', 'READ_APPLICATION');
+              UPDATE app_permission SET capability = 'policy.create' WHERE code IN ('CREATE_POLICY', 'CREATE_APPLICATION', 'UPDATE_APPLICATION');
+              UPDATE app_permission SET capability = 'policy.write' WHERE code = 'UPDATE_POLICY';
+              UPDATE app_permission SET capability = 'payment.read' WHERE code = 'READ_PAYMENT';
+              UPDATE app_permission SET capability = 'customer.read' WHERE code = 'READ_CUSTOMER';
+              UPDATE app_permission SET capability = 'customer.write' WHERE code IN ('CREATE_CUSTOMER', 'UPDATE_CUSTOMER', 'KYC_CUSTOMER', 'EDD_CUSTOMER');
+              UPDATE app_permission SET capability = 'product.read' WHERE code = 'READ_PRODUCT';
+              UPDATE app_permission SET capability = 'product.write' WHERE code IN ('CREATE_PRODUCT', 'UPDATE_PRODUCT');
+              UPDATE app_permission SET capability = 'product.activate' WHERE code = 'ACTIVATE_PRODUCT';
+              UPDATE app_permission SET capability = 'product.delete' WHERE code = 'DELETE_PRODUCT';
+              UPDATE app_permission SET capability = 'tier.write' WHERE code = 'UPDATE_TIER';
+              UPDATE app_permission SET capability = 'audit.read' WHERE code = 'READ_AUDIT';
+              UPDATE app_permission SET capability = 'finance.export' WHERE code = 'EXPORT_GL';
+              UPDATE app_permission SET capability = 'rate.read' WHERE code = 'READ_RATE_TABLE';
+              UPDATE app_permission SET capability = 'rate.write' WHERE code IN ('CREATE_RATE_TABLE', 'UPDATE_RATE_TABLE');
+              UPDATE app_permission SET capability = 'rate.publish' WHERE code = 'PUBLISH_RATE_TABLE';
+              UPDATE app_permission SET capability = 'rate.publish.self' WHERE code = 'PUBLISH_OWN_RATE_TABLE';
+              UPDATE app_permission SET capability = 'controls.read' WHERE code = 'READ_CONTROL';
+              UPDATE app_permission SET capability = 'controls.write' WHERE code = 'UPDATE_CONTROL';
+              UPDATE app_permission SET capability = 'claim.approve.override' WHERE code = 'OVERRIDE_CLAIM_FOUR_EYES';
+  - changeSet:
+      id: 047-rbac-portal-role
+      author: nsure
+      comment: >-
+        The portal role takes its spec name and loses desk access and every grant (A-1, A-2): customers are
+        authorised by data ownership, never by a permission.
+      changes:
+        - sql:
+            sql: |
+              UPDATE app_role SET name = 'Policyholder / End User',
+                  description = 'Portal customer: views own policies and schedules, submits and tracks claims, updates own payment details. Holds no permission; access is by ownership.'
+              WHERE name = 'Policyholder';
+              UPDATE app_role SET desk_access = FALSE WHERE name = 'Policyholder / End User';
+              DELETE FROM app_role_permission
+              WHERE role_id IN (SELECT id FROM app_role WHERE name = 'Policyholder / End User');
+  - changeSet:
+      id: 047-rbac-grant-matrix
+      author: nsure
+      comment: >-
+        Realigns the six staff roles to the spec grant matrix. Only codes that realise a spec capability are reset;
+        module codes outside spec 04 (service desk, communications, reports, configuration …) keep their grants.
+        Break-glass codes (controls.write, claim.approve.override, rate.publish.self) are granted to no role
+        (12 C-9, C-10; 11 §6.1). Super Admin passes every check by role before any grant lookup (A-7).
+      changes:
+        - sql:
+            sql: |
+              DELETE FROM app_role_permission
+              WHERE role_id IN (SELECT id FROM app_role WHERE name IN (
+                  'Product Configurator', 'Actuary', 'Onboarding Specialist', 'Claims Assessor',
+                  'Customer Support Representative', 'Compliance & Auditor'))
+                AND permission_id IN (SELECT id FROM app_permission WHERE capability IS NOT NULL);
+
+              DELETE FROM app_role_permission
+              WHERE permission_id IN (SELECT id FROM app_permission
+                                      WHERE code IN ('UPDATE_CONTROL', 'OVERRIDE_CLAIM_FOUR_EYES', 'PUBLISH_OWN_RATE_TABLE'));
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id
+              FROM app_role r
+              JOIN (
+                SELECT 'Product Configurator' rn, 'product.read' cap UNION ALL
+                SELECT 'Product Configurator', 'product.write' UNION ALL
+                SELECT 'Product Configurator', 'product.activate' UNION ALL
+                SELECT 'Product Configurator', 'product.delete' UNION ALL
+                SELECT 'Product Configurator', 'tier.write' UNION ALL
+                SELECT 'Product Configurator', 'rate.read' UNION ALL
+                SELECT 'Product Configurator', 'rate.write' UNION ALL
+                SELECT 'Actuary', 'dashboard.read' UNION ALL
+                SELECT 'Actuary', 'claim.read' UNION ALL
+                SELECT 'Actuary', 'policy.read' UNION ALL
+                SELECT 'Actuary', 'payment.read' UNION ALL
+                SELECT 'Actuary', 'product.read' UNION ALL
+                SELECT 'Actuary', 'product.write' UNION ALL
+                SELECT 'Actuary', 'rate.read' UNION ALL
+                SELECT 'Actuary', 'rate.write' UNION ALL
+                SELECT 'Actuary', 'rate.publish' UNION ALL
+                SELECT 'Actuary', 'controls.read' UNION ALL
+                SELECT 'Onboarding Specialist', 'customer.read' UNION ALL
+                SELECT 'Onboarding Specialist', 'customer.write' UNION ALL
+                SELECT 'Claims Assessor', 'dashboard.read' UNION ALL
+                SELECT 'Claims Assessor', 'claim.read' UNION ALL
+                SELECT 'Claims Assessor', 'claim.create' UNION ALL
+                SELECT 'Claims Assessor', 'claim.assess' UNION ALL
+                SELECT 'Claims Assessor', 'claim.approve' UNION ALL
+                SELECT 'Claims Assessor', 'claim.reject' UNION ALL
+                SELECT 'Claims Assessor', 'policy.read' UNION ALL
+                SELECT 'Claims Assessor', 'payment.read' UNION ALL
+                SELECT 'Claims Assessor', 'controls.read' UNION ALL
+                SELECT 'Customer Support Representative', 'dashboard.read' UNION ALL
+                SELECT 'Customer Support Representative', 'claim.read' UNION ALL
+                SELECT 'Customer Support Representative', 'claim.create' UNION ALL
+                SELECT 'Customer Support Representative', 'policy.read' UNION ALL
+                SELECT 'Customer Support Representative', 'policy.create' UNION ALL
+                SELECT 'Customer Support Representative', 'policy.write' UNION ALL
+                SELECT 'Customer Support Representative', 'payment.read' UNION ALL
+                SELECT 'Customer Support Representative', 'customer.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'dashboard.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'claim.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'policy.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'payment.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'customer.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'audit.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'finance.export' UNION ALL
+                SELECT 'Compliance & Auditor', 'rate.read' UNION ALL
+                SELECT 'Compliance & Auditor', 'controls.read'
+              ) m ON m.rn = r.name
+              JOIN app_permission p ON p.capability = m.cap
+              WHERE NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id
+              FROM app_role r
+              CROSS JOIN app_permission p
+              WHERE r.name = 'Super Admin'
+                AND p.code NOT IN ('UPDATE_CONTROL', 'OVERRIDE_CLAIM_FOUR_EYES', 'PUBLISH_OWN_RATE_TABLE')
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+  - changeSet:
+      id: 047-rbac-approval-authority
+      author: nsure
+      comment: >-
+        Claim approval limits (spec 04 §5.3) move from the dropped nsure_role onto app_role. Nothing read the old
+        table, so it is recreated with the one seeded limit.
+      changes:
+        - dropTable:
+            tableName: claim_approval_authority
+            cascadeConstraints: true
+        - createTable:
+            tableName: claim_approval_authority
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: role_id, type: bigint, constraints: {nullable: false, unique: true, uniqueConstraintName: uk_claim_authority_role}}
+              - column: {name: max_payout_amount, type: "decimal(15,2)", constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: claim_approval_authority
+            baseColumnNames: role_id
+            referencedTableName: app_role
+            referencedColumnNames: id
+            constraintName: fk_claim_authority_app_role
+            onDelete: CASCADE
+        - sql:
+            sql: |
+              INSERT INTO claim_approval_authority (role_id, max_payout_amount)
+              SELECT id, 50000.00 FROM app_role WHERE name = 'Claims Assessor';
+  - changeSet:
+      id: 047-rbac-drop-parallel-model
+      author: nsure
+      changes:
+        - dropTable:
+            tableName: capability_grant
+            cascadeConstraints: true
+        - dropTable:
+            tableName: nsure_user_role
+            cascadeConstraints: true
+        - dropTable:
+            tableName: nsure_role
+            cascadeConstraints: true
+  - changeSet:
+      id: 047-customer-ref
+      author: nsure
+      comment: >-
+        Row-level scoping (spec 04 §6, A-11…A-14) keyed on the customer record, not on the customer's name — names
+        are not unique, so a customer could otherwise see another customer's policies and claims.
+      changes:
+        - addColumn:
+            tableName: ins_application
+            columns:
+              - column: {name: customer_ref, type: varchar(20)}
+        - addColumn:
+            tableName: ins_policy
+            columns:
+              - column: {name: customer_ref, type: varchar(20)}
+        - addColumn:
+            tableName: ins_claim
+            columns:
+              - column: {name: customer_ref, type: varchar(20)}
+        - addColumn:
+            tableName: ins_receipt
+            columns:
+              - column: {name: customer_ref, type: varchar(20)}
+        - sql:
+            sql: |
+              UPDATE ins_application SET customer_ref = (SELECT c.record_ref FROM ins_customer c
+                  WHERE c.name = ins_application.customer_name ORDER BY c.display_order, c.id LIMIT 1);
+              UPDATE ins_policy SET customer_ref = (SELECT c.record_ref FROM ins_customer c
+                  WHERE c.name = ins_policy.customer_name ORDER BY c.display_order, c.id LIMIT 1);
+              UPDATE ins_claim SET customer_ref = (SELECT c.record_ref FROM ins_customer c
+                  WHERE c.name = ins_claim.customer_name ORDER BY c.display_order, c.id LIMIT 1);
+              UPDATE ins_receipt SET customer_ref = (SELECT c.record_ref FROM ins_customer c
+                  WHERE c.name = ins_receipt.customer_name ORDER BY c.display_order, c.id LIMIT 1);
+        - createIndex:
+            tableName: ins_policy
+            indexName: ix_policy_customer_ref
+            columns:
+              - column: {name: customer_ref}
+        - createIndex:
+            tableName: ins_claim
+            indexName: ix_claim_customer_ref
+            columns:
+              - column: {name: customer_ref}
+  - changeSet:
+      id: 047-second-assessor
+      author: nsure
+      context: demo
+      comment: >-
+        Four-eyes needs at least two people holding claim.assess and claim.approve (12 C-22). A second Claims
+        Assessor demo login, password "password".
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_user (username, password, enabled, office_id)
+              SELECT 'assessor2', '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG', TRUE, o.id
+              FROM office o
+              WHERE o.name = 'Head Office' AND NOT EXISTS (SELECT 1 FROM app_user x WHERE x.username = 'assessor2');
+              INSERT INTO app_user_role (user_id, role_id)
+              SELECT u.id, r.id FROM app_user u JOIN app_role r ON r.name = 'Claims Assessor'
+              WHERE u.username = 'assessor2'
+                AND NOT EXISTS (SELECT 1 FROM app_user_role x WHERE x.user_id = u.id AND x.role_id = r.id);

@@ -22,7 +22,6 @@ public class CommandResponses {
             Long resourceId,
             JsonNode body,
             String idempotencyKey,
-            Long officeId,
             String retryHeader) {
         return new CommandRequest(
                 action,
@@ -30,7 +29,6 @@ public class CommandResponses {
                 resourceId,
                 write(body),
                 idempotencyKey,
-                officeId,
                 "true".equalsIgnoreCase(retryHeader));
     }
 

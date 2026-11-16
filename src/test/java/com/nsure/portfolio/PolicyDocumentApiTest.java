@@ -108,11 +108,17 @@ class PolicyDocumentApiTest {
 
         assertThat(documents.policiesWithOldSchedules()).doesNotContain(policyId);
         assertThat(documents.replaceOldSchedules(policyId)).isZero();
+        // Blueprint §8: the old-layout schedules are kept as superseded, linked to the one current schedule.
         String list = mockMvc.perform(get("/portfolio/policies/" + policy + "/documents").with(httpBasic("admin", "password")))
-                .andExpect(jsonPath("$.length()").value(1))
-                .andExpect(jsonPath("$[0].uploadedBy").value("admin"))
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$[?(@.status == 'CURRENT')]", Matchers.hasSize(1)))
+                .andExpect(jsonPath("$[0].status").value("SUPERSEDED"))
+                .andExpect(jsonPath("$[0].supersededReason").value(org.hamcrest.Matchers.startsWith("Reissued in the current")))
+                .andExpect(jsonPath("$[3].status").value("CURRENT"))
+                .andExpect(jsonPath("$[3].uploadedBy").value("admin"))
                 .andReturn().getResponse().getContentAsString();
-        byte[] pdf = mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + JsonPath.read(list, "$[0].id"))
+        assertThat((Integer) JsonPath.read(list, "$[0].supersededBy")).isEqualTo((Integer) JsonPath.read(list, "$[3].id"));
+        byte[] pdf = mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + JsonPath.read(list, "$[3].id"))
                         .with(httpBasic("admin", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsByteArray();
@@ -122,6 +128,64 @@ class PolicyDocumentApiTest {
         // Still one per policy afterwards.
         mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(httpBasic("admin", "password")))
                 .andExpect(status().isConflict());
+    }
+
+    @Test
+    void aCorrectionIsAControlledReplacementAndEveryDownloadIsCheckedAndLogged() throws Exception {
+        // Solution Blueprint §8: a correction creates a replacement with a reason that links to the superseded record,
+        // issued files are checked against their hash, and access/downloads are audited.
+        String policy = customerPolicy("Neo Sebina", "neosebina");
+        String first = mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule")
+                        .with(httpBasic("admin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("CURRENT"))
+                .andExpect(jsonPath("$[0].sha256").value(Matchers.matchesPattern("[0-9a-f]{64}")))
+                .andReturn().getResponse().getContentAsString();
+        Integer original = JsonPath.read(first, "$[0].id");
+
+        mockMvc.perform(json(post("/portfolio/policies/" + policy + "/documents/" + original + "/reissue"), "admin", "{}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(json(post("/portfolio/policies/" + policy + "/documents/" + original + "/reissue"), "onboarding",
+                        "{\"reason\":\"Not my job\"}"))
+                .andExpect(status().isForbidden());
+        String reissued = mockMvc.perform(json(post("/portfolio/policies/" + policy + "/documents/" + original
+                        + "/reissue"), "admin", "{\"reason\":\"Beneficiary name corrected\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].status").value("SUPERSEDED"))
+                .andExpect(jsonPath("$[0].supersededReason").value("Beneficiary name corrected"))
+                .andExpect(jsonPath("$[1].status").value("CURRENT"))
+                .andReturn().getResponse().getContentAsString();
+        Integer current = JsonPath.read(reissued, "$[1].id");
+        assertThat((Integer) JsonPath.read(reissued, "$[0].supersededBy")).isEqualTo(current);
+        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(httpBasic("admin", "password")))
+                .andExpect(jsonPath("$[?(@.action == 'Schedule Generated')].details").value(Matchers.hasItem(
+                        Matchers.containsString("Beneficiary name corrected"))));
+        // Only the current schedule can be reissued; the superseded file is kept and still opens.
+        mockMvc.perform(json(post("/portfolio/policies/" + policy + "/documents/" + original + "/reissue"), "admin",
+                        "{\"reason\":\"Again\"}"))
+                .andExpect(status().isConflict());
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + original).with(httpBasic("admin", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/portfolio/shop/policies/" + policy + "/documents/" + current)
+                        .with(httpBasic("neosebina", "password1")))
+                .andExpect(status().isOk());
+
+        // The download log: who, which channel, which file. Auditors read it; others do not.
+        String log = mockMvc.perform(get("/portfolio/policies/" + policy + "/document-access")
+                        .with(httpBasic("compliance", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(JsonPath.<java.util.List<String>>read(log, "$[*].channel")).containsExactly("PORTAL", "STAFF");
+        assertThat(JsonPath.<java.util.List<String>>read(log, "$[*].username")).containsExactly("neosebina", "admin");
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/document-access").with(httpBasic("onboarding", "password")))
+                .andExpect(status().isForbidden());
+
+        // A stored file that no longer matches its recorded hash is refused, never served.
+        jdbc.update("update ins_policy_document set sha256 = ? where id = ?", "0".repeat(64), current);
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + current).with(httpBasic("admin", "password")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(Matchers.containsString("failed its integrity check")));
     }
 
     @Test

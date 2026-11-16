@@ -75,7 +75,9 @@ public class CommunicationDispatcher {
             return null;
         }
         try {
-            message.delivered(SimulatedProvider.send(message.getChannel(), message.getContact()));
+            message.submitted(SimulatedProvider.send(message.getChannel(), message.getContact()));
+            // The simulated provider reports delivery at once through the same path a real status callback uses.
+            message.providerStatus(CommunicationMessage.DELIVERED, null);
         } catch (SimulatedProvider.ProviderException ex) {
             message.failedAttempt(ex.getMessage() + " (attempt " + (message.getAttempts() + 1) + " of "
                     + MAX_ATTEMPTS + ")", MAX_ATTEMPTS);

@@ -6,7 +6,6 @@ import com.nsure.configuration.PolicyAttributes;
 import com.nsure.rating.RateTableService;
 import com.nsure.rating.RateTableViews;
 import com.nsure.security.domain.AppUser;
-import com.nsure.security.domain.Office;
 import com.nsure.security.domain.Role;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.repository.AppUserRepository;
@@ -48,6 +47,10 @@ public class PortfolioService {
     private final ClaimWorkflow claimWorkflow;
     private final WorkflowHistory history;
     private final PolicyAttributes policyAttributes;
+    private final ReferenceNumbers references;
+    private final DeclarationService declarations;
+    /** Lazily resolved: the payment module depends on the portfolio, not the other way round. */
+    private final org.springframework.beans.factory.ObjectProvider<com.nsure.payment.PaymentSettlementService> settlement;
 
     public PortfolioService(
             EntityManager em,
@@ -59,7 +62,13 @@ public class PortfolioService {
             PolicyWorkflow policyWorkflow,
             ClaimWorkflow claimWorkflow,
             WorkflowHistory history,
-            PolicyAttributes policyAttributes) {
+            PolicyAttributes policyAttributes,
+            ReferenceNumbers references,
+            org.springframework.beans.factory.ObjectProvider<com.nsure.payment.PaymentSettlementService> settlement,
+            DeclarationService declarations) {
+        this.references = references;
+        this.declarations = declarations;
+        this.settlement = settlement;
         this.em = em;
         this.security = security;
         this.users = users;
@@ -374,6 +383,7 @@ public class PortfolioService {
         InsurancePolicy row = new InsurancePolicy();
         row.setRef(nextRef("POL-", 5, InsurancePolicy.class));
         row.setCustomerName(account.getName());
+        row.setCustomerRef(account.getRef());
         row.setProduct(product.getName());
         row.setAmount(digits(product.getCover()));
         row.setPremium(BigDecimal.valueOf(digits(product.getPremium())));
@@ -389,18 +399,17 @@ public class PortfolioService {
         // Spec 01 BR-8: one open purchase per product and tier, never a duplicate.
         policyWorkflow.expireUnpaid();
         Optional<String> open = em.createQuery(
-                        "select p.ref from InsurancePolicy p where p.customerName = :name and p.product = :product"
+                        "select p.ref from InsurancePolicy p where p.customerRef = :customer and p.product = :product"
                                 + " and coalesce(p.tier, '') = :tier and p.status = :status", String.class)
-                .setParameter("name", account.getName())
+                .setParameter("customer", account.getRef())
                 .setParameter("product", row.getProduct())
                 .setParameter("tier", blank(row.getTier()))
                 .setParameter("status", PolicyWorkflow.PENDING_PAYMENT)
                 .getResultStream()
                 .findFirst();
         if (open.isPresent()) {
-            throw new IllegalArgumentException("You already have " + row.getProduct()
-                    + (row.getTier() == null ? "" : " " + row.getTier()) + " awaiting payment (" + open.get()
-                    + "). Pay it from Your policies.");
+            // BR-8: re-entering checkout reuses the unexpired pending policy instead of creating a duplicate.
+            return shopFor(account);
         }
         // Reserved until paid within the payment window; it confers no cover until then (demo server checkout).
         policyWorkflow.openPending(row);
@@ -425,7 +434,13 @@ public class PortfolioService {
         staff.validateHasPermissionTo("UPDATE_POLICY");
         InsurancePolicy policy = one(InsurancePolicy.class, ref, "Policy");
         requireEddClear(accountFor(policy.getCustomerName()));
-        return cover(policyWorkflow.pay(ref, defaultText(body, "method", "Bank EFT"), staff.getUsername()));
+        // A premium staff collected offline: the MANUAL rail, through the same settlement path as every payment.
+        com.nsure.payment.PaymentSettlementService.PaymentInitiation result = settlement.getObject()
+                .initiate(ref, defaultText(body, "method", "Bank EFT"), staff.getUsername(), true);
+        if (com.nsure.payment.PaymentTransaction.FAILED.equals(result.status())) {
+            throw new IllegalArgumentException(result.failureReason());
+        }
+        return cover(one(InsurancePolicy.class, ref, "Policy"));
     }
 
     @Transactional(noRollbackFor = IllegalArgumentException.class)
@@ -461,14 +476,70 @@ public class PortfolioService {
     /** The customer pays the first premium of their own policy (or the next one of an active policy). */
     @Transactional(noRollbackFor = IllegalArgumentException.class)
     public PortfolioViews.ShopView shopPay(String ref, JsonNode body) {
+        CustomerAccount account = checkoutAllowed(ref);
+        com.nsure.payment.PaymentSettlementService.PaymentInitiation result = settlement.getObject()
+                .initiate(ref, text(body, "method"), account.getLoginUsername());
+        if ("REDIRECT".equals(result.mode())) {
+            throw new com.nsure.common.exception.ConflictException("Card payments continue on the secure checkout "
+                    + "page: start them with POST /checkout/" + ref + "/pay.");
+        }
+        if (com.nsure.payment.PaymentTransaction.FAILED.equals(result.status())) {
+            throw new IllegalArgumentException(result.failureReason());
+        }
+        return shopFor(account);
+    }
+
+    /**
+     * The checks before a customer may pay (spec 06 §6.1): their own policy (ownership), identity verified, and the
+     * EDD gate cleared (W-19). Returns their account.
+     */
+    @Transactional(noRollbackFor = IllegalArgumentException.class)
+    public CustomerAccount checkoutAllowed(String ref) {
         CustomerAccount account = customerForLogin();
         InsurancePolicy policy = ownPolicy(account, ref);
+        // BR-55: an overdue pending policy expires inline on any payment attempt.
+        policyWorkflow.expireIfOverdue(policy);
         if (!"VERIFIED".equals(account.getKycStatus())) {
             throw new IllegalArgumentException("Your identity must be verified before you can pay for cover.");
         }
         requireEddClear(account);
-        policyWorkflow.pay(policy.getRef(), text(body, "method"), account.getLoginUsername());
-        return shopFor(account);
+        // BR-5 / BR-6: an OTP-verified declaration for this purchase, and no lock after wrong codes.
+        declarations.assertDeclaredForPayment(account, policy);
+        return account;
+    }
+
+    // ── declaration and consent (spec 01 BR-5, BR-6) ──────────────────────────────────────────────
+
+    public DeclarationService.LockState shopDeclarationLock() {
+        return declarations.lockState(customerForLogin());
+    }
+
+    public DeclarationService.OtpSent shopDeclarationOtp(String ref) {
+        CustomerAccount account = customerForLogin();
+        return declarations.sendOtp(account, ownPolicy(account, ref));
+    }
+
+    public ConsentView shopDeclare(String ref, JsonNode body) {
+        CustomerAccount account = customerForLogin();
+        return consent(declarations.verify(account, ownPolicy(account, ref),
+                body == null ? com.fasterxml.jackson.databind.node.NullNode.getInstance() : body));
+    }
+
+    @Transactional(readOnly = true)
+    public List<ConsentView> declarations(String ref) {
+        security.authenticatedUser().validateHasPermissionTo("READ_AUDIT");
+        return declarations.forPolicy(ref).stream().map(PortfolioService::consent).toList();
+    }
+
+    private static ConsentView consent(DeclarationConsent row) {
+        return new ConsentView(row.getId(), row.getPolicyRef(), row.getCustomerRef(), row.isAccuracyConfirmed(),
+                row.isTermsAccepted(), row.isDataProtectionAccepted(), row.isFalseInformationAcknowledged(),
+                row.getOtpVerifiedAt(), row.getRecordedBy());
+    }
+
+    /** One immutable declaration record. */
+    public record ConsentView(Long id, String policyRef, String customerRef, boolean accuracy, boolean terms,
+            boolean dataProtection, boolean falseInformation, java.time.LocalDateTime verifiedAt, String recordedBy) {
     }
 
     @Transactional
@@ -496,7 +567,7 @@ public class PortfolioService {
 
     private InsurancePolicy ownPolicy(CustomerAccount account, String ref) {
         InsurancePolicy policy = one(InsurancePolicy.class, ref, "Policy");
-        if (!policy.getCustomerName().equals(account.getName())) {
+        if (!account.getRef().equals(policy.getCustomerRef())) {
             // Not theirs: answer as if it did not exist rather than confirm someone else's policy number.
             throw new NotFoundException("Policy " + ref + " not found");
         }
@@ -596,7 +667,7 @@ public class PortfolioService {
      */
     @Transactional(readOnly = true)
     public PortfolioViews.QuoteView quote(JsonNode body) {
-        if (security.authenticatedUser().hasRole("Policyholder")) {
+        if (security.authenticatedUser().isPortalCustomer()) {
             throw new NoAuthorizationException("Customers quote their own cover in the policy shop.");
         }
         return quote(text(body, "name"), text(body, "product"), text(body, "tier"), body);
@@ -667,6 +738,25 @@ public class PortfolioService {
         return claim(claimWorkflow.rerunChecks(ref, security.authenticatedUser()));
     }
 
+    /** Payout amount resolution (spec 04 §5.4): empty means the full cover; anything else must be a number. */
+    private static Integer payoutAmount(JsonNode input) {
+        JsonNode value = input.get("payoutAmount");
+        if (value == null || value.isNull() || (value.isTextual() && value.asText().isBlank())) {
+            return null;
+        }
+        if (value.isNumber()) {
+            if (value.decimalValue().stripTrailingZeros().scale() > 0) {
+                throw new IllegalArgumentException("Payout amount must be a whole number of pula");
+            }
+            return value.intValue();
+        }
+        try {
+            return Integer.valueOf(value.asText().trim());
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("Payout amount must be a number");
+        }
+    }
+
     /** One of the person actions: assess, approve, reject or pay. */
     @Transactional
     public PortfolioViews.ClaimView claimAction(String ref, String action, JsonNode body) {
@@ -674,9 +764,8 @@ public class PortfolioService {
         JsonNode input = body == null ? com.fasterxml.jackson.databind.node.NullNode.getInstance() : body;
         InsuranceClaim claim = switch (action) {
             case "assess" -> claimWorkflow.assess(ref, optional(input, "note"), actor);
-            case "approve" -> claimWorkflow.approve(ref,
-                    input.hasNonNull("payoutAmount") ? Integer.valueOf(input.get("payoutAmount").asInt()) : null,
-                    optional(input, "overrideReason"), actor);
+            case "approve" -> claimWorkflow.approve(ref, payoutAmount(input),
+                    optional(input, "overrideReason"), optional(input, "fourEyesOverrideReason"), actor);
             case "reject" -> claimWorkflow.reject(ref, optional(input, "reason"), actor);
             case "pay" -> claimWorkflow.pay(ref, actor);
             default -> throw new IllegalArgumentException("Unknown claim action: " + action);
@@ -707,9 +796,21 @@ public class PortfolioService {
 
     @Transactional
     public PortfolioViews.ConfigView saveConfig(String ref, JsonNode body) {
+        AppUser actor = security.authenticatedUser();
+        actor.validateHasPermissionTo(ref == null ? "CREATE_PRODUCT" : "UPDATE_PRODUCT");
         ProductConfiguration row = ref == null
                 ? new ProductConfiguration()
                 : one(ProductConfiguration.class, ref, "Product configuration");
+        // Spec 04 §3: activating or deactivating a catalogue entity is product.activate, separate from editing it
+        // (an Actuary may edit products but not switch them on or off).
+        String requested = defaultText(body, "status", "Draft");
+        String current = ref == null ? "Draft" : row.getStatus();
+        boolean activationChange = !requested.equalsIgnoreCase(current == null ? "" : current)
+                && (requested.toLowerCase(java.util.Locale.ROOT).contains("active")
+                        || (current != null && current.toLowerCase(java.util.Locale.ROOT).contains("active")));
+        if (activationChange) {
+            actor.validateHasPermissionTo("ACTIVATE_PRODUCT");
+        }
         if (ref == null) {
             row.setRef(nextRef("CFG-", 3, ProductConfiguration.class));
             row.setDisplayOrder(0);
@@ -745,6 +846,14 @@ public class PortfolioService {
     private void fillCover(CoverRecord row, JsonNode body, String prefix, int width, String defaultStatus) {
         row.setRef(nextRef(prefix, width, row.getClass()));
         row.setCustomerName(text(body, "name"));
+        row.setCustomerRef(em.createQuery(
+                        "select c.ref from CustomerAccount c where c.name = :name order by c.displayOrder asc, c.id asc",
+                        String.class)
+                .setParameter("name", row.getCustomerName())
+                .setMaxResults(1)
+                .getResultStream()
+                .findFirst()
+                .orElse(null));
         row.setProduct(text(body, "product"));
         row.setAmount(body.path("amount").asInt());
         row.setPremium(amount(body, "premium"));
@@ -753,12 +862,9 @@ public class PortfolioService {
         row.setDisplayOrder(0);
     }
 
+    /** Race-free reference from a locked series (spec 01 BR-59). */
     private <T> String nextRef(String prefix, int width, Class<T> type) {
-        int max = 0;
-        for (String ref : em.createQuery("select e.ref from " + type.getSimpleName() + " e", String.class).getResultList()) {
-            max = Math.max(max, Integer.parseInt(ref.substring(prefix.length())));
-        }
-        return prefix + String.format("%0" + width + "d", max + 1);
+        return references.next(prefix, width, () -> references.highest(type.getSimpleName(), prefix));
     }
 
     private <T> List<T> list(Class<T> type) {
@@ -780,9 +886,9 @@ public class PortfolioService {
 
     private PortfolioViews.CustomerView customer(CustomerAccount row) {
         List<PortfolioViews.CustomerTierView> tiers = em.createQuery(
-                        "select p from InsurancePolicy p where p.customerName = :name order by p.id desc",
+                        "select p from InsurancePolicy p where p.customerRef = :customer order by p.id desc",
                         InsurancePolicy.class)
-                .setParameter("name", row.getName())
+                .setParameter("customer", row.getRef())
                 .getResultList()
                 .stream()
                 .map(this::customerTier)
@@ -945,21 +1051,12 @@ public class PortfolioService {
         if (users.findByUsername(login).isPresent()) {
             throw new IllegalArgumentException("Username " + login + " is already in use.");
         }
-        Role policyholder = roles.findByName("Policyholder")
+        Role policyholder = roles.findByName(AppUser.PORTAL_ROLE)
                 .orElseThrow(() -> new IllegalArgumentException("Policyholder role is not available."));
-        List<Office> offices = em.createQuery(
-                        "select o from Office o where o.name = :name", Office.class)
-                .setParameter("name", "Head Office")
-                .setMaxResults(1)
-                .getResultList();
-        if (offices.isEmpty()) {
-            throw new IllegalArgumentException("Head Office is not available.");
-        }
         AppUser user = new AppUser();
         user.setUsername(login);
         user.setPassword(passwords.encode(password));
         user.setEnabled(true);
-        user.setOffice(offices.get(0));
         user.replaceRoles(Set.of(policyholder));
         users.save(user);
         return login;
@@ -967,14 +1064,14 @@ public class PortfolioService {
 
     private PortfolioViews.ShopView shopFor(CustomerAccount account) {
         List<PortfolioViews.CoverView> policies = covers(em.createQuery(
-                        "select p from InsurancePolicy p where p.customerName = :name order by p.id desc",
+                        "select p from InsurancePolicy p where p.customerRef = :customer order by p.id desc",
                         InsurancePolicy.class)
-                .setParameter("name", account.getName())
+                .setParameter("customer", account.getRef())
                 .getResultList(), InsurancePolicy.class, false);
         List<PortfolioViews.CoverView> requests = policies.stream().filter(p -> isRequest(p.status())).toList();
         List<PortfolioViews.ClaimView> claims = em.createQuery(
-                        "select c from InsuranceClaim c where c.customerName = :name order by c.id desc", InsuranceClaim.class)
-                .setParameter("name", account.getName())
+                        "select c from InsuranceClaim c where c.customerRef = :customer order by c.id desc", InsuranceClaim.class)
+                .setParameter("customer", account.getRef())
                 .getResultStream()
                 .map(this::claim)
                 .toList();
@@ -989,7 +1086,7 @@ public class PortfolioService {
     /** The signed-in customer's own profile; staff logins are refused. */
     public CustomerAccount customerForLogin() {
         AppUser user = security.authenticatedUser();
-        if (!user.hasRole("Policyholder")) {
+        if (!user.isPortalCustomer()) {
             throw new NoAuthorizationException("Only a customer can use the policy shop.");
         }
         List<CustomerAccount> rows = em.createQuery(
@@ -1046,7 +1143,16 @@ public class PortfolioService {
                         && policy.getNextPremiumDue().isBefore(today) && policy.getGracePeriodEnd() != null
                         && !policy.getGracePeriodEnd().isBefore(today),
                 beneficiaries,
-                documents);
+                documents,
+                maxBeneficiaries(row.getProduct()));
+    }
+
+    private int maxBeneficiaries(String product) {
+        return em.createQuery("select p.maxBeneficiaries from InsuranceProduct p where p.name = :name", Integer.class)
+                .setParameter("name", product)
+                .getResultStream()
+                .findFirst()
+                .orElse(PolicyWorkflow.MAX_BENEFICIARIES);
     }
 
     private static String date(LocalDate value) {
@@ -1135,7 +1241,10 @@ public class PortfolioService {
                 ClaimWorkflow.allowedActions(row.getStatus()),
                 ClaimDocumentService.views(em, row.getId()),
                 blank(row.getCheckOverrideReason()),
-                blank(ClaimWorkflow.auditFlag(row)));
+                blank(ClaimWorkflow.auditFlag(row)),
+                row.getStpEligible(),
+                blank(row.getStpIneligibleCode()),
+                blank(row.getFourEyesOverrideReason()));
     }
 
     private PortfolioViews.ConfigView config(ProductConfiguration row) {

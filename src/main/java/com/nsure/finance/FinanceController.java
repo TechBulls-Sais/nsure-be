@@ -16,8 +16,10 @@ import org.springframework.web.bind.annotation.RestController;
 public class FinanceController {
 
     private final FinanceService finance;
+    private final FinanceControls controls;
 
-    public FinanceController(FinanceService finance) {
+    public FinanceController(FinanceService finance, FinanceControls controls) {
+        this.controls = controls;
         this.finance = finance;
     }
 
@@ -92,5 +94,63 @@ public class FinanceController {
     @PostMapping("/gl-batches/{ref}/acknowledge")
     public FinanceViews.GlBatchView acknowledge(@PathVariable String ref, @RequestBody JsonNode body) {
         return finance.acknowledge(ref, body);
+    }
+
+    @PostMapping("/gl-batches/{ref}/submit")
+    public FinanceViews.GlBatchView submit(@PathVariable String ref) {
+        return finance.submit(ref);
+    }
+
+    /** Body: {@code {"glDebitTotal": 100, "glCreditTotal": 100}} as the GL reports them. */
+    @PostMapping("/gl-batches/{ref}/reconcile")
+    public FinanceViews.GlBatchView reconcile(@PathVariable String ref, @RequestBody(required = false) JsonNode body) {
+        return finance.reconcile(ref, body);
+    }
+
+    // ── manual journals (maker-checker) ──
+
+    @GetMapping("/manual-journals")
+    public List<FinanceViews.ManualJournalView> manualJournals() {
+        return controls.manualJournals();
+    }
+
+    /** Body: {@code {"description", "reason", "accountingDate", "lines": [{"account", "debit", "credit"}]}}. */
+    @PostMapping("/manual-journals")
+    public FinanceViews.ManualJournalView proposeManualJournal(@RequestBody(required = false) JsonNode body) {
+        return controls.proposeManualJournal(body);
+    }
+
+    @PostMapping("/manual-journals/{ref}/approve")
+    public FinanceViews.ManualJournalView approveManualJournal(@PathVariable String ref) {
+        return controls.approveManualJournal(ref);
+    }
+
+    @PostMapping("/manual-journals/{ref}/reject")
+    public FinanceViews.ManualJournalView rejectManualJournal(@PathVariable String ref,
+            @RequestBody(required = false) JsonNode body) {
+        return controls.rejectManualJournal(ref, body);
+    }
+
+    // ── suspense clearance (maker-checker) ──
+
+    @GetMapping("/suspense")
+    public List<FinanceViews.SuspenseView> suspense() {
+        return controls.suspense();
+    }
+
+    /** Body: {@code {"action": "ALLOCATE" | "REFUND", "policyRef", "reason"}}. */
+    @PostMapping("/suspense/{id}/clearance")
+    public FinanceViews.SuspenseView requestClearance(@PathVariable Long id, @RequestBody(required = false) JsonNode body) {
+        return controls.requestClearance(id, body);
+    }
+
+    @PostMapping("/suspense/{id}/clearance/approve")
+    public FinanceViews.SuspenseView approveClearance(@PathVariable Long id) {
+        return controls.approveClearance(id);
+    }
+
+    @PostMapping("/suspense/{id}/clearance/reject")
+    public FinanceViews.SuspenseView rejectClearance(@PathVariable Long id) {
+        return controls.rejectClearance(id);
     }
 }

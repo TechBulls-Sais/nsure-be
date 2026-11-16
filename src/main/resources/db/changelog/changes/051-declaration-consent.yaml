@@ -1,0 +1,73 @@
+databaseChangeLog:
+  # Spec 01 BR-5, BR-6: an OTP-verified declaration before the first premium, recorded as immutable evidence, and a
+  # payment lock after too many wrong codes.
+  - changeSet:
+      id: 051-declaration-consent
+      author: nsure
+      changes:
+        - createTable:
+            tableName: declaration_consent_log
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: customer_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: accuracy_confirmed, type: boolean, constraints: {nullable: false}}
+              - column: {name: terms_accepted, type: boolean, constraints: {nullable: false}}
+              - column: {name: data_protection_accepted, type: boolean, constraints: {nullable: false}}
+              - column: {name: false_information_acknowledged, type: boolean, constraints: {nullable: false}}
+              - column: {name: otp_verified_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: recorded_by, type: varchar(100), constraints: {nullable: false}}
+        - createIndex:
+            tableName: declaration_consent_log
+            indexName: ix_consent_policy
+            columns:
+              - column: {name: policy_ref}
+        - createTable:
+            tableName: declaration_otp
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: customer_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: code_hash, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: expires_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: used_at, type: timestamp(6)}
+        - createIndex:
+            tableName: declaration_otp
+            indexName: ix_declaration_otp_customer
+            columns:
+              - column: {name: customer_ref}
+              - column: {name: policy_ref}
+        - createTable:
+            tableName: declaration_lock
+            columns:
+              - column: {name: customer_ref, type: varchar(20), constraints: {primaryKey: true, nullable: false}}
+              - column: {name: failed_attempts, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: locked_until, type: timestamp(6)}
+  - changeSet:
+      id: 051-declaration-consent-mysql
+      author: nsure
+      dbms: mysql
+      changes:
+        - modifyDataType: {tableName: declaration_consent_log, columnName: accuracy_confirmed, newDataType: bit}
+        - modifyDataType: {tableName: declaration_consent_log, columnName: terms_accepted, newDataType: bit}
+        - modifyDataType: {tableName: declaration_consent_log, columnName: data_protection_accepted, newDataType: bit}
+        - modifyDataType: {tableName: declaration_consent_log, columnName: false_information_acknowledged, newDataType: bit}
+  - changeSet:
+      id: 051-declaration-consent-immutable-mysql
+      author: nsure
+      dbms: mysql
+      # Spec 01 NFR-4 / 04 A-15: evidence that can be edited is not evidence. Enforced in the database as well as by
+      # the read-only entity. Needs the TRIGGER privilege; where the migrator lacks it the entity rule still holds.
+      failOnError: false
+      changes:
+        - sql:
+            splitStatements: false
+            sql: >-
+              CREATE TRIGGER trg_consent_log_no_update BEFORE UPDATE ON declaration_consent_log FOR EACH ROW
+              SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'declaration_consent_log is immutable evidence'
+        - sql:
+            splitStatements: false
+            sql: >-
+              CREATE TRIGGER trg_consent_log_no_delete BEFORE DELETE ON declaration_consent_log FOR EACH ROW
+              SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'declaration_consent_log is immutable evidence'

@@ -44,6 +44,12 @@ public class ClaimDocumentController {
         return documents.generateSummary(ref);
     }
 
+    /** Who downloaded this claim's documents (READ_AUDIT). */
+    @GetMapping("/claims/{ref}/document-access")
+    public List<DocumentCustody.AccessView> accessLog(@PathVariable String ref) {
+        return documents.accessLog(ref);
+    }
+
     @GetMapping("/claims/{ref}/documents/{id}")
     public ResponseEntity<Resource> download(@PathVariable String ref, @PathVariable Long id) {
         return file(documents.download(ref, id));

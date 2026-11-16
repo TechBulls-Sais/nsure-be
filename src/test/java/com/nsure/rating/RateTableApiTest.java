@@ -26,7 +26,7 @@ class RateTableApiTest {
     void seededTablesFollowTheDemoServerFormat() throws Exception {
         mockMvc.perform(get("/admin/rate-tables").with(httpBasic("admin", "password")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$.length()").value(8)) // 4 demo tables + the 4 Tap Cover plans (spec 02 §6.4)
                 .andExpect(jsonPath("$[0].ref").value("RT-00001"))
                 .andExpect(jsonPath("$[0].title").value("Family Funeral – Bronze"))
                 .andExpect(jsonPath("$[0].productType").value("Funeral"))
@@ -54,9 +54,10 @@ class RateTableApiTest {
     }
 
     @Test
-    void savingChangedRatesCutsANewVersionAndKeepsTheOld() throws Exception {
+    void aChangeIsADraftUntilASecondPersonApprovesItWithNotice() throws Exception {
+        // Spec 11 E-13: saving never changes the live price; it writes a DRAFT (Product Configurator: rate.write).
         mockMvc.perform(put("/admin/rate-tables/RT-00004/grid")
-                        .with(httpBasic("admin", "password"))
+                        .with(httpBasic("configurator", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"baseVersion":1,"rows":[
@@ -66,12 +67,33 @@ class RateTableApiTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.version.label").value("RT-00004-v2"))
-                .andExpect(jsonPath("$.version.current").value(true))
+                .andExpect(jsonPath("$.version.current").value(false))
                 .andExpect(jsonPath("$.versions.length()").value(2))
-                .andExpect(jsonPath("$.versions[0].createdBy").value("admin"))
+                .andExpect(jsonPath("$.versions[0].status").value("DRAFT"))
+                .andExpect(jsonPath("$.versions[0].createdBy").value("configurator"))
                 .andExpect(jsonPath("$.versions[0].changeSummary").value(Matchers.containsString("Version v1 → v2")))
                 .andExpect(jsonPath("$.versions[0].changeSummary")
                         .value(Matchers.containsString("Added Main Insured 18–39: cover P90,000, P60")))
+                .andExpect(jsonPath("$.versions[1].status").value("PUBLISHED"));
+
+        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/2/submit").with(httpBasic("configurator", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.versions[0].status").value("PENDING_APPROVAL"));
+        // E-11: only the Actuary holds rate.publish.
+        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/2/approve").with(httpBasic("configurator", "password")))
+                .andExpect(status().isForbidden());
+        // E-26 / TC-29: a re-rate needs 90 days' written notice, or an override reason.
+        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/2/approve").with(httpBasic("actuary", "password")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(Matchers.startsWith("A re-rate needs 90 days' written notice")));
+        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/2/approve")
+                        .with(httpBasic("actuary", "password"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"noticeIssuedAt\":\"" + java.time.LocalDate.now().minusDays(91) + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.versions[0].status").value("PUBLISHED"))
+                .andExpect(jsonPath("$.versions[0].approvedBy").value("actuary"))
+                .andExpect(jsonPath("$.versions[1].status").value("SUPERSEDED"))
                 .andExpect(jsonPath("$.versions[1].validTo").value(Matchers.not("")));
 
         // The superseded version is still readable, unchanged.
@@ -90,6 +112,36 @@ class RateTableApiTest {
                                 ]}
                                 """))
                 .andExpect(status().isConflict());
+
+        // Four-eyes (E-24): the actuary authors v3 and cannot also publish it.
+        mockMvc.perform(put("/admin/rate-tables/RT-00004/grid")
+                        .with(httpBasic("actuary", "password"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"baseVersion":2,"rows":[
+                                  {"lifeType":"Main Insured","ageFrom":18,"ageTo":39,"coverAmount":90000,"monthlyPremium":61},
+                                  {"lifeType":"Main Insured","ageFrom":40,"ageTo":65,"coverAmount":90000,"monthlyPremium":150.5}
+                                ]}
+                                """))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/3/submit").with(httpBasic("actuary", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/3/approve")
+                        .with(httpBasic("actuary", "password"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"noticeIssuedAt\":\"" + java.time.LocalDate.now().minusDays(91) + "\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("You authored this rate version, so you cannot also publish it. "
+                        + "A second approver must action it."));
+        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/3/reject").with(httpBasic("actuary", "password")))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/3/reject")
+                        .with(httpBasic("actuary", "password"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"Withdrawn\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.versions[0].status").value("REJECTED"))
+                .andExpect(jsonPath("$.versions[0].rejectionReason").value("Withdrawn"));
     }
 
     @Test

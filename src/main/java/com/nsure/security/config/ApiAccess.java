@@ -1,6 +1,6 @@
 package com.nsure.security.config;
 
-import com.nsure.security.capability.Capability;
+import com.nsure.security.domain.PermissionCatalog;
 import com.nsure.security.domain.AppUser;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -14,8 +14,8 @@ import org.springframework.security.core.GrantedAuthority;
 /**
  * Who may call one API endpoint. Every rule in {@link ApiAccessRules} is one of these.
  *
- * <p>Super Admin passes every rule (except that nothing is needed for {@code PUBLIC}). The check
- * runs before any permission lookup, so an empty or broken grant table can never lock them out.
+ * <p>Access is deny by default (Nsure Life NS-SH11-002): no role passes every rule by name, and there is no wildcard
+ * code. The administrator reaches an endpoint the same way as everyone else, through an explicit grant.
  *
  * <p>A {@code PERMISSION} rule names the permission codes that open it; holding any one of them is enough.
  * Codes are what roles hold, never role names, so any role an administrator grants the code to (Claims
@@ -32,8 +32,6 @@ public final class ApiAccess {
         CUSTOMER,
         /** Any signed-in staff user, whatever their permissions. */
         STAFF,
-        /** Super Admin only. */
-        SUPER_ADMIN,
         /** Staff holding at least one of the listed permission codes. */
         PERMISSION
     }
@@ -64,13 +62,9 @@ public final class ApiAccess {
         return new ApiAccess(Kind.STAFF, Set.of());
     }
 
-    public static ApiAccess superAdmin() {
-        return new ApiAccess(Kind.SUPER_ADMIN, Set.of());
-    }
-
     /**
-     * Staff with any one of these codes. A code with a dot is a capability ({@code rate.read}) and must exist in
-     * {@link Capability}; anything else is a function code ({@code READ_CLAIM}) from {@code app_permission}.
+     * Staff with any one of these permission codes ({@code requireAny}, spec 04 §5.1). Each code must be in
+     * {@link PermissionCatalog}: a typo fails when this class loads, not as a silent deny in production (A-4).
      */
     public static ApiAccess anyOf(String... codes) {
         if (codes.length == 0) {
@@ -78,10 +72,7 @@ public final class ApiAccess {
         }
         Set<String> set = new LinkedHashSet<>();
         for (String code : codes) {
-            if (code.contains(".")) {
-                Capability.require(code);
-            }
-            set.add(code);
+            set.add(PermissionCatalog.require(code));
         }
         return new ApiAccess(Kind.PERMISSION, Collections.unmodifiableSet(set));
     }
@@ -105,29 +96,24 @@ public final class ApiAccess {
             // Not a database login (a test or token principal): only its granted authorities count.
             return kind == Kind.AUTHENTICATED || (kind == Kind.PERMISSION && holdsAny(null, authentication));
         }
-        if (user.isSuperAdmin()) {
-            return true;
-        }
         return switch (kind) {
             case AUTHENTICATED -> true;
             case CUSTOMER -> user.isPortalCustomer();
-            case STAFF -> !user.isPortalCustomer();
-            case SUPER_ADMIN -> false;
-            case PERMISSION -> !user.isPortalCustomer() && holdsAny(user, authentication);
+            case STAFF -> user.isStaffUser();
+            case PERMISSION -> user.isStaffUser() && holdsAny(user, authentication);
             case PUBLIC -> true;
         };
     }
 
     private boolean holdsAny(AppUser user, Authentication authentication) {
         for (String code : permissions) {
-            if (hasAuthority(authentication, code) || (user != null && user.hasPermissionTo(code))) {
+            // A database login answers through the same check the services use (disabled roles, emergency grants),
+            // so the URL rule and the service can never disagree.
+            if (user != null ? user.hasPermissionTo(code) : hasAuthority(authentication, code)) {
                 return true;
             }
         }
-        // ALL_FUNCTIONS_READ opens every read rule, as it does in the service-layer checks.
-        boolean readRule = permissions.stream().anyMatch(code -> code.startsWith("READ_"));
-        return readRule && (hasAuthority(authentication, "ALL_FUNCTIONS_READ")
-                || (user != null && user.hasPermissionTo("ALL_FUNCTIONS_READ")));
+        return false;
     }
 
     private static boolean hasAuthority(Authentication authentication, String code) {

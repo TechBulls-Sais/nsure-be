@@ -182,7 +182,7 @@ class ClaimWorkflowApiTest {
     }
 
     @Test
-    void aSuperAdminMayApproveTheirOwnAssessmentAsARecordedOverride() throws Exception {
+    void approvingYourOwnAssessmentNeedsTheBreakGlassAuthorityAndAWrittenReason() throws Exception {
         customer("Thato Seretse", "thato");
         String policy = activePolicy("Thato Seretse", 50000, 60);
         beneficiary(policy, "Mpho Seretse");
@@ -191,15 +191,78 @@ class ClaimWorkflowApiTest {
         mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(httpBasic("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.recommendedBy").value("admin"));
+        // Spec 12 C-9 and Nsure Life NS-SH11-003: no role holds the override, the administrator included. It comes only
+        // through time-limited emergency access granted by someone else, and still needs a written reason.
         mockMvc.perform(post("/portfolio/claims/" + claim + "/approve").with(httpBasic("admin", "password")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("You assessed this claim, so you cannot also authorise its "
+                        + "payout. A second approver must action it."));
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
+                        "{\"fourEyesOverrideReason\":\"Only approver on duty during the outage\"}"))
+                .andExpect(status().isForbidden());
+        String grant = mockMvc.perform(json(post("/admin/emergency-access"), "secadmin",
+                        "{\"username\":\"admin\",\"permission\":\"OVERRIDE_CLAIM_FOUR_EYES\",\"hours\":1,"
+                                + "\"reason\":\"Outage: only one approver on duty\"}"))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
+                        "{\"fourEyesOverrideReason\":\"Only approver on duty during the outage\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Approved"))
                 .andExpect(jsonPath("$.adjudicatedBy").value("admin"))
-                .andExpect(jsonPath("$.fourEyesApplied").value(false));
+                .andExpect(jsonPath("$.fourEyesApplied").value(false))
+                .andExpect(jsonPath("$.fourEyesOverrideReason").value("Only approver on duty during the outage"));
+        mockMvc.perform(post("/admin/emergency-access/" + JsonPath.read(grant, "$.id") + "/revoke")
+                        .with(httpBasic("secadmin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("REVOKED"));
 
         mockMvc.perform(get("/portfolio/history/claim/" + claim).with(httpBasic("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Approved')].details").value(org.hamcrest.Matchers.hasItem(
-                        org.hamcrest.Matchers.containsString("four-eyes overridden"))));
+                        org.hamcrest.Matchers.containsString("FOUR-EYES OVERRIDDEN"))));
+        // C-17: the override shows on the control-bypass register.
+        mockMvc.perform(get("/admin/controls/stp-dashboard").with(httpBasic("compliance", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.fourEyesNotApplied[?(@.claimRef == '" + claim + "')].detail").value(
+                        org.hamcrest.Matchers.hasItem(org.hamcrest.Matchers.startsWith("Override:"))));
+    }
+
+    @Test
+    void aSecondAssessorApprovesOnlyWithinTheirApprovalLimit() throws Exception {
+        customer("Neo Ramotswe", "neo");
+        String policy = activePolicy("Neo Ramotswe", 50000, 60);
+        beneficiary(policy, "Kabo Ramotswe");
+        String claim = staffLodge(policy, "Kabo Ramotswe");
+        // Over the STP ceiling: routed to a person with the reason recorded as a code (spec 12 C-12).
+        mockMvc.perform(get("/portfolio/claims").with(httpBasic("admin", "password")))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].stpEligible").value(false))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].stpIneligibleCode").value("OVER_CEILING"));
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(httpBasic("assessor", "password")))
+                .andExpect(status().isOk());
+
+        Long roleId = ((Number) em.createQuery("select r.id from Role r where r.name = 'Claims Assessor'")
+                .getSingleResult()).longValue();
+        try {
+            mockMvc.perform(json(put("/admin/approval-authorities/" + roleId), "admin", "{\"maxPayoutAmount\":10000}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.maxPayoutAmount").value(10000.00));
+            // Spec 04 §5.3: over the limit needs a more senior approver.
+            mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":45000}"))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.message").value("This payout of P 45,000.00 exceeds your approval limit of "
+                            + "P 10,000.00. It needs a more senior approver."));
+            mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":\"ten\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("Payout amount must be a number"));
+            mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":9000}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.status").value("Approved"))
+                    .andExpect(jsonPath("$.adjudicatedBy").value("assessor2"))
+                    .andExpect(jsonPath("$.fourEyesApplied").value(true));
+        } finally {
+            mockMvc.perform(json(put("/admin/approval-authorities/" + roleId), "admin", "{\"maxPayoutAmount\":50000}"))
+                    .andExpect(status().isOk());
+        }
     }
 
     @Test

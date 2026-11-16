@@ -27,3 +27,7 @@ nsure:
     timezone: Africa/Gaborone
     primary-color: "#4e6c39"
     bind-on-first-start: true
+  # Cards settle inline in tests unless a test asks for the hosted-checkout simulator.
+  payments:
+    card-gateway: MOCK
+    sweep-cron: "-"

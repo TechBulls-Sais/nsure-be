@@ -42,6 +42,20 @@ public class InsuranceClaim extends CoverRecord {
     @Column(name = "stp_ineligible_reason", length = 300)
     private String stpIneligibleReason;
 
+    /** Spec 12 C-12: whether the claim passed every STP gate, and the coded gate that stopped it if not. */
+    @Column(name = "stp_eligible")
+    private Boolean stpEligible;
+
+    @Column(name = "stp_ineligible_code", length = 30)
+    private String stpIneligibleCode;
+
+    /** The written reason when the assessor approved their own claim under the break-glass authority (C-9). */
+    @Column(name = "four_eyes_override_reason", length = 500)
+    private String fourEyesOverrideReason;
+
+    @Column(name = "lodged_at")
+    private LocalDateTime lodgedAt;
+
     @Column(name = "check_policy_active", length = 10)
     private String checkPolicyActive;
 
@@ -346,6 +360,38 @@ public class InsuranceClaim extends CoverRecord {
 
     public void setFourEyesApplied(Boolean fourEyesApplied) {
         this.fourEyesApplied = fourEyesApplied;
+    }
+
+    public Boolean getStpEligible() {
+        return stpEligible;
+    }
+
+    public void setStpEligible(Boolean stpEligible) {
+        this.stpEligible = stpEligible;
+    }
+
+    public String getStpIneligibleCode() {
+        return stpIneligibleCode;
+    }
+
+    public void setStpIneligibleCode(String stpIneligibleCode) {
+        this.stpIneligibleCode = stpIneligibleCode;
+    }
+
+    public LocalDateTime getLodgedAt() {
+        return lodgedAt;
+    }
+
+    public void setLodgedAt(LocalDateTime lodgedAt) {
+        this.lodgedAt = lodgedAt;
+    }
+
+    public String getFourEyesOverrideReason() {
+        return fourEyesOverrideReason;
+    }
+
+    public void setFourEyesOverrideReason(String fourEyesOverrideReason) {
+        this.fourEyesOverrideReason = fourEyesOverrideReason;
     }
 
     public String getRejectionReason() {

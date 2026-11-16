@@ -33,12 +33,12 @@ class ApiAccessIntegrationTest {
 
     @Test
     void superAdminRoleAloneOpensEveryApi() throws Exception {
-        // No capability roles and no other app roles: only the "Super Admin" role.
+        // Only the "Super Admin" role. It opens these through its explicit grants, not by its name (NS-SH11-002).
         String username = createUser("superadmin" + suffix(), roleId("Super Admin"));
         for (String path : new String[] {
                 "/portfolio/claims", "/portfolio/customers", "/portfolio/policies", "/portfolio/applications",
                 "/portfolio/product-configs", "/admin/rate-tables", "/admin/controls", "/audits",
-                "/users", "/roles", "/permissions", "/offices"}) {
+                "/users", "/roles", "/permissions", "/admin/emergency-access"}) {
             send(username, get(path), 200);
         }
     }
@@ -57,7 +57,13 @@ class ApiAccessIntegrationTest {
             }
         }
         assertThat(superAdmin).isNotNull();
-        assertThat(superAdmin.get("permissions").size()).isEqualTo(permissions.size());
+        // Every code as an explicit grant except the break-glass ones, which no role holds (spec 12 C-9, C-10) and come
+        // only through time-limited emergency access, and reviewing that access, which stays with Compliance
+        // (Nsure Life NS-SH11-003). There is no wildcard code.
+        assertThat(superAdmin.get("permissions").size())
+                .isEqualTo(permissions.size() - com.nsure.security.domain.PermissionCatalog.BREAK_GLASS.size() - 1);
+        assertThat(superAdmin.get("permissions").toString()).doesNotContain("REVIEW_EMERGENCY_ACCESS", "ALL_FUNCTIONS");
+        assertThat(superAdmin.get("permissions").toString()).doesNotContain("OVERRIDE_CLAIM_FOUR_EYES");
     }
 
     @Test
@@ -68,7 +74,7 @@ class ApiAccessIntegrationTest {
         roles.forEach(role -> names.add(role.get("name").asText()));
         assertThat(names).doesNotContain("Group Administrator", "Finance Controller", "Distribution Administrator",
                 "Reinsurance Officer", "Service Agent", "Operations Manager");
-        assertThat(names).contains("Super Admin", "Policyholder", "Product Configurator", "Actuary",
+        assertThat(names).contains("Super Admin", "Policyholder / End User", "Product Configurator", "Actuary",
                 "Onboarding Specialist", "Claims Assessor", "Customer Support Representative",
                 "Compliance & Auditor");
     }
@@ -112,7 +118,8 @@ class ApiAccessIntegrationTest {
     void claimsAssessorReachesClaimsButNotAdministration() throws Exception {
         send("assessor", get("/portfolio/claims"), 200);
         send("assessor", get("/portfolio/policies"), 200);
-        send("assessor", get("/portfolio/customers"), 200);
+        // Spec 04 §4: Claims Assessor holds no customer.read; a claim carries the customer it needs (A-17).
+        send("assessor", get("/portfolio/customers"), 403);
         send("assessor", get("/admin/controls"), 200);
         send("assessor", get("/admin/rate-tables"), 403);
         send("assessor", get("/portfolio/product-configs"), 403);
@@ -146,7 +153,10 @@ class ApiAccessIntegrationTest {
         String username = createUser("viewer" + suffix(), roleId);
         send(username, get("/portfolio/claims"), 403);
 
-        send("admin", put("/roles/" + roleId + "/permissions").content("{\"permissions\":{\"READ_CLAIM\":true}}"), 200);
+        JsonNode pending = send("admin", put("/roles/" + roleId + "/permissions")
+                .content("{\"permissions\":{\"READ_CLAIM\":true}}"), 202);
+        // A second administrator approves the grant (no self-approval, NS-UX-004).
+        send("secadmin", post("/audits/" + pending.get("commandId").asLong() + "/approve"), 200);
         send(username, get("/portfolio/claims"), 200);
         send(username, get("/portfolio/history/claim/CLM-1"), 200);
         send(username, get("/portfolio/policies"), 403);
@@ -160,11 +170,9 @@ class ApiAccessIntegrationTest {
     }
 
     private String createUser(String username, long roleId) throws Exception {
-        long officeId = send("admin", get("/offices"), 200).get(0).get("id").asLong();
         ObjectNode body = json.createObjectNode();
         body.put("username", username);
         body.put("password", "password");
-        body.put("officeId", officeId);
         body.put("enabled", true);
         body.putArray("roleIds").add(roleId);
         send("admin", post("/users").content(body.toString()), 201);

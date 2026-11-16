@@ -164,11 +164,19 @@ class SubledgerAndIntegrationApiTest {
         mockMvc.perform(json(post("/finance/periods/" + period + "/close"), "finance", "{}"))
                 .andExpect(status().isConflict());
 
+        // Blueprint §7: prepared → submitted → accepted or rejected → reconciled.
         String batch = mockMvc.perform(post("/finance/gl-batches").with(httpBasic("finance", "password")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("SUBMITTED"))
+                .andExpect(jsonPath("$.status").value("PREPARED"))
                 .andReturn().getResponse().getContentAsString();
         String batchRef = JsonPath.read(batch, "$.ref");
+        mockMvc.perform(json(post("/finance/gl-batches/" + batchRef + "/acknowledge"), "finance",
+                        "{\"status\":\"ACCEPTED\"}"))
+                .andExpect(status().isConflict());
+        mockMvc.perform(post("/finance/gl-batches/" + batchRef + "/submit").with(httpBasic("finance", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUBMITTED"))
+                .andExpect(jsonPath("$.submittedBy").value("finance"));
         assertThat(new BigDecimal(JsonPath.read(batch, "$.debitTotal").toString()))
                 .isEqualByComparingTo(new BigDecimal(JsonPath.read(batch, "$.creditTotal").toString()));
         mockMvc.perform(json(post("/finance/gl-batches/" + batchRef + "/acknowledge"), "finance",
@@ -181,6 +189,17 @@ class SubledgerAndIntegrationApiTest {
         mockMvc.perform(json(post("/finance/gl-batches/" + batchRef + "/acknowledge"), "finance",
                         "{\"status\":\"REJECTED\",\"note\":\"late\"}"))
                 .andExpect(status().isConflict());
+        // Reconciliation: the totals the GL reports must equal the batch control totals.
+        String debitTotal = JsonPath.read(batch, "$.debitTotal").toString();
+        mockMvc.perform(json(post("/finance/gl-batches/" + batchRef + "/reconcile"), "finance",
+                        "{\"glDebitTotal\":\"1.00\",\"glCreditTotal\":\"1.00\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("do not match")));
+        mockMvc.perform(json(post("/finance/gl-batches/" + batchRef + "/reconcile"), "finance",
+                        "{\"glDebitTotal\":\"" + debitTotal + "\",\"glCreditTotal\":\"" + debitTotal + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RECONCILED"))
+                .andExpect(jsonPath("$.reconciledBy").value("finance"));
 
         String closed = mockMvc.perform(json(post("/finance/periods/" + period + "/close"), "finance",
                         "{\"reason\":\"Month end\",\"acknowledgeOpenItems\":true}"))
@@ -206,6 +225,84 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(jsonPath("$.status").value("OPEN"));
         mockMvc.perform(json(post("/finance/periods/" + period + "/close"), "grpadmin", "{}"))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void manualJournalsAndSuspenseClearanceNeedASecondPerson() throws Exception {
+        // Blueprint §7: manual journals and suspense clearance have a named owner and maker-checker approval.
+        mockMvc.perform(json(post("/finance/manual-journals"), "admin", "{\"description\":\"Bank charges\","
+                        + "\"reason\":\"October bank charges not yet posted\",\"lines\":[{\"account\":\"5000\","
+                        + "\"debit\":\"12.50\"},{\"account\":\"1000\",\"credit\":\"10.00\"}]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("does not balance")));
+        String manual = mockMvc.perform(json(post("/finance/manual-journals"), "admin", "{\"description\":\"Bank charges\","
+                        + "\"reason\":\"October bank charges not yet posted\",\"lines\":[{\"account\":\"5000\","
+                        + "\"debit\":\"12.50\"},{\"account\":\"1000\",\"credit\":\"12.50\"}]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.journalRef").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+        String manualRef = JsonPath.read(manual, "$.ref");
+        mockMvc.perform(post("/finance/manual-journals/" + manualRef + "/approve").with(httpBasic("admin", "password")))
+                .andExpect(status().isForbidden());
+        String approved = mockMvc.perform(post("/finance/manual-journals/" + manualRef + "/approve")
+                        .with(httpBasic("secadmin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("POSTED"))
+                .andExpect(jsonPath("$.checkedBy").value("secadmin"))
+                .andReturn().getResponse().getContentAsString();
+        mockMvc.perform(get("/finance/journals/" + JsonPath.read(approved, "$.journalRef")).with(httpBasic("admin", "password")))
+                .andExpect(jsonPath("$.eventType").value("ManualJournal"))
+                .andExpect(jsonPath("$.lines.length()").value(2));
+        mockMvc.perform(post("/finance/manual-journals/" + manualRef + "/approve").with(httpBasic("secadmin", "password")))
+                .andExpect(status().isConflict());
+
+        // Suspense: a receipt that does not match goes to suspense; refunding it needs a second person.
+        String[] policy = pendingPolicy("Lorato Kgosi", "loratok");
+        mockMvc.perform(json(post("/integration/payment-notifications"), "admin", "{\"provider\":\"BankFeed\","
+                        + "\"providerReference\":\"BF-77\",\"policyRef\":\"" + policy[0] + "\",\"amount\":\"1.00\"}"))
+                .andExpect(jsonPath("$.status").value("SUSPENSE"));
+        Integer wrongAmount = suspenseId("BF-77");
+        mockMvc.perform(json(post("/finance/suspense/" + wrongAmount + "/clearance"), "admin",
+                        "{\"action\":\"ALLOCATE\",\"policyRef\":\"" + policy[0] + "\",\"reason\":\"Customer says it is theirs\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Refund it instead")));
+        mockMvc.perform(json(post("/finance/suspense/" + wrongAmount + "/clearance"), "admin",
+                        "{\"action\":\"REFUND\",\"reason\":\"Short payment returned to the payer\"}"))
+                .andExpect(jsonPath("$.clearanceAction").value("REFUND"))
+                .andExpect(jsonPath("$.requestedBy").value("admin"));
+        mockMvc.perform(post("/finance/suspense/" + wrongAmount + "/clearance/approve").with(httpBasic("admin", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/finance/suspense/" + wrongAmount + "/clearance/approve").with(httpBasic("secadmin", "password")))
+                .andExpect(jsonPath("$.status").value("REFUNDED"))
+                .andExpect(jsonPath("$.clearedBy").value("secadmin"));
+
+        // A receipt quoting an unknown policy is allocated to the right one once approved; the premium is collected.
+        mockMvc.perform(json(post("/integration/payment-notifications"), "admin", "{\"provider\":\"BankFeed\","
+                        + "\"providerReference\":\"BF-78\",\"policyRef\":\"POL-NOPE\",\"amount\":\"" + policy[1] + "\"}"))
+                .andExpect(jsonPath("$.status").value("SUSPENSE"));
+        Integer unknownPolicy = suspenseId("BF-78");
+        mockMvc.perform(json(post("/finance/suspense/" + unknownPolicy + "/clearance"), "admin",
+                        "{\"action\":\"ALLOCATE\",\"policyRef\":\"" + policy[0] + "\",\"reason\":\"Payer quoted an old reference\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/finance/suspense/" + unknownPolicy + "/clearance/approve").with(httpBasic("secadmin", "password")))
+                .andExpect(jsonPath("$.status").value("APPLIED"))
+                .andExpect(jsonPath("$.policyRef").value("POL-NOPE"));
+        mockMvc.perform(get("/portfolio/policies").with(httpBasic("admin", "password")))
+                .andExpect(jsonPath("$[?(@.id == '" + policy[0] + "')].status").value(org.hamcrest.Matchers.hasItem("Active")));
+
+        // Clearing posts Dr suspense / Cr bank, so the cash is counted once.
+        dispatch();
+        String cleared = mockMvc.perform(get("/finance/journals?eventType=SuspenseCleared").with(httpBasic("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        assertThat((List<String>) JsonPath.read(cleared, "$[*].sourceRef")).contains("BF-77", "BF-78");
+    }
+
+    private Integer suspenseId(String providerRef) throws Exception {
+        String suspense = mockMvc.perform(get("/finance/suspense").with(httpBasic("admin", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return JsonPath.<List<Integer>>read(suspense, "$[?(@.providerRef == '" + providerRef + "')].id").get(0);
     }
 
     @Test

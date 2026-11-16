@@ -49,9 +49,8 @@ public class UserController {
             @RequestBody(required = false) JsonNode body,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(value = "Idempotency-Retry", required = false) String retry) {
-        Long officeId = responses.optionalLong(body, "officeId");
         CommandOutcome outcome = commands.execute(
-                responses.toCommand("CREATE", "USER", null, body, idempotencyKey, officeId, retry));
+                responses.toCommand("CREATE", "USER", null, body, idempotencyKey, retry));
         return respond(outcome, HttpStatus.CREATED);
     }
 
@@ -61,12 +60,8 @@ public class UserController {
             @RequestBody(required = false) JsonNode body,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(value = "Idempotency-Retry", required = false) String retry) {
-        Long officeId = responses.optionalLong(body, "officeId");
-        if (officeId == null) {
-            officeId = users.officeIdOf(id);
-        }
         CommandOutcome outcome = commands.execute(
-                responses.toCommand("UPDATE", "USER", id, body, idempotencyKey, officeId, retry));
+                responses.toCommand("UPDATE", "USER", id, body, idempotencyKey, retry));
         return respond(outcome, HttpStatus.OK);
     }
 
@@ -76,7 +71,7 @@ public class UserController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(value = "Idempotency-Retry", required = false) String retry) {
         CommandOutcome outcome = commands.execute(
-                responses.toCommand("DELETE", "USER", id, null, idempotencyKey, null, retry));
+                responses.toCommand("DELETE", "USER", id, null, idempotencyKey, retry));
         return respond(outcome, HttpStatus.OK);
     }
 

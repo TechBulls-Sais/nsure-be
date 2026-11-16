@@ -7,5 +7,7 @@ public record PermissionResponse(
         String entityName,
         String actionName,
         String functionName,
-        boolean canMakerChecker) {
+        boolean canMakerChecker,
+        // The spec 04 capability the code realises (claim.approve, rate.publish …), or null.
+        String capability) {
 }

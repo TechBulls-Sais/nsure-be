@@ -7,6 +7,11 @@ import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.repository.PermissionRepository;
 import org.springframework.stereotype.Component;
 
+/**
+ * Four-eyes rules for commands. A command whose permission is marked maker-checker always waits for a checker, whoever
+ * made it (only a user's own profile edit skips it). The checker needs {@code CHECKER_<code>} and is never the maker:
+ * no one approves their own work, the administrator included (Nsure Life NS-UX-004, NS-SH10-003, AT-SH10-01).
+ */
 @Component
 public class MakerCheckerPolicy {
 
@@ -23,7 +28,7 @@ public class MakerCheckerPolicy {
         boolean enabled = permissions.findByCodeIgnoreCase(permissionCode)
                 .map(permission -> permission.isCanMakerChecker())
                 .orElse(false);
-        if (!enabled || user.hasPermissionTo("CHECKER_SUPER_USER")) {
+        if (!enabled) {
             return false;
         }
         return !isSelfProfile(user, entity, action, resourceId);
@@ -31,13 +36,10 @@ public class MakerCheckerPolicy {
 
     public void validateChecker(AppUser checker, CommandSource pending) {
         String required = "CHECKER_" + pending.getPermissionCode();
-        if (!checker.hasPermissionTo("CHECKER_SUPER_USER") && !checker.hasPermissionTo(required)) {
+        if (!checker.hasPermissionTo(required)) {
             throw new NoAuthorizationException("User has no authority to: " + required);
         }
-        // Super Admin may check a command they made; every other maker still needs a different checker.
-        if (!properties.isSameUserAllowed()
-                && checker.getId().equals(pending.getMakerId())
-                && !checker.isSuperAdmin()) {
+        if (!properties.isSameUserAllowed() && checker.getId().equals(pending.getMakerId())) {
             throw new NoAuthorizationException("Maker cannot check their own command");
         }
     }

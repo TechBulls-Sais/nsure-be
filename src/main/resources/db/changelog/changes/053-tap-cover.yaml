@@ -1,0 +1,110 @@
+databaseChangeLog:
+  # Spec 02 §6.4–6.5: the Tap Cover product, its four plans, life-assured rules and the fully reconstructed premium
+  # grids (per life, monthly, TC-35/TC-36). Bronze is seeded inactive pending decision D1 (its covers sit below the
+  # §6.3 minimums). Adult bands stop at 60–64 (entry capped at 64, TC-10).
+  - changeSet:
+      id: 053-tap-cover-product
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO ins_product (name, icon, color, description, cover, premium, live_count, display_order,
+                                       product_type, waiting_period_days, grace_period_days, summary, tagline)
+              SELECT 'Tap Cover', 'HeartHandshake', 'green',
+                     'Direct digital funeral cover for you, your spouse and up to six children, priced per life by age.',
+                     'P 10,000 – P 20,000', 'From P 6.00', 0, 9, 'Funeral', 180, 30,
+                     'Funeral cover for the whole family, bought and paid online.',
+                     'Cover for every life that matters'
+              WHERE NOT EXISTS (SELECT 1 FROM ins_product WHERE name = 'Tap Cover');
+
+              INSERT INTO ins_cover_tier (product_id, name, cover_amount, premium, premium_frequency, popular, benefits,
+                                          display_order, active)
+              SELECT p.id, t.name, t.cover, t.premium, 'Monthly', t.popular, t.benefits, t.display_order, t.active
+              FROM ins_product p
+              JOIN (
+                SELECT 'Bronze' AS name, 5000 AS cover, 3 AS premium, FALSE AS popular,
+                       'Principal and spouse P 5,000 · children P 1,000' AS benefits, 1 AS display_order, FALSE AS active UNION ALL
+                SELECT 'Silver', 10000, 6, TRUE, 'Principal and spouse P 10,000 · children P 2,000', 2, TRUE UNION ALL
+                SELECT 'Gold', 15000, 9, FALSE, 'Principal and spouse P 15,000 · children P 4,000', 3, TRUE UNION ALL
+                SELECT 'Platinum', 20000, 12, FALSE, 'Principal and spouse P 20,000 · children P 5,000', 4, TRUE
+              ) t ON 1 = 1
+              WHERE p.name = 'Tap Cover'
+                AND NOT EXISTS (SELECT 1 FROM ins_cover_tier x WHERE x.product_id = p.id AND x.name = t.name);
+
+              INSERT INTO ins_life_assured_rule (tier_id, relationship_type_id, min_age, max_age, max_count, display_order)
+              SELECT t.id, rt.id, s.min_age, s.max_age, s.max_count, s.display_order
+              FROM ins_cover_tier t
+              JOIN ins_product p ON p.id = t.product_id AND p.name = 'Tap Cover'
+              JOIN (
+                SELECT 'Main Insured' AS life_type, 18 AS min_age, 64 AS max_age, 1 AS max_count, 1 AS display_order UNION ALL
+                SELECT 'Spouse', 18, 64, 1, 2 UNION ALL
+                SELECT 'Child', 0, 24, 6, 3
+              ) s ON 1 = 1
+              JOIN relationship_type rt ON rt.relationship_name = s.life_type
+              WHERE NOT EXISTS (SELECT 1 FROM ins_life_assured_rule x WHERE x.tier_id = t.id AND x.relationship_type_id = rt.id);
+
+              INSERT INTO ins_rate_table (record_ref, product_id, tier_id, active)
+              SELECT s.ref, p.id, t.id, TRUE
+              FROM (
+                SELECT 'RT-00101' AS ref, 'Bronze' AS tier UNION ALL
+                SELECT 'RT-00102', 'Silver' UNION ALL
+                SELECT 'RT-00103', 'Gold' UNION ALL
+                SELECT 'RT-00104', 'Platinum'
+              ) s
+              JOIN ins_product p ON p.name = 'Tap Cover'
+              JOIN ins_cover_tier t ON t.product_id = p.id AND t.name = s.tier
+              WHERE NOT EXISTS (SELECT 1 FROM ins_rate_table x WHERE x.record_ref = s.ref);
+
+              INSERT INTO ins_rate_table_version (rate_table_id, version_no, valid_from, source, created_by,
+                                                  change_summary, status, effective_from, approved_by, updated_at)
+              SELECT r.id, 1, CURRENT_DATE, 'SEED', 'system',
+                     'Tap Cover product specification §16, reconstructed in spec 02 §6.4 (matches RT-00003-v2).',
+                     'PUBLISHED', CURRENT_DATE, 'system', CURRENT_TIMESTAMP
+              FROM ins_rate_table r
+              WHERE r.record_ref IN ('RT-00101', 'RT-00102', 'RT-00103', 'RT-00104')
+                AND NOT EXISTS (SELECT 1 FROM ins_rate_table_version x WHERE x.rate_table_id = r.id);
+
+              INSERT INTO ins_rate_table_item (version_id, relationship_type_id, age_from, age_to, cover_amount,
+                                               monthly_premium, display_order)
+              SELECT v.id, rt.id, g.age_from, g.age_to,
+                     CASE WHEN g.life_type = 'Child' THEN pl.child_cover ELSE pl.adult_cover END,
+                     CASE pl.plan WHEN 'Bronze' THEN g.bronze WHEN 'Silver' THEN g.silver
+                                  WHEN 'Gold' THEN g.gold ELSE g.platinum END,
+                     g.display_order
+              FROM (
+                SELECT 'RT-00101' AS ref, 'Bronze' AS plan, 5000 AS adult_cover, 1000 AS child_cover UNION ALL
+                SELECT 'RT-00102', 'Silver', 10000, 2000 UNION ALL
+                SELECT 'RT-00103', 'Gold', 15000, 4000 UNION ALL
+                SELECT 'RT-00104', 'Platinum', 20000, 5000
+              ) pl
+              JOIN ins_rate_table r ON r.record_ref = pl.ref
+              JOIN ins_rate_table_version v ON v.rate_table_id = r.id AND v.version_no = 1
+              CROSS JOIN (
+                SELECT 'Main Insured' AS life_type, 18 AS age_from, 19 AS age_to, 3.00 AS bronze, 6.00 AS silver, 9.00 AS gold, 12.00 AS platinum, 1 AS display_order UNION ALL
+                SELECT 'Main Insured', 20, 24, 3.00, 6.00, 9.00, 12.00, 2 UNION ALL
+                SELECT 'Main Insured', 25, 29, 3.00, 6.00, 9.00, 12.00, 3 UNION ALL
+                SELECT 'Main Insured', 30, 34, 3.50, 7.00, 10.45, 13.95, 4 UNION ALL
+                SELECT 'Main Insured', 35, 39, 4.85, 9.65, 14.45, 19.25, 5 UNION ALL
+                SELECT 'Main Insured', 40, 44, 6.50, 12.95, 19.45, 25.90, 6 UNION ALL
+                SELECT 'Main Insured', 45, 49, 9.05, 18.10, 27.10, 36.15, 7 UNION ALL
+                SELECT 'Main Insured', 50, 54, 13.05, 26.10, 39.15, 52.20, 8 UNION ALL
+                SELECT 'Main Insured', 55, 59, 16.25, 32.45, 48.65, 64.85, 9 UNION ALL
+                SELECT 'Main Insured', 60, 64, 19.70, 39.35, 59.00, 78.65, 10 UNION ALL
+                SELECT 'Spouse', 18, 19, 1.55, 3.10, 4.60, 6.15, 11 UNION ALL
+                SELECT 'Spouse', 20, 24, 1.55, 3.10, 4.60, 6.15, 12 UNION ALL
+                SELECT 'Spouse', 25, 29, 1.55, 3.10, 4.60, 6.15, 13 UNION ALL
+                SELECT 'Spouse', 30, 34, 2.80, 5.60, 8.40, 11.20, 14 UNION ALL
+                SELECT 'Spouse', 35, 39, 4.00, 8.00, 12.00, 15.95, 15 UNION ALL
+                SELECT 'Spouse', 40, 44, 5.35, 10.70, 16.05, 21.40, 16 UNION ALL
+                SELECT 'Spouse', 45, 49, 7.20, 14.35, 21.50, 28.65, 17 UNION ALL
+                SELECT 'Spouse', 50, 54, 9.85, 19.70, 29.55, 39.40, 18 UNION ALL
+                SELECT 'Spouse', 55, 59, 11.75, 23.50, 35.20, 46.95, 19 UNION ALL
+                SELECT 'Spouse', 60, 64, 14.45, 28.90, 43.35, 57.80, 20 UNION ALL
+                SELECT 'Child', 0, 4, 0.55, 1.05, 1.80, 2.30, 21 UNION ALL
+                SELECT 'Child', 5, 9, 0.60, 1.20, 2.00, 2.60, 22 UNION ALL
+                SELECT 'Child', 10, 14, 0.75, 1.50, 2.55, 3.25, 23 UNION ALL
+                SELECT 'Child', 15, 19, 1.05, 2.10, 3.60, 4.65, 24 UNION ALL
+                SELECT 'Child', 20, 24, 1.05, 2.10, 3.60, 4.65, 25
+              ) g
+              JOIN relationship_type rt ON rt.relationship_name = g.life_type
+              WHERE NOT EXISTS (SELECT 1 FROM ins_rate_table_item x WHERE x.version_id = v.id);

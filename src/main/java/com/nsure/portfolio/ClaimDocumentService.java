@@ -17,8 +17,6 @@ import java.util.Set;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
@@ -51,9 +49,12 @@ public class ClaimDocumentService {
     private final PlatformSecurityContext security;
     private final PortfolioService portfolio;
     private final DocumentFiles files;
+    private final DocumentCustody custody;
 
     public ClaimDocumentService(EntityManager em, ClaimWorkflow claims, WorkflowHistory history,
-            PlatformSecurityContext security, PortfolioService portfolio, DocumentFiles files) {
+            PlatformSecurityContext security, PortfolioService portfolio, DocumentFiles files,
+            DocumentCustody custody) {
+        this.custody = custody;
         this.em = em;
         this.claims = claims;
         this.history = history;
@@ -85,10 +86,18 @@ public class ClaimDocumentService {
         return views(em, claim.getId());
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public StoredFile download(String ref, Long id) {
-        security.authenticatedUser().validateHasPermissionTo("READ_CLAIM");
-        return open(claims.claim(ref), id);
+        AppUser staff = security.authenticatedUser();
+        staff.validateHasPermissionTo("READ_CLAIM");
+        return open(claims.claim(ref), id, staff.getUsername(), DocumentCustody.STAFF);
+    }
+
+    /** Who downloaded this claim's documents, and when (READ_AUDIT). */
+    @Transactional(readOnly = true)
+    public List<DocumentCustody.AccessView> accessLog(String ref) {
+        security.authenticatedUser().validateHasPermissionTo("READ_AUDIT");
+        return custody.accessLog(claims.claim(ref).getRef());
     }
 
     /**
@@ -123,7 +132,7 @@ public class ClaimDocumentService {
     public List<Long> closedClaimsWithOldSummaries() {
         return em.createQuery("select distinct d.claimId from ClaimDocument d, InsuranceClaim c "
                         + "where c.id = d.claimId and c.status in :closed and d.documentType = :type "
-                        + "and d.layoutVersion < :layout order by d.claimId", Long.class)
+                        + "and d.status = 'CURRENT' and d.layoutVersion < :layout order by d.claimId", Long.class)
                 .setParameter("closed", CLOSED)
                 .setParameter("type", SUMMARY_TYPE)
                 .setParameter("layout", ClaimSummaryPdf.LAYOUT_VERSION)
@@ -152,19 +161,27 @@ public class ClaimDocumentService {
 
     private List<ClaimDocument> summaries(Long claimId, String... types) {
         return em.createQuery("select d from ClaimDocument d where d.claimId = :claim and d.documentType in :types "
-                        + "order by d.id", ClaimDocument.class)
+                        + "and d.status = 'CURRENT' order by d.id", ClaimDocument.class)
                 .setParameter("claim", claimId)
                 .setParameter("types", List.of(types))
                 .getResultList();
     }
 
-    /** Removes the given earlier summaries (their files once this commits) and files one new summary of the type. */
+    /**
+     * Files one new summary of the type and marks the given earlier summaries SUPERSEDED by it (Blueprint §8: issued
+     * documents are kept, never overwritten or deleted).
+     */
     private void replace(InsuranceClaim claim, List<ClaimDocument> old, String issuedBy, String type) {
         boolean interim = INTERIM_TYPE.equals(type);
-        List<String> oldFiles = old.stream().map(ClaimDocument::getStoragePath).toList();
-        old.forEach(em::remove);
+        String reason = interim ? "Replaced by a newer interim summary"
+                : old.stream().anyMatch(d -> INTERIM_TYPE.equals(d.getDocumentType()))
+                        ? "Replaced by the final claim summary"
+                        : "Reissued in the current summary layout (v" + ClaimSummaryPdf.LAYOUT_VERSION + ")";
+        old.forEach(d -> d.supersede(null, reason));
         em.flush();
-        List<PortfolioViews.DocumentView> evidence = views(em, claim.getId());
+        List<PortfolioViews.DocumentView> evidence = views(em, claim.getId()).stream()
+                .filter(d -> DocumentCustody.CURRENT.equals(d.status()))
+                .toList();
         List<PortfolioViews.HistoryView> timeline = history.of(WorkflowHistory.CLAIM, claim.getRef()).stream()
                 .filter(h -> !"Summary Generated".equals(h.action()) && !"Interim Summary Generated".equals(h.action()))
                 .toList();
@@ -177,18 +194,12 @@ public class ClaimDocumentService {
         byte[] pdf = ClaimSummaryPdf.render(claim, policy, ClaimWorkflow.results(claim), evidence, timeline, issuedBy);
         String fileName = claim.getRef() + (interim ? "-interim-summary-" : "-summary-")
                 + LocalDateTime.now().format(FILE_STAMP) + ".pdf";
-        save(claim, pdf, fileName, "pdf", "application/pdf", type, issuedBy,
+        ClaimDocument replacement = save(claim, pdf, fileName, "pdf", "application/pdf", type, issuedBy,
                 interim ? "Interim Summary Generated" : "Summary Generated", ClaimSummaryPdf.LAYOUT_VERSION,
                 old.isEmpty() ? null
-                        : "replaces " + old.size() + (old.size() == 1 ? " earlier summary" : " earlier summaries"));
-        if (!oldFiles.isEmpty()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    oldFiles.forEach(files::deleteQuietly);
-                }
-            });
-        }
+                        : "replaces " + old.size() + (old.size() == 1 ? " earlier summary" : " earlier summaries")
+                                + ", kept as superseded");
+        old.forEach(d -> d.linkReplacement(replacement.getId()));
     }
 
     // ── customer portal ──────────────────────────────────────────────────────────────────────────────
@@ -200,9 +211,10 @@ public class ClaimDocumentService {
         return portfolio.shop();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public StoredFile shopDownload(String ref, Long id) {
-        return open(ownClaim(portfolio.customerForLogin(), ref), id);
+        CustomerAccount account = portfolio.customerForLogin();
+        return open(ownClaim(account, ref), id, account.getLoginUsername(), DocumentCustody.PORTAL);
     }
 
     /** The documents on one claim, oldest first. */
@@ -212,13 +224,14 @@ public class ClaimDocumentService {
                 .getResultStream()
                 .map(d -> new PortfolioViews.DocumentView(
                         d.getId(), d.getDocumentType(), d.getFileName(), d.getContentType(), d.getSizeBytes(),
-                        d.getUploadedBy(), d.getUploadedAt().withNano(0).toString()))
+                        d.getUploadedBy(), d.getUploadedAt().withNano(0).toString(), d.getStatus(), d.getSha256(),
+                        d.getSupersededBy(), d.getSupersededReason()))
                 .toList();
     }
 
     private InsuranceClaim ownClaim(CustomerAccount account, String ref) {
         InsuranceClaim claim = claims.claim(ref);
-        if (!claim.getCustomerName().equals(account.getName())) {
+        if (!account.getRef().equals(claim.getCustomerRef())) {
             // Not theirs: answer as if it did not exist rather than confirm someone else's claim number.
             throw new NotFoundException("Claim " + ref + " not found");
         }
@@ -256,12 +269,14 @@ public class ClaimDocumentService {
     }
 
     /** Writes the bytes to disk, then the row and a history entry; the file is removed again if the row fails. */
-    private void save(InsuranceClaim claim, byte[] bytes, String fileName, String extension, String contentType,
+    private ClaimDocument save(InsuranceClaim claim, byte[] bytes, String fileName, String extension, String contentType,
             String documentType, String uploadedBy, String historyAction, int layoutVersion, String note) {
         String storagePath = files.write(claim.getRef(), extension, bytes);
+        ClaimDocument document = new ClaimDocument(claim.getId(), documentType, fileName, contentType, bytes.length,
+                storagePath, uploadedBy, layoutVersion);
+        document.seal(DocumentCustody.sha256(bytes));
         try {
-            em.persist(new ClaimDocument(claim.getId(), documentType, fileName, contentType, bytes.length,
-                    storagePath, uploadedBy, layoutVersion));
+            em.persist(document);
             em.flush();
         } catch (RuntimeException e) {
             files.deleteQuietly(storagePath);
@@ -270,13 +285,16 @@ public class ClaimDocumentService {
         history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), historyAction,
                 claim.getStatus(), claim.getStatus(),
                 documentType + ": " + fileName + (note == null ? "" : " · " + note), uploadedBy);
+        return document;
     }
 
-    private StoredFile open(InsuranceClaim claim, Long id) {
+    private StoredFile open(InsuranceClaim claim, Long id, String username, String channel) {
         ClaimDocument document = em.find(ClaimDocument.class, id);
         if (document == null || !document.getClaimId().equals(claim.getId())) {
             throw new NotFoundException("Document " + id + " not found on claim " + claim.getRef());
         }
+        custody.verify(document.getSha256(), document.getStoragePath(), "document " + id);
+        custody.logAccess(DocumentCustody.CLAIM, id, claim.getRef(), document.getFileName(), username, channel);
         return new StoredFile(document.getFileName(), document.getContentType(), document.getSizeBytes(),
                 files.read(document.getStoragePath(), "document " + id));
     }

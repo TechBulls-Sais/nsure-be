@@ -38,6 +38,12 @@ public class OperationalControl {
     @Column(name = "fail_mode", nullable = false, length = 10)
     private String failMode;
 
+    @Column(name = "min_value", precision = 15, scale = 2)
+    private BigDecimal minValue;
+
+    @Column(name = "max_value", precision = 15, scale = 2)
+    private BigDecimal maxValue;
+
     @Column(name = "requires_reason", nullable = false)
     private boolean requiresReason;
 
@@ -92,5 +98,26 @@ public class OperationalControl {
 
     public String getLastChangeReason() {
         return lastChangeReason;
+    }
+
+    public BigDecimal getMinValue() {
+        return minValue;
+    }
+
+    public BigDecimal getMaxValue() {
+        return maxValue;
+    }
+
+    public boolean isThreshold() {
+        return !"TOGGLE".equals(controlType);
+    }
+
+    /** Applies an administrator's change. History is written by {@link ControlService}, never here. */
+    void change(boolean enabled, BigDecimal numericValue, Long changedBy, String reason) {
+        this.enabled = enabled;
+        this.numericValue = numericValue;
+        this.lastChangedBy = changedBy;
+        this.lastChangedAt = LocalDateTime.now();
+        this.lastChangeReason = reason;
     }
 }

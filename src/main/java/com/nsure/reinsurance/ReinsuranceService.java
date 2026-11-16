@@ -106,8 +106,8 @@ public class ReinsuranceService {
     }
 
     /**
-     * Approves a draft. The user who drafted it cannot approve it (four eyes), except Super Admin, who
-     * may approve their own draft. Two approved treaties may not cover the same product on the same dates.
+     * Approves a draft. The user who drafted it cannot approve it (four eyes, no exception for any role: Nsure Life
+     * NS-UX-004). Two approved treaties may not cover the same product on the same dates.
      */
     @Transactional
     public ReinsuranceViews.TreatyView approve(String ref) {
@@ -116,7 +116,7 @@ public class ReinsuranceService {
         if (!Treaty.DRAFT.equals(treaty.getStatus())) {
             throw new ConflictException("Treaty " + ref + " is already " + treaty.getStatus().toLowerCase(Locale.ROOT) + ".");
         }
-        if (user.getUsername().equalsIgnoreCase(treaty.getCreatedBy()) && !user.isSuperAdmin()) {
+        if (user.getUsername().equalsIgnoreCase(treaty.getCreatedBy())) {
             throw new NoAuthorizationException("You drafted treaty " + ref + "; another user must approve it.");
         }
         for (Treaty other : em.createQuery("select t from Treaty t where t.status = :approved and t.id <> :id",

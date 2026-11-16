@@ -137,3 +137,42 @@ databaseChangeLog:
   - include:
       file: changes/046-remove-actuary-profile.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/047-unified-rbac.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/048-controls-and-claims.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/049-lifecycle-and-numbering.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/050-payment-settlement.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/051-declaration-consent.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/052-rate-version-workflow.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/053-tap-cover.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/054-max-beneficiaries.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/055-nsure-life-access-model.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/056-document-custody.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/057-finance-controls.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/058-communication-lifecycle.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/059-tap-cover-photo.yaml
+      relativeToChangelogFile: true

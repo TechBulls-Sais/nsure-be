@@ -29,8 +29,25 @@ public final class Events {
     public static final String RISK_CEDED = "RiskCeded";
     /** recoveryRef, treatyRef, claimRef, policyRef, amount. */
     public static final String RECOVERY_RECOGNISED = "ReinsuranceRecoveryRecognised";
+    /** claimRef, policyRef, customerName, product, amount, reason. Raised when a claim is lodged (spec 05 §9). */
+    public static final String CLAIM_RECEIVED = "ClaimReceived";
+    /** claimRef, policyRef, customerName, product, amount (the approved payout), reason. */
+    public static final String CLAIM_APPROVED = "ClaimApproved";
+    /** claimRef, policyRef, customerName, product, amount, reason (the rejection reason). */
+    public static final String CLAIM_REJECTED = "ClaimRejected";
+    /** controlKey, name, changedBy, reason. A control was switched off (spec 12 C-11). */
+    public static final String CONTROL_DISABLED = "ControlDisabled";
     /** caseRef, caseType, customerName, category. */
     public static final String SERVICE_CASE_OPENED = "ServiceCaseOpened";
+
+    /** inboundId, providerRef, action (ALLOCATE or REFUND), policyRef, amount. Suspense cash allocated or refunded. */
+    public static final String SUSPENSE_CLEARED = "SuspenseCleared";
+
+    /** policyRef, customerRef, customerName, product, amount, dueDate. A scheduled premium reminder (Blueprint §5). */
+    public static final String PREMIUM_DUE_REMINDER = "PremiumDueReminder";
+
+    /** Template event type for approved bulk operational notices; never published on the bus. */
+    public static final String OPERATIONAL_NOTICE = "OperationalNotice";
 
     private Events() {
     }

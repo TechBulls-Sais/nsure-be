@@ -11,18 +11,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class MeController {
 
-    /** Permission codes of the group, finance, distribution, reinsurance, service, integration and report modules. */
-    static final List<String> MODULE_CODES = List.of(
-            "READ_SCHEME", "MANAGE_SCHEME", "PROCESS_CENSUS", "UNDERWRITE_MEMBER", "BILL_SCHEME",
-            "READ_FINANCE", "MANAGE_FINANCE", "CLOSE_PERIOD", "EXPORT_GL",
-            "READ_DISTRIBUTION", "MANAGE_DISTRIBUTION", "PAY_COMMISSION",
-            "READ_REINSURANCE", "MANAGE_REINSURANCE", "APPROVE_TREATY",
-            "READ_COMMUNICATION", "MANAGE_COMMUNICATION", "APPROVE_TEMPLATE",
-            "READ_SERVICE_CASE", "MANAGE_SERVICE_CASE",
-            "READ_INTEGRATION", "MANAGE_INTEGRATION",
-            "READ_REPORT",
-            "READ_CONFIG", "MANAGE_CONFIG", "APPROVE_CONFIG", "ACTIVATE_CONFIG");
-
     private final PlatformSecurityContext security;
 
     public MeController(PlatformSecurityContext security) {
@@ -35,25 +23,33 @@ public class MeController {
         List<String> roles = user.getRoles() == null
                 ? List.of()
                 : user.getRoles().stream()
+                        .filter(role -> !role.isDisabled())
                         .map(Role::getName)
                         .sorted(Comparator.naturalOrder())
                         .toList();
         boolean customerPortal = user.isPortalCustomer();
+        // A portal customer holds no permission (A-2); report none even if a stray grant exists.
+        List<String> permissions = customerPortal ? List.of() : List.copyOf(user.effectivePermissions());
         return new MeResponse(
                 user.getId(),
                 user.getUsername(),
                 user.isSuperAdmin(),
                 roles,
                 customerPortal,
-                user.hasPermissionTo("KYC_CUSTOMER"),
-                user.hasPermissionTo("EDD_CUSTOMER"),
-                user.hasPermissionTo("UPDATE_POLICY"),
-                user.hasPermissionTo("CREATE_CLAIM"),
-                user.hasPermissionTo("UPDATE_CLAIM"),
-                user.hasPermissionTo("ASSESS_CLAIM"),
-                user.hasPermissionTo("APPROVE_CLAIM"),
-                user.hasPermissionTo("REJECT_CLAIM"),
-                user.hasPermissionTo("SETTLE_CLAIM"),
-                MODULE_CODES.stream().filter(user::hasPermissionTo).toList());
+                user.isStaffUser(),
+                permissions.contains("KYC_CUSTOMER"),
+                permissions.contains("EDD_CUSTOMER"),
+                permissions.contains("UPDATE_POLICY"),
+                permissions.contains("CREATE_CLAIM"),
+                permissions.contains("UPDATE_CLAIM"),
+                permissions.contains("ASSESS_CLAIM"),
+                permissions.contains("APPROVE_CLAIM"),
+                permissions.contains("REJECT_CLAIM"),
+                permissions.contains("SETTLE_CLAIM"),
+                permissions,
+                customerPortal ? List.of() : user.activeEmergencyGrants().stream()
+                        .map(grant -> new MeResponse.EmergencyAccess(
+                                grant.getPermissionCode(), grant.getExpiresAt(), grant.getGrantedBy()))
+                        .toList());
     }
 }

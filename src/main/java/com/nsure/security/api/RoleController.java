@@ -50,7 +50,7 @@ public class RoleController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(value = "Idempotency-Retry", required = false) String retry) {
         CommandOutcome outcome = commands.execute(
-                responses.toCommand("CREATE", "ROLE", null, body, idempotencyKey, null, retry));
+                responses.toCommand("CREATE", "ROLE", null, body, idempotencyKey, retry));
         return respond(outcome, HttpStatus.CREATED);
     }
 
@@ -61,7 +61,7 @@ public class RoleController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(value = "Idempotency-Retry", required = false) String retry) {
         CommandOutcome outcome = commands.execute(
-                responses.toCommand("UPDATE", "ROLE", id, body, idempotencyKey, null, retry));
+                responses.toCommand("UPDATE", "ROLE", id, body, idempotencyKey, retry));
         return respond(outcome, HttpStatus.OK);
     }
 
@@ -72,7 +72,7 @@ public class RoleController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(value = "Idempotency-Retry", required = false) String retry) {
         CommandOutcome outcome = commands.execute(
-                responses.toCommand("PERMISSIONS", "ROLE", id, body, idempotencyKey, null, retry));
+                responses.toCommand("PERMISSIONS", "ROLE", id, body, idempotencyKey, retry));
         return respond(outcome, HttpStatus.OK);
     }
 
@@ -82,7 +82,7 @@ public class RoleController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(value = "Idempotency-Retry", required = false) String retry) {
         CommandOutcome outcome = commands.execute(
-                responses.toCommand("DELETE", "ROLE", id, null, idempotencyKey, null, retry));
+                responses.toCommand("DELETE", "ROLE", id, null, idempotencyKey, retry));
         return respond(outcome, HttpStatus.OK);
     }
 

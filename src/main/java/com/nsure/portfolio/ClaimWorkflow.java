@@ -4,12 +4,16 @@ import com.nsure.common.exception.NotFoundException;
 import com.nsure.controls.ControlKey;
 import com.nsure.controls.ControlService;
 import com.nsure.controls.FourEyesControl;
+import com.nsure.controls.ProductStpPolicy;
+import com.nsure.controls.ProductStpPolicyRepository;
+import com.nsure.security.approval.ApprovalAuthorityService;
 import com.nsure.integration.Events;
 import com.nsure.integration.Outbox;
 import com.nsure.security.domain.AppUser;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
@@ -76,9 +80,17 @@ public class ClaimWorkflow {
     private final PolicyWorkflow policies;
     private final WorkflowHistory history;
     private final Outbox outbox;
+    private final ApprovalAuthorityService approvalLimits;
+    private final ProductStpPolicyRepository stpPolicies;
+    private final ReferenceNumbers references;
 
     public ClaimWorkflow(EntityManager em, ControlService controls, FourEyesControl fourEyes,
-            PolicyWorkflow policies, WorkflowHistory history, Outbox outbox) {
+            PolicyWorkflow policies, WorkflowHistory history, Outbox outbox,
+            ApprovalAuthorityService approvalLimits, ProductStpPolicyRepository stpPolicies,
+            ReferenceNumbers references) {
+        this.references = references;
+        this.approvalLimits = approvalLimits;
+        this.stpPolicies = stpPolicies;
         this.em = em;
         this.controls = controls;
         this.fourEyes = fourEyes;
@@ -119,6 +131,7 @@ public class ClaimWorkflow {
         InsuranceClaim claim = new InsuranceClaim();
         claim.setRef(nextRef());
         claim.setCustomerName(policy.getCustomerName());
+        claim.setCustomerRef(policy.getCustomerRef());
         claim.setProduct(policy.getProduct());
         claim.setPolicyRef(policy.getRef());
         // A claim pays the policy's cover; an assessor may approve a partial amount.
@@ -127,6 +140,8 @@ public class ClaimWorkflow {
         claim.setStatus(INITIATED);
         claim.setRecordDate(LocalDate.now().format(DISPLAY));
         claim.setDisplayOrder(0);
+        claim.setLodgedAt(LocalDateTime.now());
+        claim.setFourEyesApplied(Boolean.FALSE);
         claim.setClaimantName(claimant);
         claim.setClaimantMobile(mobile);
         claim.setClaimantRelationship(relationship);
@@ -139,8 +154,15 @@ public class ClaimWorkflow {
                 "On " + policy.getRef() + " by " + claimant + " (" + relationship + "), event " + event, actor);
 
         boolean allPassed = runChecks(claim, policy);
-        String ineligible = allPassed ? stpIneligibleReason(claim) : null;
-        if (allPassed && ineligible == null) {
+        StpDecision stp = allPassed
+                ? stpDecision(claim, policy)
+                : new StpDecision(STP_CHECKS_FAILED, "Failed: " + String.join(", ", failedChecks(claim)));
+        String ineligible = stp == null ? null : stp.text();
+        // Spec 12 C-12: every claim records whether it was STP-eligible and, if not, which gate stopped it.
+        claim.setStpEligible(stp == null);
+        claim.setStpIneligibleCode(stp == null ? null : stp.code());
+        outbox.publish(Events.CLAIM_RECEIVED, claim.getRef(), decisionPayload(claim, null), actor);
+        if (stp == null) {
             claim.verifyPayout(SYSTEM_VERIFIER);
             claim.setStatus(APPROVED);
             claim.setProcessingType(STP);
@@ -149,15 +171,88 @@ public class ClaimWorkflow {
             history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Auto Approved", INITIATED,
                     APPROVED, "Straight-through: all five checks passed · payout BWP " + claim.getAmount(),
                     WorkflowHistory.SYSTEM);
+            outbox.publish(Events.CLAIM_APPROVED, claim.getRef(), decisionPayload(claim, null), WorkflowHistory.SYSTEM);
         } else {
             claim.setStatus(UNDER_REVIEW);
             claim.setProcessingType(MANUAL_REVIEW);
-            claim.setStpIneligibleReason(ineligible);
+            claim.setStpIneligibleReason(allPassed ? ineligible : null);
             history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Review", INITIATED,
-                    UNDER_REVIEW, ineligible != null ? ineligible : "Failed: " + String.join(", ", failedChecks(claim)),
-                    WorkflowHistory.SYSTEM);
+                    UNDER_REVIEW, "[" + stp.code() + "] " + ineligible, WorkflowHistory.SYSTEM);
         }
         return claim;
+    }
+
+    // ── STP eligibility (spec 12 §4.1) ────────────────────────────────────────────────────────────────────
+
+    static final String STP_CHECKS_FAILED = "CHECKS_FAILED";
+    static final String STP_DISABLED = "STP_DISABLED";
+    static final String STP_OVER_CEILING = "OVER_CEILING";
+    static final String STP_NO_VERIFIED_PAYOUT = "NO_VERIFIED_PAYOUT";
+    static final String STP_PRODUCT_OPT_OUT = "PRODUCT_OPT_OUT";
+    static final String STP_CLAIM_LIMIT = "CLAIM_LIMIT";
+
+    /** Why a claim whose checks all passed may not be approved straight through. */
+    record StpDecision(String code, String text) {
+    }
+
+    /**
+     * Null when the claim may be approved straight through. Each gate resolves product value, then the global
+     * control, then deny (C-15) — never a hardcoded fallback.
+     */
+    private StpDecision stpDecision(InsuranceClaim claim, InsurancePolicy policy) {
+        ProductStpPolicy product = stpPolicies.findByProductId(policies.product(policy).getId()).orElse(null);
+        if (product != null && !product.isStpEnabled()) {
+            return new StpDecision(STP_PRODUCT_OPT_OUT, "Straight-through processing is switched off for "
+                    + policy.getProduct());
+        }
+        if (!controls.isEnabled(ControlKey.CLAIM_STP_ENABLED.key())) {
+            return new StpDecision(STP_DISABLED, "Straight-through processing is switched off");
+        }
+        BigDecimal ceiling = product != null && product.getStpCeiling() != null
+                ? product.getStpCeiling()
+                : controls.valueOf(ControlKey.CLAIM_STP_CEILING.key());
+        if (BigDecimal.valueOf(claim.getAmount()).compareTo(ceiling) > 0) {
+            return new StpDecision(STP_OVER_CEILING, "Payout of BWP " + claim.getAmount()
+                    + " is over the straight-through ceiling of BWP " + ceiling.stripTrailingZeros().toPlainString());
+        }
+        boolean needsVerifiedPayout = controls.isEnabled(ControlKey.CLAIM_STP_REQUIRES_VERIFIED_PAYOUT.key())
+                && (product == null || product.isRequiresVerifiedPayout());
+        if (needsVerifiedPayout && !hasPayoutDetails(claim)) {
+            return new StpDecision(STP_NO_VERIFIED_PAYOUT, "No registered beneficiary with payout details to pay");
+        }
+        if (product != null && product.getMaxClaimsPerPolicyPerYear() != null) {
+            long recent = em.createQuery("select count(c) from InsuranceClaim c where c.policyRef = :policy"
+                            + " and c.id <> :id and c.status <> :rejected and c.eventDate >= :since", Long.class)
+                    .setParameter("policy", policy.getRef())
+                    .setParameter("id", claim.getId())
+                    .setParameter("rejected", REJECTED)
+                    .setParameter("since", LocalDate.now().minusYears(1).toString())
+                    .getSingleResult();
+            if (recent >= product.getMaxClaimsPerPolicyPerYear()) {
+                return new StpDecision(STP_CLAIM_LIMIT, "Policy " + policy.getRef() + " already has " + recent
+                        + " claim(s) this year; the straight-through limit is "
+                        + product.getMaxClaimsPerPolicyPerYear());
+            }
+        }
+        return null;
+    }
+
+    private Map<String, Object> decisionPayload(InsuranceClaim claim, String reason) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("claimRef", claim.getRef());
+        payload.put("policyRef", claim.getPolicyRef());
+        payload.put("customerName", claim.getCustomerName());
+        payload.put("product", claim.getProduct());
+        payload.put("amount", String.valueOf(claim.getPayoutAmount() != null ? claim.getPayoutAmount() : claim.getAmount()));
+        payload.put("reason", reason == null ? "" : reason);
+        if (claim.getCustomerRef() != null) {
+            payload.put("customerRef", claim.getCustomerRef());
+        }
+        return payload;
+    }
+
+    private void publishDecision(String eventType, InsuranceClaim claim, String reason, AppUser actor) {
+        outbox.publish(eventType, claim.getRef(), decisionPayload(claim, reason), actor.getUsername());
     }
 
     /** Re-evaluates the checks on an open claim; never moves it (demo server rerun_checks). */
@@ -251,8 +346,24 @@ public class ClaimWorkflow {
      */
     @Transactional
     public InsuranceClaim approve(String ref, Integer requestedPayout, String overrideReason, AppUser actor) {
+        return approve(ref, requestedPayout, overrideReason, null, actor);
+    }
+
+    /**
+     * Guard order (spec 10 §2.3, 06 §8.1): legal from this state, permission, four-eyes, then a verified payout
+     * account, the payout amount, and the approver's authority limit (04 §5.3).
+     */
+    @Transactional
+    public InsuranceClaim approve(String ref, Integer requestedPayout, String overrideReason,
+            String fourEyesOverrideReason, AppUser actor) {
         InsuranceClaim claim = claim(ref);
         String previous = guard(claim, "approve", actor);
+        String fourEyesReason = trim(fourEyesOverrideReason);
+        if (fourEyesReason.length() > 500) {
+            throw new IllegalArgumentException("Keep the four-eyes override reason to 500 characters.");
+        }
+        FourEyesControl.Outcome separation =
+                fourEyes.assertClaimApproval(claim.getRecommendedById(), actor, fourEyesReason);
         requireCover(claim, "approve");
         List<String> softFailed = failedSoftChecks(claim);
         String reason = trim(overrideReason);
@@ -264,11 +375,9 @@ public class ClaimWorkflow {
             throw new IllegalArgumentException("Keep the reason to 500 characters.");
         }
         claim.setCheckOverrideReason(softFailed.isEmpty() ? null : reason);
-        // Super Admin may approve their own assessment; the history records it as an override.
-        boolean fourEyesOverride = actor.isSuperAdmin() && actor.getId().equals(claim.getRecommendedById());
-        claim.setFourEyesApplied(fourEyesOverride
-                ? Boolean.FALSE
-                : fourEyes.assertClaimApproval(claim.getRecommendedById(), actor.getId()));
+        boolean fourEyesOverride = separation == FourEyesControl.Outcome.OVERRIDDEN;
+        claim.setFourEyesApplied(separation.applied());
+        claim.setFourEyesOverrideReason(fourEyesOverride ? fourEyesReason : null);
         if (!hasPayoutDetails(claim)) {
             throw new IllegalArgumentException("This claim has no complete payout details. Add the payee's name, "
                     + "payout method and account / wallet number on the claim first.");
@@ -285,16 +394,19 @@ public class ClaimWorkflow {
             throw new IllegalArgumentException(
                     "Payout of BWP " + payout + " exceeds the policy cover of BWP " + claim.getAmount());
         }
+        approvalLimits.assertWithinLimit(actor, BigDecimal.valueOf(payout));
         claim.setPayoutAmount(payout);
         claim.setStatus(APPROVED);
         claim.resolve(actor.getUsername());
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Approved", previous, APPROVED,
                 "Payout: BWP " + payout + (softFailed.isEmpty() ? ""
-                        : " · approved despite " + String.join(", ", softFailed) + ": " + reason) + (fourEyesOverride
-                        ? " · four-eyes overridden: super admin approved their own assessment"
-                        : Boolean.TRUE.equals(claim.getFourEyesApplied())
-                                ? " · four-eyes: assessed by " + claim.getRecommendedBy() : " · four-eyes control off"),
+                        : " · approved despite " + String.join(", ", softFailed) + ": " + reason) + switch (separation) {
+                            case OVERRIDDEN -> " · FOUR-EYES OVERRIDDEN by the assessor: " + fourEyesReason;
+                            case CONTROL_OFF -> " · four-eyes control OFF: separation not enforced";
+                            case ENFORCED -> " · four-eyes: assessed by " + claim.getRecommendedBy();
+                        },
                 actor.getUsername());
+        publishDecision(Events.CLAIM_APPROVED, claim, null, actor);
         return claim;
     }
 
@@ -314,6 +426,7 @@ public class ClaimWorkflow {
         claim.resolve(actor.getUsername());
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Rejected", previous, REJECTED,
                 "Reason: " + text, actor.getUsername());
+        publishDecision(Events.CLAIM_REJECTED, claim, text, actor);
         return claim;
     }
 
@@ -340,6 +453,9 @@ public class ClaimWorkflow {
         paid.put("amount", String.valueOf(claim.getPayoutAmount()));
         paid.put("payoutRef", reference);
         outbox.publish(Events.CLAIM_PAID, ref, paid, actor.getUsername());
+        if (claim.getPolicyRef() != null) {
+            policies.terminateIfClaimEndsCover(policies.policy(claim.getPolicyRef()), claim, actor.getUsername());
+        }
         return claim;
     }
 
@@ -408,22 +524,6 @@ public class ClaimWorkflow {
         claim.setCheckNoDuplicate(result(unique));
         claim.setCheckRulesVersion(CHECK_RULES_VERSION);
         return active && waited && paid && beneficiary && unique;
-    }
-
-    /** Null when a claim whose checks all passed may be approved straight through; else why not. */
-    private String stpIneligibleReason(InsuranceClaim claim) {
-        if (!controls.isEnabled(ControlKey.CLAIM_STP_ENABLED.key())) {
-            return "Straight-through processing is switched off";
-        }
-        BigDecimal ceiling = controls.valueOf(ControlKey.CLAIM_STP_CEILING.key());
-        if (BigDecimal.valueOf(claim.getAmount()).compareTo(ceiling) > 0) {
-            return "Payout of BWP " + claim.getAmount() + " is over the straight-through ceiling of BWP "
-                    + ceiling.stripTrailingZeros().toPlainString();
-        }
-        if (controls.isEnabled(ControlKey.CLAIM_STP_REQUIRES_VERIFIED_PAYOUT.key()) && !hasPayoutDetails(claim)) {
-            return "No registered beneficiary with payout details to pay";
-        }
-        return null;
     }
 
     /** Checks that decide whether there was valid cover for the event. A failure cannot be overridden. */
@@ -581,12 +681,9 @@ public class ClaimWorkflow {
         }
     }
 
+    /** Race-free claim reference (spec 01 BR-59). */
     private String nextRef() {
-        int max = 0;
-        for (String ref : em.createQuery("select c.ref from InsuranceClaim c", String.class).getResultList()) {
-            max = Math.max(max, Integer.parseInt(ref.replaceAll("[^0-9]", "")));
-        }
-        return String.format("CLM-%04d", max + 1);
+        return references.next("CLM-", 4, () -> references.highest("InsuranceClaim", "CLM-"));
     }
 
     private static LocalDate eventDate(String value) {

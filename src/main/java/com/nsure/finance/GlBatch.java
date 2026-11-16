@@ -17,9 +17,12 @@ import java.time.LocalDateTime;
 @Table(name = "fin_gl_batch")
 public class GlBatch {
 
+    // Blueprint §7: prepared → submitted → accepted or rejected → reconciled.
+    public static final String PREPARED = "PREPARED";
     public static final String SUBMITTED = "SUBMITTED";
     public static final String ACCEPTED = "ACCEPTED";
     public static final String REJECTED = "REJECTED";
+    public static final String RECONCILED = "RECONCILED";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -61,19 +64,67 @@ public class GlBatch {
     @Column(length = 500)
     private String note;
 
+    @Column(name = "submitted_by", length = 100)
+    private String submittedBy;
+
+    @Column(name = "submitted_at")
+    private LocalDateTime submittedAt;
+
+    @Column(name = "gl_debit_total", precision = 19, scale = 2)
+    private BigDecimal glDebitTotal;
+
+    @Column(name = "gl_credit_total", precision = 19, scale = 2)
+    private BigDecimal glCreditTotal;
+
+    @Column(name = "reconciled_by", length = 100)
+    private String reconciledBy;
+
+    @Column(name = "reconciled_at")
+    private LocalDateTime reconciledAt;
+
     protected GlBatch() {
     }
 
     GlBatch(String ref, int journalCount, int lineCount, BigDecimal debitTotal, BigDecimal creditTotal,
             String createdBy) {
         this.ref = ref;
-        this.status = SUBMITTED;
+        this.status = PREPARED;
         this.journalCount = journalCount;
         this.lineCount = lineCount;
         this.debitTotal = debitTotal;
         this.creditTotal = creditTotal;
         this.createdBy = createdBy;
         this.createdAt = LocalDateTime.now();
+    }
+
+    void submit(String actor) {
+        this.status = SUBMITTED;
+        this.submittedBy = actor;
+        this.submittedAt = LocalDateTime.now();
+    }
+
+    void reconcile(BigDecimal glDebit, BigDecimal glCredit, String actor) {
+        this.status = RECONCILED;
+        this.glDebitTotal = glDebit;
+        this.glCreditTotal = glCredit;
+        this.reconciledBy = actor;
+        this.reconciledAt = LocalDateTime.now();
+    }
+
+    public String getSubmittedBy() {
+        return submittedBy;
+    }
+
+    public LocalDateTime getSubmittedAt() {
+        return submittedAt;
+    }
+
+    public String getReconciledBy() {
+        return reconciledBy;
+    }
+
+    public LocalDateTime getReconciledAt() {
+        return reconciledAt;
     }
 
     void acknowledge(String status, String glReference, String note, String actor) {

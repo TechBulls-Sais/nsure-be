@@ -5,9 +5,9 @@ import static com.nsure.security.config.ApiAccess.authenticated;
 import static com.nsure.security.config.ApiAccess.customer;
 import static com.nsure.security.config.ApiAccess.publicAccess;
 import static com.nsure.security.config.ApiAccess.staff;
-import static com.nsure.security.config.ApiAccess.superAdmin;
 import static org.springframework.http.HttpMethod.DELETE;
 import static org.springframework.http.HttpMethod.GET;
+import static org.springframework.http.HttpMethod.PATCH;
 import static org.springframework.http.HttpMethod.POST;
 import static org.springframework.http.HttpMethod.PUT;
 
@@ -19,8 +19,8 @@ import org.springframework.http.HttpMethod;
  * change who may call what.
  *
  * <ul>
- *   <li>Super Admin passes every rule ({@link ApiAccess}).</li>
- *   <li>Every other user needs a permission code their roles hold. Default holders today: Claims Assessor holds
+ *   <li>Deny by default: every user, the administrator included, needs a permission code their roles hold (or an
+ *       active emergency grant). No role passes every rule by name. Default holders today: Claims Assessor holds
  *       the claim codes, Onboarding Specialist the customer review codes, Product Configurator and Actuary the
  *       product and rate table codes. Grant a code to any role in Access admin and that role gets the endpoint.</li>
  *   <li>A request no rule matches is denied. A new endpoint needs a rule here, or
@@ -46,9 +46,20 @@ public final class ApiAccessRules {
             // Customer self sign-up: creates a Pending KYC customer once the one-time code matches.
             rule(POST, "/public/signup/otp", publicAccess()),
             rule(POST, "/public/signup", publicAccess()),
+            // Payment settlement triggers (spec 13 §6): each only names a transaction to verify server-side, never a
+            // verdict. The simulator stands in for the provider's hosted page until DPO credentials exist.
+            rule(GET, "/payment/return", publicAccess()),
+            rule(POST, "/payment/callback", publicAccess()),
+            // Email/WhatsApp provider callbacks (Blueprint §5): authenticated by their HMAC signature, not a login.
+            rule(POST, "/integration/messaging/status", publicAccess()),
+            rule(POST, "/integration/messaging/inbound", publicAccess()),
+            rule(GET, "/payment/simulator/*", publicAccess()),
+            rule(POST, "/payment/simulator/*", publicAccess()),
 
             // ── every signed-in user ───────────────────────────────────────────────────────────────────
             rule(GET, "/me", authenticated()),
+            // Staff alerts; each user sees only alerts whose permission they hold.
+            rule(GET, "/me/alerts", authenticated()),
 
             // ── customer portal: the service limits a customer to their own policies and claims ────────
             rule(GET, "/portfolio/shop", customer()),
@@ -57,7 +68,14 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/shop/claims", customer()),
             rule(POST, "/portfolio/shop/claims/*/documents", customer()),
             rule(GET, "/portfolio/shop/claims/*/documents/*", customer()),
+            // Declaration and consent before the first premium (spec 01 BR-5, BR-6).
+            rule(GET, "/portfolio/shop/declaration", customer()),
+            rule(POST, "/portfolio/shop/policies/*/declaration/otp", customer()),
+            rule(POST, "/portfolio/shop/policies/*/declaration", customer()),
             rule(POST, "/portfolio/shop/policies/*/pay", customer()),
+            // Checkout (spec 13 §8.1): a customer pays their own policy; polling checks ownership or READ_PAYMENT.
+            rule(POST, "/checkout/*/pay", customer()),
+            rule(GET, "/checkout/transactions/*", authenticated()),
             rule(POST, "/portfolio/shop/policies/*/beneficiaries", customer()),
             rule(DELETE, "/portfolio/shop/policies/*/beneficiaries/*", customer()),
             rule(POST, "/portfolio/shop/policies/*/documents/schedule", customer()),
@@ -86,10 +104,17 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/policies/*/beneficiaries", anyOf("UPDATE_POLICY")),
             rule(DELETE, "/portfolio/policies/*/beneficiaries/*", anyOf("UPDATE_POLICY")),
             rule(GET, "/portfolio/history/policy/*", anyOf("READ_POLICY")),
+            // The declaration consent log is evidence: audit.read (spec 04 §7).
+            rule(GET, "/portfolio/policies/*/declarations", anyOf("READ_AUDIT")),
             rule(GET, "/portfolio/policies/*/documents", anyOf("READ_POLICY")),
             rule(GET, "/portfolio/policies/*/documents/*", anyOf("READ_POLICY")),
             rule(POST, "/portfolio/policies/*/documents/schedule", anyOf("CREATE_POLICY", "UPDATE_POLICY")),
-            rule(GET, "/portfolio/receipts", anyOf("READ_POLICY")),
+            // Blueprint §8: a controlled replacement with a reason (the old schedule is kept), and the download log.
+            rule(POST, "/portfolio/policies/*/documents/*/reissue", anyOf("CREATE_POLICY", "UPDATE_POLICY")),
+            rule(GET, "/portfolio/policies/*/document-access", anyOf("READ_AUDIT")),
+            rule(GET, "/portfolio/receipts", anyOf("READ_PAYMENT")),
+            rule(GET, "/payments/transactions", anyOf("READ_PAYMENT")),
+            rule(GET, "/payments/transactions/*/log", anyOf("READ_PAYMENT")),
             rule(PUT, "/portfolio/receipts/*", anyOf("UPDATE_POLICY")),
             rule(GET, "/portfolio/schemes", anyOf("READ_POLICY")),
 
@@ -107,6 +132,7 @@ public final class ApiAccessRules {
             rule(GET, "/portfolio/claims/*/documents/*", anyOf("READ_CLAIM")),
             rule(POST, "/portfolio/claims/*/documents", anyOf("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM")),
             rule(POST, "/portfolio/claims/*/documents/summary", anyOf("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM")),
+            rule(GET, "/portfolio/claims/*/document-access", anyOf("READ_AUDIT")),
 
             // ── product catalogue (Product Configurator, Actuary) ──────────────────────────────────────
             // The catalogue is already public on the landing page; staff forms need it to pick a product.
@@ -116,21 +142,49 @@ public final class ApiAccessRules {
             rule(PUT, "/portfolio/product-configs/*", anyOf("UPDATE_PRODUCT")),
 
             // ── rate tables (Actuary, Product Configurator): function code or capability ───────────────
-            rule(GET, "/admin/rate-tables", anyOf("READ_RATE_TABLE", "rate.read")),
-            rule(GET, "/admin/rate-tables/*", anyOf("READ_RATE_TABLE", "rate.read")),
-            rule(PUT, "/admin/rate-tables/*/grid", anyOf("UPDATE_RATE_TABLE", "rate.write")),
+            rule(GET, "/admin/rate-tables", anyOf("READ_RATE_TABLE")),
+            rule(GET, "/admin/rate-tables/*", anyOf("READ_RATE_TABLE")),
+            rule(PUT, "/admin/rate-tables/*/grid", anyOf("UPDATE_RATE_TABLE")),
+            // Spec 11 §8: the version workflow. rate.write builds and submits; rate.publish approves (Actuary only).
+            rule(GET, "/admin/rate-tables/*/versions/*/grid", anyOf("READ_RATE_TABLE")),
+            rule(GET, "/admin/rate-tables/*/versions/*/impact", anyOf("READ_RATE_TABLE")),
+            rule(GET, "/admin/rate-tables/*/versions/*/diff/*", anyOf("READ_RATE_TABLE")),
+            rule(GET, "/admin/rate-tables/*/export", anyOf("READ_RATE_TABLE")),
+            rule(PUT, "/admin/rate-tables/*/versions/*/grid", anyOf("UPDATE_RATE_TABLE")),
+            rule(PATCH, "/admin/rate-tables/*/versions/*/cells", anyOf("UPDATE_RATE_TABLE")),
+            rule(POST, "/admin/rate-tables/*/versions/*/submit", anyOf("UPDATE_RATE_TABLE")),
+            rule(POST, "/admin/rate-tables/*/import", anyOf("UPDATE_RATE_TABLE")),
+            rule(POST, "/admin/rate-tables/*/import/confirm", anyOf("UPDATE_RATE_TABLE")),
+            rule(POST, "/admin/rate-tables/*/scale", anyOf("UPDATE_RATE_TABLE")),
+            rule(POST, "/admin/rate-tables/*/versions/*/approve", anyOf("PUBLISH_RATE_TABLE")),
+            rule(POST, "/admin/rate-tables/*/versions/*/reject", anyOf("PUBLISH_RATE_TABLE")),
+            rule(POST, "/admin/rate-tables/*/versions/*/cancel", anyOf("PUBLISH_RATE_TABLE")),
 
             // ── operational controls ───────────────────────────────────────────────────────────────────
-            rule(GET, "/admin/controls", anyOf("READ_CONTROL", "controls.read")),
+            rule(GET, "/admin/controls", anyOf("READ_CONTROL")),
+            rule(GET, "/admin/controls/stp-dashboard", anyOf("READ_CONTROL")),
+            rule(GET, "/admin/controls/stp-policies", anyOf("READ_CONTROL")),
+            rule(GET, "/admin/controls/*/history", anyOf("READ_CONTROL")),
+            // controls.write: granted to no role by default (spec 12 C-10).
+            rule(PUT, "/admin/controls/stp-policies/*", anyOf("UPDATE_CONTROL")),
+            rule(PUT, "/admin/controls/*", anyOf("UPDATE_CONTROL")),
 
             // ── audit log and maker-checker inbox ──────────────────────────────────────────────────────
             rule(GET, "/audits", anyOf("READ_AUDIT")),
             rule(GET, "/audits/*", anyOf("READ_AUDIT")),
-            // The service then needs CHECKER_<code of the pending command> or CHECKER_SUPER_USER.
+            // The service then needs CHECKER_<code of the pending command>, and the checker is never the maker.
             rule(POST, "/audits/*/approve", anyOf(
-                    "CHECKER_SUPER_USER", "CHECKER_UPDATE_USER", "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
+                    "CHECKER_UPDATE_USER", "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
             rule(POST, "/audits/*/reject", anyOf(
-                    "CHECKER_SUPER_USER", "CHECKER_UPDATE_USER", "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
+                    "CHECKER_UPDATE_USER", "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
+
+            // ── emergency access (Nsure Life NS-SH11-003) ──────────────────────────────────────────────
+            // Time-limited break-glass grants: an identity administrator grants or revokes, Compliance reviews.
+            rule(GET, "/admin/emergency-access", anyOf(
+                    "GRANT_EMERGENCY_ACCESS", "REVIEW_EMERGENCY_ACCESS", "READ_AUDIT")),
+            rule(POST, "/admin/emergency-access", anyOf("GRANT_EMERGENCY_ACCESS")),
+            rule(POST, "/admin/emergency-access/*/revoke", anyOf("GRANT_EMERGENCY_ACCESS")),
+            rule(POST, "/admin/emergency-access/*/review", anyOf("REVIEW_EMERGENCY_ACCESS")),
 
             // ── group administration GL01-GL05 (Group Administrator) ───────────────────────────────────
             rule(GET, "/group/schemes", anyOf("READ_SCHEME")),
@@ -153,6 +207,18 @@ public final class ApiAccessRules {
             rule(POST, "/finance/periods/*/*", anyOf("CLOSE_PERIOD")),
             rule(POST, "/finance/gl-batches", anyOf("EXPORT_GL")),
             rule(POST, "/finance/gl-batches/*/acknowledge", anyOf("EXPORT_GL")),
+            // Blueprint §7: prepared → submitted → accepted/rejected → reconciled; manual journals and suspense clearance
+            // are proposed with MANAGE_FINANCE and approved by someone else with APPROVE_JOURNAL.
+            rule(POST, "/finance/gl-batches/*/submit", anyOf("EXPORT_GL")),
+            rule(POST, "/finance/gl-batches/*/reconcile", anyOf("EXPORT_GL")),
+            rule(GET, "/finance/manual-journals", anyOf("READ_FINANCE")),
+            rule(POST, "/finance/manual-journals", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/finance/manual-journals/*/approve", anyOf("APPROVE_JOURNAL")),
+            rule(POST, "/finance/manual-journals/*/reject", anyOf("APPROVE_JOURNAL")),
+            rule(GET, "/finance/suspense", anyOf("READ_FINANCE")),
+            rule(POST, "/finance/suspense/*/clearance", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/finance/suspense/*/clearance/approve", anyOf("APPROVE_JOURNAL")),
+            rule(POST, "/finance/suspense/*/clearance/reject", anyOf("APPROVE_JOURNAL")),
 
             // ── distribution and commissions SH06 (Distribution Administrator) ─────────────────────────
             rule(GET, "/distribution/**", anyOf("READ_DISTRIBUTION")),
@@ -177,6 +243,11 @@ public final class ApiAccessRules {
             rule(POST, "/communications/messages/*/retry", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/dispatch", anyOf("MANAGE_COMMUNICATION")),
             rule(PUT, "/communications/preferences/*", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/inbound/*/assign", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/bulk-notices", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/bulk-notices/*/approve", anyOf("APPROVE_TEMPLATE")),
+            rule(POST, "/communications/bulk-notices/*/reject", anyOf("APPROVE_TEMPLATE")),
+            rule(POST, "/communications/reminders/run", anyOf("MANAGE_COMMUNICATION")),
 
             // ── service desk and complaints SH10 (Service Agent) ───────────────────────────────────────
             rule(GET, "/service/cases", anyOf("READ_SERVICE_CASE")),
@@ -210,26 +281,29 @@ public final class ApiAccessRules {
             rule(GET, "/portfolio/policies/*/attributes", anyOf("READ_POLICY")),
             rule(PUT, "/portfolio/policies/*/attributes", anyOf("UPDATE_POLICY")),
 
-            // ── organisation ───────────────────────────────────────────────────────────────────────────
-            rule(GET, "/offices", anyOf("READ_OFFICE")),
-
-            // ── access administration: Super Admin only ───────────────────────────────────────────────
-            rule(GET, "/users", superAdmin()),
-            rule(GET, "/users/*", superAdmin()),
-            rule(POST, "/users", superAdmin()),
-            rule(PUT, "/users/*", superAdmin()),
-            rule(DELETE, "/users/*", superAdmin()),
-            rule(GET, "/roles", superAdmin()),
-            rule(GET, "/roles/*", superAdmin()),
-            rule(POST, "/roles", superAdmin()),
-            rule(PUT, "/roles/*", superAdmin()),
-            rule(PUT, "/roles/*/permissions", superAdmin()),
-            rule(DELETE, "/roles/*", superAdmin()),
-            rule(GET, "/permissions", superAdmin()),
-            rule(GET, "/permissions/*", superAdmin()),
-            rule(POST, "/permissions", superAdmin()),
-            rule(PUT, "/permissions/*", superAdmin()),
-            rule(DELETE, "/permissions/*", superAdmin()));
+            // ── access administration (docs/IMPLEMENT_RBAC.md "Role administration API") ──────────────────────
+            // No role holds these codes by default (spec 04 A-18), so in practice only Super Admin manages access;
+            // granting them to another role delegates it. The services re-check the same codes.
+            rule(GET, "/users", anyOf("READ_USER")),
+            rule(GET, "/users/*", anyOf("READ_USER")),
+            rule(POST, "/users", anyOf("CREATE_USER")),
+            rule(PUT, "/users/*", anyOf("UPDATE_USER")),
+            rule(DELETE, "/users/*", anyOf("DELETE_USER")),
+            rule(GET, "/roles", anyOf("READ_ROLE")),
+            rule(GET, "/roles/*", anyOf("READ_ROLE")),
+            rule(POST, "/roles", anyOf("CREATE_ROLE")),
+            rule(PUT, "/roles/*", anyOf("UPDATE_ROLE")),
+            rule(PUT, "/roles/*/permissions", anyOf("PERMISSIONS_ROLE")),
+            rule(DELETE, "/roles/*", anyOf("DELETE_ROLE")),
+            // The permission vocabulary is closed and lives in source (PermissionCatalog, spec 04 A-4): codes can be
+            // read and relabelled, never created or deleted through the API.
+            rule(GET, "/permissions", anyOf("READ_PERMISSION")),
+            rule(GET, "/permissions/*", anyOf("READ_PERMISSION")),
+            rule(PUT, "/permissions/*", anyOf("UPDATE_PERMISSION")),
+            // Claim approval limits per role (spec 04 §5.3): part of administering roles.
+            rule(GET, "/admin/approval-authorities", anyOf("READ_ROLE")),
+            rule(PUT, "/admin/approval-authorities/*", anyOf("UPDATE_ROLE")),
+            rule(DELETE, "/admin/approval-authorities/*", anyOf("UPDATE_ROLE")));
 
     private static ApiRule rule(HttpMethod method, String pattern, ApiAccess access) {
         return new ApiRule(method, pattern, access);

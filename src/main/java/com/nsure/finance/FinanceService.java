@@ -278,10 +278,20 @@ public class FinanceService {
             open.add(unexported + " journal(s) not exported to the GL");
         }
         long pending = em.createQuery("select count(distinct b.id) from GlBatch b, Journal j where j.glBatchRef = b.ref"
-                        + " and j.periodCode = :p and b.status = 'SUBMITTED'", Long.class)
+                        + " and j.periodCode = :p and b.status in ('PREPARED', 'SUBMITTED')", Long.class)
                 .setParameter("p", code).getSingleResult();
         if (pending > 0) {
             open.add(pending + " GL batch(es) awaiting acknowledgement");
+        }
+        long unreconciled = em.createQuery("select count(distinct b.id) from GlBatch b, Journal j where j.glBatchRef = b.ref"
+                        + " and j.periodCode = :p and b.status = 'ACCEPTED'", Long.class)
+                .setParameter("p", code).getSingleResult();
+        if (unreconciled > 0) {
+            open.add(unreconciled + " accepted GL batch(es) not yet reconciled");
+        }
+        long manual = count("select count(m) from ManualJournal m where m.status = 'PENDING'");
+        if (manual > 0) {
+            open.add(manual + " manual journal(s) awaiting approval");
         }
         return open;
     }
@@ -315,6 +325,59 @@ public class FinanceService {
         return batch(batch);
     }
 
+    /** Sends a prepared batch to the corporate GL (Blueprint §7: prepared → submitted). */
+    @Transactional
+    public FinanceViews.GlBatchView submit(String ref) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("EXPORT_GL");
+        GlBatch batch = glBatch(ref);
+        if (!GlBatch.PREPARED.equals(batch.getStatus())) {
+            if (GlBatch.SUBMITTED.equals(batch.getStatus())) {
+                return batch(batch);
+            }
+            throw new ConflictException("GL batch " + ref + " is already " + batch.getStatus() + ".");
+        }
+        batch.submit(user.getUsername());
+        return batch(batch);
+    }
+
+    /**
+     * Reconciles an accepted batch: the totals the GL reports as posted must equal the batch control totals
+     * (Blueprint §7: accepted subledger totals reconcile to the GL). A difference is refused and stays visible.
+     */
+    @Transactional
+    public FinanceViews.GlBatchView reconcile(String ref, JsonNode body) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("EXPORT_GL");
+        GlBatch batch = glBatch(ref);
+        if (!GlBatch.ACCEPTED.equals(batch.getStatus())) {
+            throw new ConflictException("Only a batch the GL accepted can be reconciled; " + ref + " is "
+                    + batch.getStatus() + ".");
+        }
+        BigDecimal glDebit;
+        BigDecimal glCredit;
+        try {
+            glDebit = new BigDecimal(required(body, "glDebitTotal")).setScale(2, java.math.RoundingMode.HALF_UP);
+            glCredit = new BigDecimal(required(body, "glCreditTotal")).setScale(2, java.math.RoundingMode.HALF_UP);
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("GL totals must be numbers.");
+        }
+        if (glDebit.compareTo(batch.getDebitTotal()) != 0 || glCredit.compareTo(batch.getCreditTotal()) != 0) {
+            throw new ConflictException("The GL totals (debit " + glDebit.toPlainString() + ", credit "
+                    + glCredit.toPlainString() + ") do not match batch " + ref + " (debit "
+                    + batch.getDebitTotal().toPlainString() + ", credit " + batch.getCreditTotal().toPlainString()
+                    + "). Investigate the difference before reconciling.");
+        }
+        batch.reconcile(glDebit, glCredit, user.getUsername());
+        return batch(batch);
+    }
+
+    private GlBatch glBatch(String ref) {
+        return em.createQuery("select b from GlBatch b where b.ref = :ref", GlBatch.class)
+                .setParameter("ref", ref).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("GL batch " + ref + " not found"));
+    }
+
     /** The GL's answer. Repeating the same answer is harmless; a rejected batch's journals go out again next time. */
     @Transactional
     public FinanceViews.GlBatchView acknowledge(String ref, JsonNode body) {
@@ -326,6 +389,9 @@ public class FinanceService {
         String status = required(body, "status").toUpperCase(Locale.ROOT);
         if (!Set.of(GlBatch.ACCEPTED, GlBatch.REJECTED).contains(status)) {
             throw new IllegalArgumentException("Status must be ACCEPTED or REJECTED.");
+        }
+        if (GlBatch.PREPARED.equals(batch.getStatus())) {
+            throw new ConflictException("GL batch " + ref + " has not been submitted to the GL yet.");
         }
         if (!GlBatch.SUBMITTED.equals(batch.getStatus())) {
             if (batch.getStatus().equals(status)) {
@@ -410,7 +476,8 @@ public class FinanceService {
     private static FinanceViews.GlBatchView batch(GlBatch b) {
         return new FinanceViews.GlBatchView(b.getRef(), b.getStatus(), b.getJournalCount(), b.getLineCount(),
                 b.getDebitTotal(), b.getCreditTotal(), b.getCreatedBy(), b.getCreatedAt(), b.getGlReference(),
-                b.getAcknowledgedBy(), b.getAcknowledgedAt(), b.getNote());
+                b.getAcknowledgedBy(), b.getAcknowledgedAt(), b.getNote(), b.getSubmittedBy(), b.getSubmittedAt(),
+                b.getReconciledBy(), b.getReconciledAt());
     }
 
     private static String required(JsonNode body, String field) {

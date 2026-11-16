@@ -1,0 +1,15 @@
+databaseChangeLog:
+  - changeSet:
+      id: 059-tap-cover-photo
+      author: nsure
+      comment: >-
+        Tap Cover gets its own product photo like the other products: a couple taking out cover on a phone (direct
+        digital cover). Photo by Ivan S on Pexels (pexels.com/photo/7993392), Pexels License. The focus keeps both faces
+        in view when the card crops the photo. Only set when no photo has been chosen in the product studio.
+      changes:
+        - update:
+            tableName: ins_product
+            where: "name = 'Tap Cover' AND (image_url IS NULL OR image_url = '')"
+            columns:
+              - column: {name: image_url, value: "/products/tap-cover.jpg"}
+              - column: {name: image_focus, value: "28% 38%"}

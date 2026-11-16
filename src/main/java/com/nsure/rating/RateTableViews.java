@@ -56,7 +56,16 @@ public final class RateTableViews {
             String createdBy,
             String changeSummary,
             int rows,
-            boolean current
+            boolean current,
+            // Spec 11 §3: DRAFT, PENDING_APPROVAL, SCHEDULED, PUBLISHED, SUPERSEDED or REJECTED.
+            String status,
+            String effectiveFrom,
+            String submittedBy,
+            String approvedBy,
+            String rejectionReason,
+            String overrideReason,
+            // E-30: the optimistic-concurrency token for PATCH .../cells.
+            String updatedAt
     ) {
     }
 

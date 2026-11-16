@@ -1,0 +1,106 @@
+databaseChangeLog:
+  # Spec 13: asynchronous premium settlement. An attempt (payment_transaction) is separate from the accounting fact
+  # (premium_payment); every provider exchange is logged raw (payment_gateway_log).
+  - changeSet:
+      id: 050-payment-settlement
+      author: nsure
+      changes:
+        - createTable:
+            tableName: payment_transaction
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: customer_ref, type: varchar(20)}
+              - column: {name: provider, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: payment_method, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: provider_token, type: varchar(120), constraints: {unique: true, uniqueConstraintName: uk_paytx_token}}
+              - column: {name: provider_reference, type: varchar(120), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_paytx_reference}}
+              # S-8: sha256(policy, period, purpose, attempt): a double-clicked Pay cannot start two attempts.
+              - column: {name: idempotency_key, type: varchar(80), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_paytx_idempotency}}
+              - column: {name: amount, type: "decimal(15,2)", constraints: {nullable: false}}
+              - column: {name: currency, type: varchar(3), constraints: {nullable: false}}
+              - column: {name: purpose, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: period_start, type: date, constraints: {nullable: false}}
+              - column: {name: period_end, type: date, constraints: {nullable: false}}
+              - column: {name: status, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: redirect_url, type: varchar(500)}
+              - column: {name: provider_result_code, type: varchar(20)}
+              - column: {name: provider_result_text, type: varchar(500)}
+              - column: {name: failure_reason, type: varchar(500)}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: redirected_at, type: timestamp(6)}
+              - column: {name: expires_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: settled_at, type: timestamp(6)}
+              - column: {name: last_verified_at, type: timestamp(6)}
+              - column: {name: verify_attempts, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: settled_via, type: varchar(20)}
+              - column: {name: premium_payment_id, type: bigint}
+              - column: {name: version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - createIndex:
+            tableName: payment_transaction
+            indexName: ix_paytx_status_created
+            columns:
+              - column: {name: status}
+              - column: {name: created_at}
+        - createIndex:
+            tableName: payment_transaction
+            indexName: ix_paytx_policy_period
+            columns:
+              - column: {name: policy_ref}
+              - column: {name: period_start}
+        - createTable:
+            tableName: premium_payment
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: policy_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: customer_ref, type: varchar(20)}
+              - column: {name: period_start, type: date, constraints: {nullable: false}}
+              - column: {name: period_end, type: date, constraints: {nullable: false}}
+              - column: {name: amount, type: "decimal(15,2)", constraints: {nullable: false}}
+              - column: {name: currency, type: varchar(3), constraints: {nullable: false}}
+              - column: {name: payment_method, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: receipt_ref, type: varchar(20)}
+              - column: {name: transaction_id, type: bigint}
+              - column: {name: collected_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: paid_at, type: timestamp(6), constraints: {nullable: false}}
+        # BR-66 / S-9: the database refuses to collect a policy period twice, whatever path collected it. Only
+        # successful payments are written here; failed attempts stay on payment_transaction.
+        - addUniqueConstraint:
+            tableName: premium_payment
+            columnNames: policy_id, period_start
+            constraintName: ux_premium_payment_period
+        - addForeignKeyConstraint:
+            baseTableName: premium_payment
+            baseColumnNames: policy_id
+            referencedTableName: ins_policy
+            referencedColumnNames: id
+            constraintName: fk_premium_payment_policy
+        - createTable:
+            tableName: payment_gateway_log
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: transaction_id, type: bigint}
+              - column: {name: provider, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: operation, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: payload, type: varchar(4000), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+        - createIndex:
+            tableName: payment_gateway_log
+            indexName: ix_gateway_log_tx
+            columns:
+              - column: {name: transaction_id}
+        - createTable:
+            tableName: simulated_checkout
+            columns:
+              - column: {name: token, type: varchar(120), constraints: {primaryKey: true, nullable: false}}
+              - column: {name: reference, type: varchar(120), constraints: {nullable: false}}
+              - column: {name: amount, type: "decimal(15,2)", constraints: {nullable: false}}
+              - column: {name: currency, type: varchar(3), constraints: {nullable: false}}
+              - column: {name: charged_amount, type: "decimal(15,2)"}
+              - column: {name: outcome, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: description, type: varchar(200)}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: decided_at, type: timestamp(6)}

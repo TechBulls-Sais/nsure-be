@@ -1,0 +1,13 @@
+databaseChangeLog:
+  - changeSet:
+      id: 049-reference-sequence
+      author: nsure
+      comment: >-
+        Race-free policy, claim, customer and receipt references (spec 01 BR-59). One row per series, taken under a
+        row lock; seeded on first use from the highest stored reference.
+      changes:
+        - createTable:
+            tableName: reference_sequence
+            columns:
+              - column: {name: series, type: varchar(60), constraints: {primaryKey: true, nullable: false}}
+              - column: {name: next_value, type: bigint, constraints: {nullable: false}}

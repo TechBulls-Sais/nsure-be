@@ -15,8 +15,6 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Documents filed on a policy. Today that is the policy schedule: the PDF that sets out the policy's cover, premium,
@@ -40,9 +38,12 @@ public class PolicyDocumentService {
     private final PlatformSecurityContext security;
     private final PortfolioService portfolio;
     private final DocumentFiles files;
+    private final DocumentCustody custody;
 
     public PolicyDocumentService(EntityManager em, PolicyWorkflow policies, WorkflowHistory history,
-            PlatformSecurityContext security, PortfolioService portfolio, DocumentFiles files) {
+            PlatformSecurityContext security, PortfolioService portfolio, DocumentFiles files,
+            DocumentCustody custody) {
+        this.custody = custody;
         this.em = em;
         this.policies = policies;
         this.history = history;
@@ -70,10 +71,46 @@ public class PolicyDocumentService {
         return views(em, policy.getId());
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public ClaimDocumentService.StoredFile download(String ref, Long id) {
-        security.authenticatedUser().validateHasPermissionTo("READ_POLICY");
-        return open(policies.policy(ref), id);
+        AppUser staff = security.authenticatedUser();
+        staff.validateHasPermissionTo("READ_POLICY");
+        return open(policies.policy(ref), id, staff.getUsername(), DocumentCustody.STAFF);
+    }
+
+    /**
+     * A controlled replacement (Blueprint §8): issues a new schedule from the policy as it stands now and marks the
+     * given one SUPERSEDED with the reason and a link to the new one. The old file is kept.
+     */
+    @Transactional
+    public List<PortfolioViews.DocumentView> reissue(String ref, Long id, String reason) {
+        AppUser staff = security.authenticatedUser();
+        if (STAFF_GENERATE.stream().noneMatch(staff::hasPermissionTo)) {
+            throw new NoAuthorizationException("User has no authority to reissue policy documents");
+        }
+        String why = reason == null ? "" : reason.trim();
+        if (why.length() < 5 || why.length() > 500) {
+            throw new IllegalArgumentException("Give the reason for the replacement (5 to 500 characters).");
+        }
+        InsurancePolicy policy = policies.policy(ref);
+        em.lock(policy, LockModeType.PESSIMISTIC_WRITE);
+        PolicyDocument old = em.find(PolicyDocument.class, id);
+        if (old == null || !old.getPolicyId().equals(policy.getId())) {
+            throw new NotFoundException("Document " + id + " not found on policy " + ref);
+        }
+        if (!SCHEDULE_TYPE.equals(old.getDocumentType()) || !old.isCurrent()) {
+            throw new ConflictException("Only the current policy schedule can be reissued.");
+        }
+        PolicyDocument replacement = issue(policy, staff.getUsername(), "replaces " + old.getFileName() + ": " + why);
+        old.supersede(replacement.getId(), why);
+        return views(em, policy.getId());
+    }
+
+    /** Who downloaded this policy's documents, and when (READ_AUDIT). */
+    @Transactional(readOnly = true)
+    public List<DocumentCustody.AccessView> accessLog(String ref) {
+        security.authenticatedUser().validateHasPermissionTo("READ_AUDIT");
+        return custody.accessLog(policies.policy(ref).getRef());
     }
 
     // ── customer portal ──────────────────────────────────────────────────────────────────────────────
@@ -85,9 +122,10 @@ public class PolicyDocumentService {
         return portfolio.shop();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public ClaimDocumentService.StoredFile shopDownload(String ref, Long id) {
-        return open(ownPolicy(portfolio.customerForLogin(), ref), id);
+        CustomerAccount account = portfolio.customerForLogin();
+        return open(ownPolicy(account, ref), id, account.getLoginUsername(), DocumentCustody.PORTAL);
     }
 
     /** The documents of each given policy, oldest first, keyed by policy id, in one query. */
@@ -102,7 +140,8 @@ public class PolicyDocumentService {
                 .forEach(d -> byPolicy.computeIfAbsent(d.getPolicyId(), key -> new ArrayList<>()).add(
                         new PortfolioViews.DocumentView(d.getId(), d.getDocumentType(), d.getFileName(),
                                 d.getContentType(), d.getSizeBytes(), d.getUploadedBy(),
-                                d.getUploadedAt().withNano(0).toString())));
+                                d.getUploadedAt().withNano(0).toString(), d.getStatus(), d.getSha256(),
+                                d.getSupersededBy(), d.getSupersededReason())));
         return byPolicy;
     }
 
@@ -112,11 +151,32 @@ public class PolicyDocumentService {
 
     private InsurancePolicy ownPolicy(CustomerAccount account, String ref) {
         InsurancePolicy policy = policies.policy(ref);
-        if (!policy.getCustomerName().equals(account.getName())) {
+        if (!account.getRef().equals(policy.getCustomerRef())) {
             // Not theirs: answer as if it did not exist rather than confirm someone else's policy number.
             throw new NotFoundException("Policy " + ref + " not found");
         }
         return policy;
+    }
+
+    /**
+     * Spec 01 BR-60: the schedule is generated and attached when the first premium is paid. Runs after the payment has
+     * committed (an outbox handler), so a PDF failure is retried from the failed-delivery queue and never touches the
+     * payment (spec 13 S-15/S-16). Idempotent: a schedule already on file is left alone.
+     */
+    @Transactional
+    public void issueOnActivation(String ref) {
+        InsurancePolicy policy = policies.policy(ref);
+        if (policy.getCoverStartDate() == null) {
+            return;
+        }
+        Long existing = em.createQuery("select count(d) from PolicyDocument d where d.policyId = :policy "
+                        + "and d.documentType = :type and d.status = 'CURRENT'", Long.class)
+                .setParameter("policy", policy.getId())
+                .setParameter("type", SCHEDULE_TYPE)
+                .getSingleResult();
+        if (existing == 0) {
+            schedule(policy, WorkflowHistory.SYSTEM);
+        }
     }
 
     /**
@@ -130,7 +190,7 @@ public class PolicyDocumentService {
                     + ". Its schedule is issued once the first premium is paid and cover starts.");
         }
         Long existing = em.createQuery("select count(d) from PolicyDocument d where d.policyId = :policy "
-                        + "and d.documentType = :type", Long.class)
+                        + "and d.documentType = :type and d.status = 'CURRENT'", Long.class)
                 .setParameter("policy", policy.getId())
                 .setParameter("type", SCHEDULE_TYPE)
                 .getSingleResult();
@@ -145,16 +205,16 @@ public class PolicyDocumentService {
     @Transactional(readOnly = true)
     public List<Long> policiesWithOldSchedules() {
         return em.createQuery("select distinct d.policyId from PolicyDocument d where d.documentType = :type "
-                        + "and d.layoutVersion < :layout order by d.policyId", Long.class)
+                        + "and d.status = 'CURRENT' and d.layoutVersion < :layout order by d.policyId", Long.class)
                 .setParameter("type", SCHEDULE_TYPE)
                 .setParameter("layout", PolicySchedulePdf.LAYOUT_VERSION)
                 .getResultList();
     }
 
     /**
-     * Replaces every schedule on the policy with one in the current layout, built from the policy as it stands
-     * now and credited to whoever issued the first one. The old files are removed only once the change commits.
-     * Does nothing if another instance got there first.
+     * Issues one schedule in the current layout, built from the policy as it stands now and credited to whoever issued
+     * the first one, and marks the old-layout schedules SUPERSEDED by it (Blueprint §8: the files issued earlier are
+     * kept, never overwritten). Does nothing if another instance got there first.
      */
     @Transactional
     public int replaceOldSchedules(Long policyId) {
@@ -163,29 +223,22 @@ public class PolicyDocumentService {
             return 0;
         }
         List<PolicyDocument> schedules = em.createQuery("select d from PolicyDocument d where d.policyId = :policy "
-                        + "and d.documentType = :type order by d.id", PolicyDocument.class)
+                        + "and d.documentType = :type and d.status = 'CURRENT' order by d.id", PolicyDocument.class)
                 .setParameter("policy", policyId)
                 .setParameter("type", SCHEDULE_TYPE)
                 .getResultList();
-        if (schedules.stream().allMatch(d -> d.getLayoutVersion() >= PolicySchedulePdf.LAYOUT_VERSION)) {
+        if (schedules.isEmpty() || schedules.stream().allMatch(d -> d.getLayoutVersion() >= PolicySchedulePdf.LAYOUT_VERSION)) {
             return 0;
         }
-        List<String> oldFiles = schedules.stream().map(PolicyDocument::getStoragePath).toList();
-        schedules.forEach(em::remove);
-        em.flush();
-        issue(policy, schedules.get(0).getUploadedBy(), "replaces " + schedules.size()
-                + (schedules.size() == 1 ? " schedule" : " schedules") + " in the old layout");
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                oldFiles.forEach(files::deleteQuietly);
-            }
-        });
+        PolicyDocument replacement = issue(policy, schedules.get(0).getUploadedBy(), "replaces " + schedules.size()
+                + (schedules.size() == 1 ? " schedule" : " schedules") + " in the old layout, kept as superseded");
+        String reason = "Reissued in the current schedule layout (v" + PolicySchedulePdf.LAYOUT_VERSION + ")";
+        schedules.forEach(old -> old.supersede(replacement.getId(), reason));
         return schedules.size();
     }
 
     /** Renders the schedule from the policy as it stands now, files it, and records it in the policy history. */
-    private void issue(InsurancePolicy policy, String generatedBy, String note) {
+    private PolicyDocument issue(InsurancePolicy policy, String generatedBy, String note) {
         CustomerAccount customer = em.createQuery(
                         "select c from CustomerAccount c where c.name = :name order by c.displayOrder, c.id",
                         CustomerAccount.class)
@@ -206,9 +259,11 @@ public class PolicyDocumentService {
 
         String fileName = policy.getRef() + "-schedule-" + LocalDateTime.now().format(FILE_STAMP) + ".pdf";
         String storagePath = files.write(policy.getRef(), "pdf", pdf);
+        PolicyDocument document = new PolicyDocument(policy.getId(), SCHEDULE_TYPE, fileName, "application/pdf",
+                pdf.length, storagePath, generatedBy, PolicySchedulePdf.LAYOUT_VERSION);
+        document.seal(DocumentCustody.sha256(pdf));
         try {
-            em.persist(new PolicyDocument(policy.getId(), SCHEDULE_TYPE, fileName, "application/pdf", pdf.length,
-                    storagePath, generatedBy, PolicySchedulePdf.LAYOUT_VERSION));
+            em.persist(document);
             em.flush();
         } catch (RuntimeException e) {
             files.deleteQuietly(storagePath);
@@ -217,13 +272,16 @@ public class PolicyDocumentService {
         history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Schedule Generated",
                 policy.getStatus(), policy.getStatus(),
                 SCHEDULE_TYPE + ": " + fileName + (note == null ? "" : " · " + note), generatedBy);
+        return document;
     }
 
-    private ClaimDocumentService.StoredFile open(InsurancePolicy policy, Long id) {
+    private ClaimDocumentService.StoredFile open(InsurancePolicy policy, Long id, String username, String channel) {
         PolicyDocument document = em.find(PolicyDocument.class, id);
         if (document == null || !document.getPolicyId().equals(policy.getId())) {
             throw new NotFoundException("Document " + id + " not found on policy " + policy.getRef());
         }
+        custody.verify(document.getSha256(), document.getStoragePath(), "document " + id);
+        custody.logAccess(DocumentCustody.POLICY, id, policy.getRef(), document.getFileName(), username, channel);
         return new ClaimDocumentService.StoredFile(document.getFileName(), document.getContentType(),
                 document.getSizeBytes(), files.read(document.getStoragePath(), "document " + id));
     }

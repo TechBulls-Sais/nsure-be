@@ -30,7 +30,14 @@ final class MergeFields {
                 List.of("policyRef", "customerName", "product", "amount", "method", "receiptRef"));
         BY_EVENT.put(Events.CLAIM_PAID,
                 List.of("claimRef", "policyRef", "customerName", "product", "amount", "payoutRef"));
+        BY_EVENT.put(Events.CLAIM_RECEIVED, List.of("claimRef", "policyRef", "customerName", "product", "amount"));
+        BY_EVENT.put(Events.CLAIM_APPROVED, List.of("claimRef", "policyRef", "customerName", "product", "amount"));
+        BY_EVENT.put(Events.CLAIM_REJECTED,
+                List.of("claimRef", "policyRef", "customerName", "product", "amount", "reason"));
         BY_EVENT.put(Events.SERVICE_CASE_OPENED, List.of("caseRef", "caseType", "customerName", "category"));
+        BY_EVENT.put(Events.PREMIUM_DUE_REMINDER,
+                List.of("policyRef", "customerName", "product", "amount", "dueDate"));
+        BY_EVENT.put(Events.OPERATIONAL_NOTICE, List.of("customerName"));
     }
 
     private MergeFields() {

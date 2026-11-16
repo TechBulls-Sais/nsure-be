@@ -1,0 +1,105 @@
+databaseChangeLog:
+  # Spec 12: four-eyes and STP made explicit and observable, controls administrable, and staff alerted when a control
+  # goes off (C-11) or straight-through processing silently stops (C-18).
+  - changeSet:
+      id: 048-claim-control-columns
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ins_claim
+            columns:
+              # C-12: whether every STP gate passed, and the coded gate that stopped it.
+              - column: {name: stp_eligible, type: boolean}
+              - column: {name: stp_ineligible_code, type: varchar(30)}
+              # C-9: the written reason for a break-glass four-eyes override.
+              - column: {name: four_eyes_override_reason, type: varchar(500)}
+              # C-17 / C-18: when the claim was lodged, for the STP rate over a rolling window.
+              - column: {name: lodged_at, type: timestamp(6)}
+        - sql:
+            sql: |
+              UPDATE ins_claim SET four_eyes_applied = FALSE WHERE four_eyes_applied IS NULL;
+              UPDATE ins_claim SET stp_eligible = TRUE WHERE processing_type = 'STP';
+              UPDATE ins_claim SET stp_eligible = FALSE, stp_ineligible_code = 'CHECKS_FAILED'
+              WHERE processing_type = 'Manual Review' AND stp_ineligible_reason IS NULL;
+              UPDATE ins_claim SET stp_eligible = FALSE, stp_ineligible_code = 'STP_DISABLED'
+              WHERE processing_type = 'Manual Review' AND stp_ineligible_reason LIKE '%switched off%';
+              UPDATE ins_claim SET stp_eligible = FALSE, stp_ineligible_code = 'OVER_CEILING'
+              WHERE processing_type = 'Manual Review' AND stp_ineligible_reason LIKE '%ceiling%';
+              UPDATE ins_claim SET stp_eligible = FALSE, stp_ineligible_code = 'NO_VERIFIED_PAYOUT'
+              WHERE processing_type = 'Manual Review' AND stp_ineligible_reason LIKE '%payout details%';
+        - createTable:
+            tableName: product_stp_policy
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: product_id, type: bigint, constraints: {nullable: false, unique: true, uniqueConstraintName: uk_product_stp_policy}}
+              - column: {name: stp_enabled, type: boolean, defaultValueBoolean: true, constraints: {nullable: false}}
+              - column: {name: stp_ceiling, type: "decimal(15,2)"}
+              - column: {name: requires_verified_payout, type: boolean, defaultValueBoolean: true, constraints: {nullable: false}}
+              - column: {name: max_claims_per_policy_per_year, type: int}
+        - addForeignKeyConstraint:
+            baseTableName: product_stp_policy
+            baseColumnNames: product_id
+            referencedTableName: ins_product
+            referencedColumnNames: id
+            constraintName: fk_product_stp_policy_product
+        - createTable:
+            tableName: staff_alert
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: alert_type, type: varchar(40), constraints: {nullable: false}}
+              # Only users holding this permission see the alert.
+              - column: {name: required_permission, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: title, type: varchar(200), constraints: {nullable: false}}
+              - column: {name: body, type: varchar(1000), constraints: {nullable: false}}
+              - column: {name: dedup_key, type: varchar(120), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_staff_alert_dedup}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+        - createIndex:
+            tableName: staff_alert
+            indexName: ix_staff_alert_created
+            columns:
+              - column: {name: created_at}
+  - changeSet:
+      id: 048-claim-control-columns-mysql
+      author: nsure
+      dbms: mysql
+      changes:
+        - modifyDataType: {tableName: ins_claim, columnName: stp_eligible, newDataType: bit}
+        - modifyDataType: {tableName: product_stp_policy, columnName: stp_enabled, newDataType: bit}
+        - modifyDataType: {tableName: product_stp_policy, columnName: requires_verified_payout, newDataType: bit}
+  - changeSet:
+      id: 048-claim-decision-templates
+      author: nsure
+      comment: >-
+        Spec 05 §9 / 01 BR-77: customers hear when a claim is received, approved or rejected. Approved starter
+        templates; copy changes without a deploy through the Communications screen.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO com_template (code, event_type, channel, audience, version, subject, body, status, created_by, created_at, approved_by, approved_at)
+              SELECT seed.code, seed.event_type, 'EMAIL', 'CUSTOMER', 1, seed.subject, seed.body, 'APPROVED', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+              FROM (
+                SELECT 'CLAIM_RECEIVED_EMAIL' code, 'ClaimReceived' event_type,
+                       'We have received your claim {{claimRef}}' subject,
+                       'Dear {{customerName}}, your claim {{claimRef}} on policy {{policyRef}} has been received. We will review it within 24 hours. Track it in your secure Nsure Life portal: {{portalLink}}' body
+                UNION ALL
+                SELECT 'CLAIM_APPROVED_EMAIL', 'ClaimApproved',
+                       'Your claim {{claimRef}} has been approved',
+                       'Dear {{customerName}}, your claim {{claimRef}} has been approved. Payout of P{{amount}} will be processed shortly. Details are in your secure Nsure Life portal: {{portalLink}}'
+                UNION ALL
+                SELECT 'CLAIM_REJECTED_EMAIL', 'ClaimRejected',
+                       'An update on your claim {{claimRef}}',
+                       'Dear {{customerName}}, your claim {{claimRef}} could not be approved. Reason: {{reason}}. Contact us or see your secure Nsure Life portal for help: {{portalLink}}'
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM com_template t WHERE t.code = seed.code);
+  - changeSet:
+      id: 048-control-write-permission-holders
+      author: nsure
+      comment: >-
+        Every control change needs UPDATE_CONTROL, granted to no role (12 C-10); a super admin passes by role. The
+        controls.read holders are alerted when one goes off (C-11).
+      changes:
+        - sql:
+            sql: |
+              DELETE FROM app_role_permission
+              WHERE permission_id IN (SELECT id FROM app_permission WHERE code = 'UPDATE_CONTROL');

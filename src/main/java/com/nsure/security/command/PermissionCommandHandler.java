@@ -7,33 +7,32 @@ import com.nsure.audit.service.CommandRequest;
 import com.nsure.audit.service.CommandResult;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.security.domain.Permission;
-import com.nsure.security.domain.Role;
 import com.nsure.security.repository.PermissionRepository;
-import com.nsure.security.repository.RoleRepository;
-import com.nsure.security.service.SuperAdminGuard;
 import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Component;
 
+/**
+ * Edits the presentation of a permission code: its label, its group and whether it needs a checker. The codes
+ * themselves are a closed vocabulary that lives in source ({@link com.nsure.security.domain.PermissionCatalog},
+ * spec 04 A-4), so they are never created, renamed or deleted through the API: a code nothing checks would grant
+ * nothing, and deleting a code something checks would make it unreachable. {@code UPDATE_PERMISSION} is checked by
+ * the command pipeline before this runs.
+ */
 @Component
 public class PermissionCommandHandler implements CommandHandler {
 
-    private static final Set<String> PROTECTED = Set.of(
-            "ALL_FUNCTIONS", "ALL_FUNCTIONS_READ", "CHECKER_SUPER_USER");
+    /**
+     * Identity-administration codes whose four-eyes check cannot be switched off: otherwise an administrator holding
+     * UPDATE_PERMISSION could drop the checker and then change roles or users alone (no self-approval, NS-UX-004).
+     */
+    private static final Set<String> FOUR_EYES_LOCKED = Set.of("UPDATE_USER", "UPDATE_ROLE", "PERMISSIONS_ROLE");
 
     private final PermissionRepository permissions;
-    private final RoleRepository roles;
-    private final SuperAdminGuard superAdmins;
     private final ObjectMapper mapper;
 
-    public PermissionCommandHandler(
-            PermissionRepository permissions,
-            RoleRepository roles,
-            SuperAdminGuard superAdmins,
-            ObjectMapper mapper) {
+    public PermissionCommandHandler(PermissionRepository permissions, ObjectMapper mapper) {
         this.permissions = permissions;
-        this.roles = roles;
-        this.superAdmins = superAdmins;
         this.mapper = mapper;
     }
 
@@ -44,79 +43,36 @@ public class PermissionCommandHandler implements CommandHandler {
 
     @Override
     public Set<String> actions() {
-        return Set.of("CREATE", "UPDATE", "DELETE");
+        return Set.of("UPDATE");
     }
 
     @Override
     public CommandResult handle(CommandRequest request) {
-        superAdmins.require();
-        return switch (request.actionName()) {
-            case "CREATE" -> create(request);
-            case "UPDATE" -> update(request);
-            case "DELETE" -> delete(request);
-            default -> throw new IllegalArgumentException("Unsupported action " + request.actionName());
-        };
-    }
-
-    private CommandResult create(CommandRequest request) {
+        if (!"UPDATE".equals(request.actionName())) {
+            throw new IllegalArgumentException("Permission codes are defined in source and cannot be "
+                    + request.actionName().toLowerCase() + "d through the API.");
+        }
+        Permission permission = permissions.findById(request.resourceId())
+                .orElseThrow(() -> new NotFoundException("Permission not found"));
         PermissionBody body = read(request.json());
-        Permission permission = new Permission();
-        apply(permission, body, true);
-        permission = permissions.save(permission);
-        return new CommandResult(permission.getId(), idJson(permission.getId()));
-    }
-
-    private CommandResult update(CommandRequest request) {
-        Permission permission = permissions.findById(request.resourceId())
-                .orElseThrow(() -> new NotFoundException("Permission not found"));
-        if (PROTECTED.contains(permission.getCode().toUpperCase())) {
-            throw new IllegalArgumentException("This permission cannot be changed");
+        if (body.code() != null && !body.code().trim().equalsIgnoreCase(permission.getCode())) {
+            throw new IllegalArgumentException("A permission code cannot be renamed; it is checked by name in source.");
         }
-        apply(permission, read(request.json()), false);
-        permissions.save(permission);
-        return new CommandResult(permission.getId(), idJson(permission.getId()));
-    }
-
-    private CommandResult delete(CommandRequest request) {
-        Permission permission = permissions.findById(request.resourceId())
-                .orElseThrow(() -> new NotFoundException("Permission not found"));
-        if (PROTECTED.contains(permission.getCode().toUpperCase())) {
-            throw new IllegalArgumentException("This permission cannot be deleted");
-        }
-        for (Role role : roles.findAll()) {
-            if (role.getPermissions() != null) {
-                role.getPermissions().removeIf(assigned -> permission.getId().equals(assigned.getId()));
-            }
-        }
-        permissions.delete(permission);
-        return new CommandResult(permission.getId(), idJson(permission.getId()));
-    }
-
-    private void apply(Permission permission, PermissionBody body, boolean creating) {
-        if (creating || body.code() != null) {
-            String code = requiredToken(body.code(), "Permission code", 100);
-            if (permissions.findByCodeIgnoreCase(code)
-                    .filter(existing -> !existing.getId().equals(permission.getId()))
-                    .isPresent()) {
-                throw new IllegalArgumentException("A permission with this code already exists");
-            }
-            permission.setCode(code);
-        }
-        if (creating || body.grouping() != null) {
+        if (body.grouping() != null) {
             permission.setGrouping(requiredToken(body.grouping(), "Group", 45));
-        }
-        if (body.entityName() != null) {
-            permission.setEntityName(blankToNull(body.entityName(), "Entity", 100));
-        }
-        if (body.actionName() != null) {
-            permission.setActionName(blankToNull(body.actionName(), "Action", 100));
         }
         if (body.functionName() != null) {
             permission.setFunctionName(blankToNull(body.functionName(), "Function", 150));
         }
         if (body.canMakerChecker() != null) {
+            if (!body.canMakerChecker() && FOUR_EYES_LOCKED.contains(permission.getCode().toUpperCase())) {
+                throw new IllegalArgumentException(permission.getCode()
+                        + " always needs a second person to approve it; its checker cannot be switched off.");
+            }
             permission.setCanMakerChecker(body.canMakerChecker());
         }
+        permissions.save(permission);
+        return new CommandResult(permission.getId(), idJson(permission.getId()));
     }
 
     private String requiredToken(String value, String label, int max) {

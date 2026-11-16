@@ -20,6 +20,10 @@ public abstract class CoverRecord {
     @Column(name = "customer_name", nullable = false, length = 100)
     private String customerName;
 
+    /** The owning customer record. Customer scoping keys on this, never on the (non-unique) name (spec 04 §6). */
+    @Column(name = "customer_ref", length = 20)
+    private String customerRef;
+
     @Column(nullable = false, length = 100)
     private String product;
 
@@ -57,6 +61,14 @@ public abstract class CoverRecord {
 
     public void setCustomerName(String customerName) {
         this.customerName = customerName;
+    }
+
+    public String getCustomerRef() {
+        return customerRef;
+    }
+
+    public void setCustomerRef(String customerRef) {
+        this.customerRef = customerRef;
     }
 
     public String getProduct() {

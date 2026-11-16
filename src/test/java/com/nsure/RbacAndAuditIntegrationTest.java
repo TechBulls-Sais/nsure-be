@@ -75,9 +75,8 @@ class RbacAndAuditIntegrationTest {
 
     @Test
     void missingPermissionDoesNotWriteACommand() throws Exception {
-        long officeId = officeId("Head Office");
         String username = "empty" + suffix();
-        send("admin", post("/users").content(userBody(username, officeId, new long[0])), 201);
+        send("admin", post("/users").content(userBody(username, new long[0])), 201);
 
         long before = commands.count();
         send(username, post("/roles").content(roleBody("Denied " + suffix())), 403);
@@ -87,47 +86,67 @@ class RbacAndAuditIntegrationTest {
     @Test
     void disabledRoleGrantsNothingOnTheNextRequest() throws Exception {
         long roleId = createRole("Reader " + suffix());
-        send("admin", put("/roles/" + roleId + "/permissions").content("{\"permissions\":{\"READ_OFFICE\":true}}"), 200);
-        long officeId = officeId("Head Office");
+        grantRole(roleId, "{\"permissions\":{\"READ_AUDIT\":true}}");
         String username = "reader" + suffix();
-        send("admin", post("/users").content(userBody(username, officeId, new long[] {roleId})), 201);
+        send("admin", post("/users").content(userBody(username, new long[] {roleId})), 201);
 
-        send(username, get("/offices"), 200);
-        send("admin", put("/roles/" + roleId).content("{\"disabled\":true}"), 200);
-        send(username, get("/offices"), 403);
+        send(username, get("/audits"), 200);
+        approve(send("admin", put("/roles/" + roleId).content("{\"disabled\":true}"), 202));
+        send(username, get("/audits"), 403);
     }
 
     @Test
     void makerCheckerRollsBackUntilADifferentUserApproves() throws Exception {
         long roleId = createRole("Clerk " + suffix());
-        send("admin", put("/roles/" + roleId + "/permissions").content("{\"permissions\":{\"UPDATE_USER\":true}}"), 200);
-        long officeId = officeId("Branch Office");
+        grantRole(roleId, "{\"permissions\":{\"UPDATE_USER\":true}}");
         String clerk = "clerk" + suffix();
         String target = "target" + suffix();
-        send("admin", post("/users").content(userBody(clerk, officeId, new long[] {roleId})), 201);
-        JsonNode createdTarget = send("admin", post("/users").content(userBody(target, officeId, new long[0])), 201);
+        send("admin", post("/users").content(userBody(clerk, new long[] {roleId})), 201);
+        JsonNode createdTarget = send("admin", post("/users").content(userBody(target, new long[0])), 201);
         long targetId = createdTarget.get("resourceId").asLong();
 
+        // UPDATE_USER is a maker-checker code (docs/IMPLEMENT_AUDITING.md): the clerk's change is held, not applied.
         String renamed = "renamed" + suffix();
-        send(clerk, put("/users/" + targetId).content("{\"username\":\"" + renamed + "\"}"), 403);
+        JsonNode pending = send(clerk, put("/users/" + targetId).content("{\"username\":\"" + renamed + "\"}"), 202);
         assertThat(send("admin", get("/users/" + targetId), 200).get("username").asText()).isEqualTo(target);
+        // The maker cannot check their own command; a different user holding CHECKER_UPDATE_USER applies it.
+        send(clerk, post("/audits/" + pending.get("commandId").asLong() + "/approve"), 403);
+        send("admin", post("/audits/" + pending.get("commandId").asLong() + "/approve"), 200);
+        assertThat(send("admin", get("/users/" + targetId), 200).get("username").asText()).isEqualTo(renamed);
+    }
+
+    @Test
+    void theAdministratorCannotApproveTheirOwnChange() throws Exception {
+        // Nsure Life NS-UX-004 / AT-SH10-01: no self-approval for anyone, the administrator included.
+        String target = "own" + suffix();
+        long targetId = send("admin", post("/users").content(userBody(target, new long[0])), 201)
+                .get("resourceId").asLong();
+        String renamed = "ownrenamed" + suffix();
+        JsonNode pending = send("admin", put("/users/" + targetId).content("{\"username\":\"" + renamed + "\"}"), 202);
+        assertThat(send("admin", get("/users/" + targetId), 200).get("username").asText()).isEqualTo(target);
+
+        JsonNode refused = send("admin", post("/audits/" + pending.get("commandId").asLong() + "/approve"), 403);
+        assertThat(refused.toString()).contains("Maker cannot check their own command");
+        send("admin", post("/audits/" + pending.get("commandId").asLong() + "/reject"), 403);
+        send("secadmin", post("/audits/" + pending.get("commandId").asLong() + "/approve"), 200);
+        assertThat(send("admin", get("/users/" + targetId), 200).get("username").asText()).isEqualTo(renamed);
     }
 
     @Test
     void selfUpdateSkipsMakerChecker() throws Exception {
         long roleId = createRole("Self " + suffix());
-        send("admin", put("/roles/" + roleId + "/permissions").content("{\"permissions\":{\"UPDATE_USER\":true}}"), 200);
-        long officeId = officeId("Branch Office");
+        grantRole(roleId, "{\"permissions\":{\"UPDATE_USER\":true}}");
         String clerk = "self" + suffix();
-        JsonNode created = send("admin", post("/users").content(userBody(clerk, officeId, new long[] {roleId})), 201);
+        JsonNode created = send("admin", post("/users").content(userBody(clerk, new long[] {roleId})), 201);
         String renamed = "selfrenamed" + suffix();
 
+        // docs/IMPLEMENT_RBAC.md: a user changing their own profile skips maker-checker.
         send(
                 clerk,
                 put("/users/" + created.get("resourceId").asLong()).content("{\"username\":\"" + renamed + "\"}"),
-                403);
+                200);
 
-        assertThat(users.findById(created.get("resourceId").asLong()).orElseThrow().getUsername()).isEqualTo(clerk);
+        assertThat(users.findById(created.get("resourceId").asLong()).orElseThrow().getUsername()).isEqualTo(renamed);
     }
 
     @Test
@@ -155,9 +174,8 @@ class RbacAndAuditIntegrationTest {
 
     @Test
     void commandLogStoresPasswordsRedacted() throws Exception {
-        long officeId = officeId("Head Office");
         String username = "secret" + suffix();
-        JsonNode created = send("admin", post("/users").content(userBody(username, officeId, new long[0])), 201);
+        JsonNode created = send("admin", post("/users").content(userBody(username, new long[0])), 201);
 
         JsonNode audit = send("admin", get("/audits/" + created.get("commandId").asLong()), 200);
         assertThat(audit.get("command").get("password").asText()).isEqualTo("***");
@@ -166,71 +184,78 @@ class RbacAndAuditIntegrationTest {
     }
 
     @Test
-    void branchUserSeesOnlyAuditsInTheOfficeHierarchy() throws Exception {
-        long auditRole = createRole("Branch audit " + suffix());
-        send("admin", put("/roles/" + auditRole + "/permissions").content("{\"permissions\":{\"READ_AUDIT\":true}}"), 200);
-        long branchId = officeId("Branch Office");
-        String auditor = "branch" + suffix();
-        send("admin", post("/users").content(userBody(auditor, branchId, new long[] {auditRole})), 201);
+    void anAuditorSeesEveryCommandWithNoOfficeScope() throws Exception {
+        // The office/branch tree is gone (Nsure Life NS-SH11-002): READ_AUDIT reads the whole command log.
+        long auditRole = createRole("Audit " + suffix());
+        grantRole(auditRole, "{\"permissions\":{\"READ_AUDIT\":true}}");
+        String auditor = "auditor" + suffix();
+        send("admin", post("/users").content(userBody(auditor, new long[] {auditRole})), 201);
 
         JsonNode roleCommand = send("admin", post("/roles").content(roleBody("Global " + suffix())), 201);
-        JsonNode userCommand = send(
-                "admin",
-                post("/users").content(userBody("branchuser" + suffix(), branchId, new long[0])),
-                201);
+        JsonNode userCommand = send("admin", post("/users").content(userBody("plain" + suffix(), new long[0])), 201);
 
-        send(auditor, get("/audits/" + roleCommand.get("commandId").asLong()), 403);
+        send(auditor, get("/audits/" + roleCommand.get("commandId").asLong()), 200);
         JsonNode visible = send(auditor, get("/audits/" + userCommand.get("commandId").asLong()), 200);
-        assertThat(visible.get("officeId").asLong()).isEqualTo(branchId);
-
-        JsonNode page = send(auditor, get("/audits?size=200"), 200);
-        for (JsonNode item : page.get("items")) {
-            assertThat(item.get("officeId").isNull()).isFalse();
-        }
+        assertThat(visible.has("officeId")).isFalse();
+        send("admin", get("/offices"), 403);
     }
 
     @Test
-    void allFunctionsReadCanSearchAuditsButCannotWrite() throws Exception {
-        long roleId = createRole("Read all " + suffix());
+    void explicitReadGrantsOpenReadsButNoWritesAndWildcardsAreGone() throws Exception {
+        long roleId = createRole("Read some " + suffix());
+        // ALL_FUNCTIONS_READ is no longer a code (Nsure Life NS-SH11-002: explicit grants only).
         send("admin", put("/roles/" + roleId + "/permissions")
-                .content("{\"permissions\":{\"ALL_FUNCTIONS_READ\":true}}"), 200);
+                .content("{\"permissions\":{\"ALL_FUNCTIONS_READ\":true}}"), 400);
+        grantRole(roleId, "{\"permissions\":{\"READ_AUDIT\":true,\"READ_ROLE\":true}}");
         String username = "readonly" + suffix();
-        send("admin", post("/users").content(userBody(username, officeId("Head Office"), new long[] {roleId})), 201);
+        send("admin", post("/users").content(userBody(username, new long[] {roleId})), 201);
 
         send(username, get("/audits"), 200);
-        send(username, get("/roles"), 403);
+        send(username, get("/roles"), 200);
+        send(username, get("/users"), 403);
         send(username, post("/roles").content(roleBody("Blocked " + suffix())), 403);
+        send(username, put("/admin/controls/claim.four_eyes").content("{\"enabled\":false,\"reason\":\"x\"}"), 403);
     }
 
     @Test
     void superAdminManagesRolesPermissionsAndUsers() throws Exception {
         JsonNode me = send("admin", get("/me"), 200);
         assertThat(me.get("superAdmin").asBoolean()).isTrue();
+        assertThat(me.get("permissions").toString()).doesNotContain("ALL_FUNCTIONS");
 
-        String code = "READ_DEMO_" + suffix();
-        JsonNode createdPermission = send("admin", post("/permissions").content(
-                "{\"grouping\":\"custom\",\"code\":\"" + code + "\",\"entityName\":\"DEMO\",\"actionName\":\"READ\"}"), 201);
-        long permissionId = createdPermission.get("resourceId").asLong();
+        // The vocabulary is closed (spec 04 A-4): codes are relabelled, never created or deleted over the API.
+        send("admin", post("/permissions").content(
+                "{\"grouping\":\"custom\",\"code\":\"READ_DEMO\",\"entityName\":\"DEMO\",\"actionName\":\"READ\"}"), 403);
+        long permissionId = 0;
+        long updateRoleId = 0;
+        for (JsonNode permission : send("admin", get("/permissions"), 200)) {
+            if ("READ_PRODUCT".equals(permission.get("code").asText())) {
+                permissionId = permission.get("id").asLong();
+            }
+            if ("UPDATE_ROLE".equals(permission.get("code").asText())) {
+                updateRoleId = permission.get("id").asLong();
+            }
+        }
         JsonNode viewed = send("admin", get("/permissions/" + permissionId), 200);
-        assertThat(viewed.get("code").asText()).isEqualTo(code);
-        assertThat(viewed.get("entityName").asText()).isEqualTo("DEMO");
+        assertThat(viewed.get("entityName").asText()).isEqualTo("PRODUCT");
         assertThat(viewed.get("actionName").asText()).isEqualTo("READ");
-        send("admin", put("/permissions/" + permissionId).content(
-                "{\"grouping\":\"workspace\",\"entityName\":\"DEMO\",\"actionName\":\"READ\"}"), 200);
+        String grouping = viewed.get("grouping").asText();
+        send("admin", put("/permissions/" + permissionId).content("{\"grouping\":\"workspace\"}"), 200);
         assertThat(send("admin", get("/permissions/" + permissionId), 200).get("grouping").asText())
                 .isEqualTo("workspace");
-        send("admin", delete("/permissions/" + permissionId), 200);
-        send("admin", get("/permissions/" + permissionId), 404);
+        send("admin", put("/permissions/" + permissionId).content("{\"grouping\":\"" + grouping + "\"}"), 200);
+        send("admin", delete("/permissions/" + permissionId), 403);
+        // The checker on identity changes cannot be switched off, or one administrator could act alone.
+        send("admin", put("/permissions/" + updateRoleId).content("{\"canMakerChecker\":false}"), 400);
 
         String roleName = "Desk " + suffix();
         long roleId = createRole(roleName);
-        send("admin", put("/roles/" + roleId).content("{\"description\":\"Desk access\"}"), 200);
-        send("admin", put("/roles/" + roleId + "/permissions").content("{\"permissions\":{\"READ_OFFICE\":true}}"), 200);
-        assertThat(send("admin", get("/roles/" + roleId), 200).get("permissions").toString()).contains("READ_OFFICE");
+        approve(send("admin", put("/roles/" + roleId).content("{\"description\":\"Desk access\"}"), 202));
+        grantRole(roleId, "{\"permissions\":{\"READ_PRODUCT\":true}}");
+        assertThat(send("admin", get("/roles/" + roleId), 200).get("permissions").toString()).contains("READ_PRODUCT");
 
-        long officeId = officeId("Head Office");
         String username = "member" + suffix();
-        JsonNode createdUser = send("admin", post("/users").content(userBody(username, officeId, new long[] {roleId})), 201);
+        JsonNode createdUser = send("admin", post("/users").content(userBody(username, new long[] {roleId})), 201);
         long userId = createdUser.get("resourceId").asLong();
         JsonNode stored = send("admin", get("/users/" + userId), 200);
         assertThat(stored.get("roles").toString()).contains(roleName);
@@ -255,14 +280,13 @@ class RbacAndAuditIntegrationTest {
         return send("admin", post("/roles").content(roleBody(name)), 201).get("resourceId").asLong();
     }
 
-    private long officeId(String name) throws Exception {
-        JsonNode offices = send("admin", get("/offices"), 200);
-        for (JsonNode office : offices) {
-            if (name.equals(office.get("name").asText())) {
-                return office.get("id").asLong();
-            }
-        }
-        throw new AssertionError("Missing office " + name);
+    /** Role permission changes are maker-checker: the admin makes them, a second administrator approves. */
+    private void grantRole(long roleId, String body) throws Exception {
+        approve(send("admin", put("/roles/" + roleId + "/permissions").content(body), 202));
+    }
+
+    private void approve(JsonNode pending) throws Exception {
+        send("secadmin", post("/audits/" + pending.get("commandId").asLong() + "/approve"), 200);
     }
 
     private long userId(String username) throws Exception {
@@ -295,11 +319,10 @@ class RbacAndAuditIntegrationTest {
         return body.toString();
     }
 
-    private String userBody(String username, long officeId, long[] roleIds) {
+    private String userBody(String username, long[] roleIds) {
         ObjectNode body = json.createObjectNode();
         body.put("username", username);
         body.put("password", "password");
-        body.put("officeId", officeId);
         body.put("enabled", true);
         body.putArray("roleIds");
         for (long roleId : roleIds) {

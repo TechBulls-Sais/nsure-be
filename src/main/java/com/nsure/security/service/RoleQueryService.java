@@ -15,22 +15,18 @@ public class RoleQueryService {
 
     private final RoleRepository roles;
     private final PlatformSecurityContext security;
-    private final SuperAdminGuard superAdmins;
 
-    public RoleQueryService(RoleRepository roles, PlatformSecurityContext security, SuperAdminGuard superAdmins) {
+    public RoleQueryService(RoleRepository roles, PlatformSecurityContext security) {
         this.roles = roles;
         this.security = security;
-        this.superAdmins = superAdmins;
     }
 
     public java.util.List<RoleResponse> list() {
-        superAdmins.require();
         security.authenticatedUser().validateHasReadPermission("ROLE");
         return roles.findAllByOrderByNameAsc().stream().map(this::toResponse).toList();
     }
 
     public RoleResponse get(Long id) {
-        superAdmins.require();
         security.authenticatedUser().validateHasReadPermission("ROLE");
         return toResponse(roles.findById(id).orElseThrow(() -> new NotFoundException("Role not found")));
     }
@@ -47,6 +43,8 @@ public class RoleQueryService {
                 role.getName(),
                 role.getDescription(),
                 role.isDisabled(),
+                role.isDeskAccess(),
+                role.isProtectedRole(),
                 codes,
                 role.getCreatedBy(),
                 role.getCreatedDate(),

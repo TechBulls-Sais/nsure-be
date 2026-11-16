@@ -23,8 +23,6 @@ public interface CommandSourceRepository extends JpaRepository<CommandSource, Lo
               and (:status is null or c.status = :status)
               and (:from is null or c.madeOn >= :from)
               and (:to is null or c.madeOn < :to)
-              and (:headOffice = true or c.officeId in (
-                    select o.id from Office o where o.hierarchy like concat(:hierarchy, '%')))
             """)
     Page<CommandSource> search(
             @Param("actionName") String actionName,
@@ -34,7 +32,5 @@ public interface CommandSourceRepository extends JpaRepository<CommandSource, Lo
             @Param("status") String status,
             @Param("from") OffsetDateTime from,
             @Param("to") OffsetDateTime to,
-            @Param("headOffice") boolean headOffice,
-            @Param("hierarchy") String hierarchy,
             Pageable pageable);
 }

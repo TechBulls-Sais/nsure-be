@@ -55,6 +55,28 @@ public class PortfolioController {
 
     // ── customer portal: the signed-in customer's own policies and claims ─────────────────────────
 
+    // Declaration and consent (spec 01 BR-5, BR-6): a 6-digit code, four consents, and a lock after wrong codes.
+    @GetMapping("/shop/declaration")
+    public DeclarationService.LockState shopDeclarationLock() {
+        return portfolio.shopDeclarationLock();
+    }
+
+    @PostMapping("/shop/policies/{ref}/declaration/otp")
+    public DeclarationService.OtpSent shopDeclarationOtp(@PathVariable String ref) {
+        return portfolio.shopDeclarationOtp(ref);
+    }
+
+    @PostMapping("/shop/policies/{ref}/declaration")
+    public PortfolioService.ConsentView shopDeclare(@PathVariable String ref, @RequestBody JsonNode body) {
+        return portfolio.shopDeclare(ref, body);
+    }
+
+    /** Read-only evidence (spec 04 A-15): audit.read. */
+    @GetMapping("/policies/{ref}/declarations")
+    public java.util.List<PortfolioService.ConsentView> declarations(@PathVariable String ref) {
+        return portfolio.declarations(ref);
+    }
+
     @PostMapping("/shop/policies/{ref}/pay")
     public PortfolioViews.ShopView shopPay(@PathVariable String ref, @RequestBody JsonNode body) {
         return portfolio.shopPay(ref, body);

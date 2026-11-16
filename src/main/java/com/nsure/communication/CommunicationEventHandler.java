@@ -26,7 +26,8 @@ public class CommunicationEventHandler implements DomainEventHandler {
 
     @Override
     public Set<String> eventTypes() {
-        return Set.of(Events.POLICY_ISSUED, Events.PREMIUM_RECEIVED, Events.CLAIM_PAID, Events.SERVICE_CASE_OPENED);
+        return Set.of(Events.POLICY_ISSUED, Events.PREMIUM_RECEIVED, Events.CLAIM_PAID, Events.SERVICE_CASE_OPENED,
+                Events.CLAIM_RECEIVED, Events.CLAIM_APPROVED, Events.CLAIM_REJECTED, Events.PREMIUM_DUE_REMINDER);
     }
 
     @Override

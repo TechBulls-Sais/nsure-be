@@ -1,0 +1,69 @@
+databaseChangeLog:
+  # Solution Blueprint §7 (SH-08): GL postings are tracked as prepared, submitted, accepted, rejected and reconciled;
+  # manual journals and suspense clearance have a named owner and maker-checker approval.
+  - changeSet:
+      id: 057-gl-batch-lifecycle
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: fin_gl_batch
+            columns:
+              - column: {name: submitted_by, type: varchar(100)}
+              - column: {name: submitted_at, type: timestamp(6)}
+              - column: {name: gl_debit_total, type: "decimal(19,2)"}
+              - column: {name: gl_credit_total, type: "decimal(19,2)"}
+              - column: {name: reconciled_by, type: varchar(100)}
+              - column: {name: reconciled_at, type: timestamp(6)}
+  - changeSet:
+      id: 057-manual-journal
+      author: nsure
+      changes:
+        - createTable:
+            tableName: fin_manual_journal
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(30), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_fin_manual_journal_ref}}
+              - column: {name: description, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(1000), constraints: {nullable: false}}
+              - column: {name: accounting_date, type: date, constraints: {nullable: false}}
+              - column: {name: lines_json, type: varchar(4000), constraints: {nullable: false}}
+              - column: {name: amount, type: "decimal(19,2)", constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: made_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: made_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: checked_by, type: varchar(100)}
+              - column: {name: checked_at, type: timestamp(6)}
+              - column: {name: decision_note, type: varchar(1000)}
+              - column: {name: journal_ref, type: varchar(30)}
+  - changeSet:
+      id: 057-suspense-clearance
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: int_inbound_message
+            columns:
+              - column: {name: clearance_action, type: varchar(20)}
+              - column: {name: clearance_policy_ref, type: varchar(40)}
+              - column: {name: clearance_reason, type: varchar(1000)}
+              - column: {name: clearance_requested_by, type: varchar(100)}
+              - column: {name: clearance_requested_at, type: timestamp(6)}
+              - column: {name: cleared_by, type: varchar(100)}
+              - column: {name: cleared_at, type: timestamp(6)}
+  - changeSet:
+      id: 057-finance-control-codes
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT 'finance', 'APPROVE_JOURNAL', 'JOURNAL', 'APPROVE', FALSE,
+                     'Approve a manual journal or a suspense clearance made by someone else'
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = 'APPROVE_JOURNAL');
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code = 'APPROVE_JOURNAL'
+              WHERE r.name = 'Super Admin'
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+              INSERT INTO fin_posting_rule (event_type, debit_account, credit_account, amount_field, business_domain, description, status, version, updated_by, updated_at)
+              SELECT 'SuspenseCleared', '2000', '1000', 'amount', 'SHARED',
+                     'Suspense receipt allocated to a policy or refunded', 'ACTIVE', 1, 'system', CURRENT_TIMESTAMP
+              WHERE NOT EXISTS (SELECT 1 FROM fin_posting_rule x WHERE x.event_type = 'SuspenseCleared');

@@ -3,6 +3,7 @@ package com.nsure.communication;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.integration.DomainEvent;
+import com.nsure.integration.Events;
 import com.nsure.portfolio.CustomerAccount;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.exception.NoAuthorizationException;
@@ -37,7 +38,7 @@ public class CommunicationService {
     private static final Set<String> AUDIENCES = Set.of(CUSTOMER, INTERMEDIARY);
     private static final Set<String> MESSAGE_STATES = Set.of(CommunicationMessage.QUEUED,
             CommunicationMessage.SUBMITTED, CommunicationMessage.DELIVERED, CommunicationMessage.FAILED,
-            CommunicationMessage.SUPPRESSED);
+            CommunicationMessage.SUPPRESSED, CommunicationMessage.READ);
     private static final Logger log = LoggerFactory.getLogger(CommunicationService.class);
 
     private final EntityManager em;
@@ -108,8 +109,8 @@ public class CommunicationService {
     }
 
     /**
-     * Checker step: another user approves, and the previously approved version of the code is retired. Super Admin
-     * may approve a version they drafted.
+     * Checker step: another user approves, and the previously approved version of the code is retired. Nobody
+     * approves a version they drafted, the administrator included (Nsure Life NS-UX-004).
      */
     @Transactional
     public CommunicationViews.TemplateView approveTemplate(Long id) {
@@ -122,7 +123,7 @@ public class CommunicationService {
             throw new IllegalArgumentException("Only a draft can be approved; " + template.getCode() + " v"
                     + template.getVersion() + " is " + template.getStatus() + ".");
         }
-        if (template.getCreatedBy().equalsIgnoreCase(user.getUsername()) && !user.isSuperAdmin()) {
+        if (template.getCreatedBy().equalsIgnoreCase(user.getUsername())) {
             throw new NoAuthorizationException(
                     "You drafted this template version, so another user must approve it (maker-checker).");
         }
@@ -174,6 +175,15 @@ public class CommunicationService {
         String subject = text(body, "subject");
         String content = text(body, "body");
         validateContent(channel, subject, content);
+        if (WHATSAPP.equals(channel)) {
+            // Blueprint §5 / WhatsApp Business policy: a free-form message only within 24 hours of the customer's last
+            // WhatsApp message; outside that window only approved templates are sent.
+            java.time.LocalDateTime last = lastInbound(customer.getRef(), WHATSAPP);
+            if (last == null || last.isBefore(java.time.LocalDateTime.now().minusHours(24))) {
+                throw new IllegalArgumentException("A free-form WhatsApp message can only be sent within 24 hours of "
+                        + customer.getName() + "'s last WhatsApp message. Use Email, or an approved template.");
+            }
+        }
         CommunicationMessage message = new CommunicationMessage("manual:" + UUID.randomUUID(), null,
                 SERVICE_MESSAGE, customer.getRef(), customer.getRef(), customer.getName(), channel,
                 user.getUsername());
@@ -337,6 +347,196 @@ public class CommunicationService {
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────────
+
+    // ── provider status callbacks (Blueprint §5) ─────────────────────────────────────────────────────
+
+    /**
+     * Applies a provider status callback (already authenticated by its signature) to the message it names. Unknown
+     * message ids and states that would move a message backwards are ignored, so retried or out-of-order callbacks
+     * are harmless. Returns the message status after the callback, or null for an unknown message.
+     */
+    @Transactional
+    public String providerStatus(String providerMessageId, String status, String detail) {
+        String reported = upper(status);
+        if (!Set.of(CommunicationMessage.DELIVERED, CommunicationMessage.READ, CommunicationMessage.FAILED)
+                .contains(reported)) {
+            throw new IllegalArgumentException("Status must be DELIVERED, READ or FAILED.");
+        }
+        CommunicationMessage message = em.createQuery(
+                        "select m from CommunicationMessage m where m.providerMessageId = :id", CommunicationMessage.class)
+                .setParameter("id", providerMessageId)
+                .getResultStream().findFirst().orElse(null);
+        if (message == null) {
+            log.info("Status callback for unknown provider message {} ignored", providerMessageId);
+            return null;
+        }
+        message.providerStatus(reported, detail);
+        return message.getStatus();
+    }
+
+    /** When the customer last wrote to us on the channel, for the WhatsApp customer-service window. */
+    java.time.LocalDateTime lastInbound(String customerRef, String channel) {
+        return em.createQuery("select max(i.receivedAt) from InboundCorrespondence i where i.customerRef = :ref "
+                        + "and i.channel = :channel", java.time.LocalDateTime.class)
+                .setParameter("ref", customerRef)
+                .setParameter("channel", channel)
+                .getSingleResult();
+    }
+
+    /** Customers whose verified Email or WhatsApp contact is {@code sender}: one match routes a reply, more is ambiguous. */
+    List<CustomerAccount> customersWithContact(String channel, String sender) {
+        String wanted = EMAIL.equals(channel) ? sender.trim().toLowerCase(Locale.ROOT) : digits(sender);
+        if (wanted.isEmpty()) {
+            return List.of();
+        }
+        java.util.Map<String, CustomerAccount> found = new java.util.LinkedHashMap<>();
+        for (ChannelPreference p : em.createQuery("select p from ChannelPreference p where p.channel = :channel",
+                ChannelPreference.class).setParameter("channel", channel).getResultList()) {
+            String contact = p.getContact() == null ? "" : p.getContact();
+            boolean match = EMAIL.equals(channel) ? contact.trim().equalsIgnoreCase(wanted) : digits(contact).equals(wanted);
+            if (match) {
+                em.createQuery("select c from CustomerAccount c where c.ref = :ref", CustomerAccount.class)
+                        .setParameter("ref", p.getCustomerRef()).getResultStream().findFirst()
+                        .ifPresent(c -> found.put(c.getRef(), c));
+            }
+        }
+        if (EMAIL.equals(channel)) {
+            em.createQuery("select c from CustomerAccount c where lower(c.email) = :email", CustomerAccount.class)
+                    .setParameter("email", wanted).getResultList().forEach(c -> found.put(c.getRef(), c));
+        }
+        return new ArrayList<>(found.values());
+    }
+
+    // ── bulk operational notices (Blueprint §5) ──────────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public List<CommunicationViews.BulkNoticeView> bulkNotices() {
+        user("READ_COMMUNICATION");
+        return em.createQuery("select b from BulkNotice b order by b.id desc", BulkNotice.class).setMaxResults(100)
+                .getResultStream().map(this::bulkView).toList();
+    }
+
+    /** {templateId, policyStatus (default Active), product (optional), reason}: counted now, sent once approved. */
+    @Transactional
+    public CommunicationViews.BulkNoticeView requestBulkNotice(JsonNode body) {
+        AppUser user = user("MANAGE_COMMUNICATION");
+        if (body == null || !body.hasNonNull("templateId")) {
+            throw new IllegalArgumentException("Choose an approved notice template.");
+        }
+        MessageTemplate template = noticeTemplate(body.get("templateId").asLong());
+        String status = text(body, "policyStatus");
+        status = status == null ? "Active" : status;
+        String product = text(body, "product");
+        String reason = text(body, "reason");
+        if (reason == null || reason.length() < 10 || reason.length() > 1000) {
+            throw new IllegalArgumentException("Give the reason for this notice (10 to 1000 characters).");
+        }
+        List<CustomerAccount> audience = audience(status, product);
+        if (audience.isEmpty()) {
+            throw new IllegalArgumentException("No customers hold " + (product == null ? "" : product + " ")
+                    + "policies that are " + status + ".");
+        }
+        BulkNotice notice = new BulkNotice(template.getId(), product, status, reason, audience.size(),
+                user.getUsername());
+        em.persist(notice);
+        em.flush();
+        notice.numbered();
+        return bulkView(notice);
+    }
+
+    /** Releases a notice requested by someone else: one message per customer, through the usual consent checks. */
+    @Transactional
+    public CommunicationViews.BulkNoticeView approveBulkNotice(String ref) {
+        AppUser user = user("APPROVE_TEMPLATE");
+        BulkNotice notice = pendingNotice(ref);
+        if (user.getUsername().equalsIgnoreCase(notice.getRequestedBy())) {
+            throw new NoAuthorizationException("You requested notice " + ref + "; someone else must approve it.");
+        }
+        MessageTemplate template = noticeTemplate(notice.getTemplateId());
+        int queued = 0;
+        int suppressed = 0;
+        for (CustomerAccount customer : audience(notice.getPolicyStatus(), notice.getProduct())) {
+            String dedupKey = "bulk:" + notice.getRef() + ":" + customer.getRef() + ":" + template.getChannel();
+            Long existing = em.createQuery("select count(m) from CommunicationMessage m where m.dedupKey = :key",
+                    Long.class).setParameter("key", dedupKey).getSingleResult();
+            if (existing > 0) {
+                continue;
+            }
+            CommunicationMessage message = new CommunicationMessage(dedupKey, null, Events.OPERATIONAL_NOTICE,
+                    notice.getRef(), customer.getRef(), customer.getName(), template.getChannel(), user.getUsername());
+            java.util.function.Function<String, String> values = field -> switch (field) {
+                case MergeFields.CUSTOMER_REF -> customer.getRef();
+                case MergeFields.PORTAL_LINK -> portalLink;
+                case "customerName" -> customer.getName();
+                default -> "";
+            };
+            message.content(template.getCode(), template.getVersion(),
+                    MergeFields.render(template.getSubject(), values), MergeFields.render(template.getBody(), values));
+            route(message, customer, template.getChannel());
+            save(message);
+            if (CommunicationMessage.SUPPRESSED.equals(message.getStatus())) {
+                suppressed++;
+            } else {
+                queued++;
+            }
+        }
+        notice.sent(queued, suppressed, user.getUsername());
+        return bulkView(notice);
+    }
+
+    @Transactional
+    public CommunicationViews.BulkNoticeView rejectBulkNotice(String ref) {
+        AppUser user = user("APPROVE_TEMPLATE");
+        BulkNotice notice = pendingNotice(ref);
+        notice.rejected(user.getUsername());
+        return bulkView(notice);
+    }
+
+    private BulkNotice pendingNotice(String ref) {
+        BulkNotice notice = em.createQuery("select b from BulkNotice b where b.ref = :ref", BulkNotice.class)
+                .setParameter("ref", ref).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Notice " + ref + " not found"));
+        if (!BulkNotice.PENDING.equals(notice.getStatus())) {
+            throw new com.nsure.common.exception.ConflictException("Notice " + ref + " is already "
+                    + notice.getStatus() + ".");
+        }
+        return notice;
+    }
+
+    private MessageTemplate noticeTemplate(Long id) {
+        MessageTemplate template = em.find(MessageTemplate.class, id);
+        if (template == null || !MessageTemplate.APPROVED.equals(template.getStatus())
+                || !Events.OPERATIONAL_NOTICE.equals(template.getEventType())
+                || !CUSTOMER.equals(template.getAudience())) {
+            throw new IllegalArgumentException("Choose an approved customer template written for OperationalNotice.");
+        }
+        return template;
+    }
+
+    private List<CustomerAccount> audience(String policyStatus, String product) {
+        jakarta.persistence.TypedQuery<String> query = em.createQuery("select distinct p.customerRef from InsurancePolicy p"
+                        + " where p.status = :status and p.customerRef is not null"
+                        + (product == null ? "" : " and p.product = :product"), String.class)
+                .setParameter("status", policyStatus);
+        if (product != null) {
+            query.setParameter("product", product);
+        }
+        List<String> refs = query.getResultList();
+        if (refs.isEmpty()) {
+            return List.of();
+        }
+        return em.createQuery("select c from CustomerAccount c where c.ref in :refs order by c.ref", CustomerAccount.class)
+                .setParameter("refs", refs).getResultList();
+    }
+
+    private CommunicationViews.BulkNoticeView bulkView(BulkNotice b) {
+        MessageTemplate template = em.find(MessageTemplate.class, b.getTemplateId());
+        return new CommunicationViews.BulkNoticeView(b.getRef(), b.getTemplateId(),
+                template == null ? "" : template.getCode() + " v" + template.getVersion(), b.getProduct(),
+                b.getPolicyStatus(), b.getReason(), b.getRecipients(), b.getStatus(), b.getRequestedBy(),
+                CommunicationViews.time(b.getRequestedAt()), b.getDecidedBy(), CommunicationViews.time(b.getDecidedAt()),
+                b.getQueued(), b.getSuppressed());
+    }
 
     /** Queues the message at the customer's contact for the channel, or suppresses it with the reason. */
     private void route(CommunicationMessage message, CustomerAccount customer, String channel) {

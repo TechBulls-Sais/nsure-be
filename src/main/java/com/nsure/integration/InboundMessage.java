@@ -20,6 +20,7 @@ public class InboundMessage {
     public static final String APPLIED = "APPLIED";
     public static final String SUSPENSE = "SUSPENSE";
     public static final String REJECTED = "REJECTED";
+    public static final String REFUNDED = "REFUNDED";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -57,6 +58,28 @@ public class InboundMessage {
 
     @Column(name = "received_at", nullable = false)
     private LocalDateTime receivedAt;
+
+    // Suspense clearance (Blueprint §7): requested by one person with a reason, applied when someone else approves.
+    @Column(name = "clearance_action", length = 20)
+    private String clearanceAction;
+
+    @Column(name = "clearance_policy_ref", length = 40)
+    private String clearancePolicyRef;
+
+    @Column(name = "clearance_reason", length = 1000)
+    private String clearanceReason;
+
+    @Column(name = "clearance_requested_by", length = 100)
+    private String clearanceRequestedBy;
+
+    @Column(name = "clearance_requested_at")
+    private LocalDateTime clearanceRequestedAt;
+
+    @Column(name = "cleared_by", length = 100)
+    private String clearedBy;
+
+    @Column(name = "cleared_at")
+    private LocalDateTime clearedAt;
 
     protected InboundMessage() {
     }
@@ -125,5 +148,58 @@ public class InboundMessage {
 
     public LocalDateTime getReceivedAt() {
         return receivedAt;
+    }
+
+    /** Records a clearance request on a receipt in suspense; nothing moves until someone else approves it. */
+    public void requestClearance(String action, String policyRef, String reason, String actor) {
+        this.clearanceAction = action;
+        this.clearancePolicyRef = policyRef;
+        this.clearanceReason = reason;
+        this.clearanceRequestedBy = actor;
+        this.clearanceRequestedAt = LocalDateTime.now();
+    }
+
+    /** The approved clearance: APPLIED to the policy or REFUNDED to the payer. */
+    public void cleared(String status, String resultRef, String detail, String checker) {
+        outcome(status, resultRef, detail);
+        this.clearedBy = checker;
+        this.clearedAt = LocalDateTime.now();
+    }
+
+    /** A rejected request: the receipt stays in suspense and a new request can be made. */
+    public void clearanceRejected() {
+        this.clearanceAction = null;
+        this.clearancePolicyRef = null;
+        this.clearanceReason = null;
+        this.clearanceRequestedBy = null;
+        this.clearanceRequestedAt = null;
+    }
+
+    public String getClearanceAction() {
+        return clearanceAction;
+    }
+
+    public String getClearancePolicyRef() {
+        return clearancePolicyRef;
+    }
+
+    public String getClearanceReason() {
+        return clearanceReason;
+    }
+
+    public String getClearanceRequestedBy() {
+        return clearanceRequestedBy;
+    }
+
+    public LocalDateTime getClearanceRequestedAt() {
+        return clearanceRequestedAt;
+    }
+
+    public String getClearedBy() {
+        return clearedBy;
+    }
+
+    public LocalDateTime getClearedAt() {
+        return clearedAt;
     }
 }

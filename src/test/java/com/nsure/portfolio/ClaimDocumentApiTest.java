@@ -157,18 +157,22 @@ class ClaimDocumentApiTest {
         mockMvc.perform(upload("/portfolio/shop/claims/" + claim + "/documents", "refilwe", "password1",
                         file("certificate.pdf", PDF)).param("type", "Death certificate"))
                 .andExpect(status().isOk());
-        // While the claim is open it is an interim summary; issuing again replaces it rather than adding another.
+        // While the claim is open it is an interim summary; issuing again supersedes it (Blueprint §8: kept, not deleted).
         mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(httpBasic("assessor", "password")))
                 .andExpect(status().isOk());
         String interim = mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary")
                         .with(httpBasic("assessor", "password")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(2))
-                .andExpect(jsonPath("$[1].type").value("Interim claim summary"))
-                .andExpect(jsonPath("$[1].fileName").value(Matchers.startsWith(claim + "-interim-summary-")))
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$[1].status").value("SUPERSEDED"))
+                .andExpect(jsonPath("$[1].supersededReason").value("Replaced by a newer interim summary"))
+                .andExpect(jsonPath("$[2].status").value("CURRENT"))
+                .andExpect(jsonPath("$[2].sha256").value(Matchers.matchesPattern("[0-9a-f]{64}")))
+                .andExpect(jsonPath("$[2].type").value("Interim claim summary"))
+                .andExpect(jsonPath("$[2].fileName").value(Matchers.startsWith(claim + "-interim-summary-")))
                 .andReturn().getResponse().getContentAsString();
         byte[] interimPdf = mockMvc.perform(get("/portfolio/claims/" + claim + "/documents/"
-                        + JsonPath.read(interim, "$[1].id")).with(httpBasic("assessor", "password")))
+                        + JsonPath.read(interim, "$[2].id")).with(httpBasic("assessor", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsByteArray();
         try (org.apache.pdfbox.pdmodel.PDDocument doc = org.apache.pdfbox.Loader.loadPDF(interimPdf)) {
@@ -187,13 +191,17 @@ class ClaimDocumentApiTest {
         String list = mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary")
                         .with(httpBasic("assessor", "password")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(2))
-                .andExpect(jsonPath("$[1].type").value("Claim summary"))
-                .andExpect(jsonPath("$[1].contentType").value("application/pdf"))
-                .andExpect(jsonPath("$[1].fileName").value(Matchers.startsWith(claim + "-summary-")))
-                .andExpect(jsonPath("$[1].uploadedBy").value("assessor"))
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$[2].status").value("SUPERSEDED"))
+                .andExpect(jsonPath("$[2].supersededReason").value("Replaced by the final claim summary"))
+                .andExpect(jsonPath("$[3].status").value("CURRENT"))
+                .andExpect(jsonPath("$[3].type").value("Claim summary"))
+                .andExpect(jsonPath("$[3].contentType").value("application/pdf"))
+                .andExpect(jsonPath("$[3].fileName").value(Matchers.startsWith(claim + "-summary-")))
+                .andExpect(jsonPath("$[3].uploadedBy").value("assessor"))
                 .andReturn().getResponse().getContentAsString();
-        Integer id = JsonPath.read(list, "$[1].id");
+        Integer id = JsonPath.read(list, "$[3].id");
+        assertThat((Integer) JsonPath.read(list, "$[2].supersededBy")).isEqualTo(id);
 
         // The customer sees the summary on their own claim too.
         byte[] pdf = mockMvc.perform(get("/portfolio/shop/claims/" + claim + "/documents/" + id)
@@ -242,12 +250,17 @@ class ClaimDocumentApiTest {
 
         assertThat(documents.closedClaimsWithOldSummaries()).doesNotContain(claimId);
         assertThat(documents.replaceOldSummaries(claimId)).isZero();
-        // The bill is untouched; one summary, credited to whoever issued the first.
+        // The bill is untouched; the old summaries are kept as superseded (Blueprint §8), and one current summary is
+        // credited to whoever issued the first.
         mockMvc.perform(get("/portfolio/claims/" + claim + "/documents").with(httpBasic("admin", "password")))
-                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$.length()").value(4))
                 .andExpect(jsonPath("$[0].type").value("Hospital bill"))
-                .andExpect(jsonPath("$[1].type").value("Claim summary"))
-                .andExpect(jsonPath("$[1].uploadedBy").value("assessor"));
+                .andExpect(jsonPath("$[0].status").value("CURRENT"))
+                .andExpect(jsonPath("$[1].status").value("SUPERSEDED"))
+                .andExpect(jsonPath("$[2].status").value("SUPERSEDED"))
+                .andExpect(jsonPath("$[3].type").value("Claim summary"))
+                .andExpect(jsonPath("$[3].status").value("CURRENT"))
+                .andExpect(jsonPath("$[3].uploadedBy").value("assessor"));
         mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(httpBasic("assessor", "password")))
                 .andExpect(status().isConflict());
     }

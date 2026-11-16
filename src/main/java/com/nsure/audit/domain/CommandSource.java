@@ -34,9 +34,6 @@ public class CommandSource {
     @Column(name = "resource_id")
     private Long resourceId;
 
-    @Column(name = "office_id")
-    private Long officeId;
-
     @JdbcTypeCode(SqlTypes.LONGVARCHAR)
     @Column(name = "command_as_json")
     private String commandAsJson;
@@ -108,13 +105,12 @@ public class CommandSource {
         this.resultStatus = 200;
     }
 
-    public void reopenForRetry(String commandAsJson, Long resourceId, Long officeId, OffsetDateTime madeOn) {
+    public void reopenForRetry(String commandAsJson, Long resourceId, OffsetDateTime madeOn) {
         if (!CommandStatus.ERROR.equals(status) && !CommandStatus.REJECTED.equals(status)) {
             throw new IllegalStateException("Only a failed command can be retried");
         }
         this.commandAsJson = commandAsJson;
         this.resourceId = resourceId;
-        this.officeId = officeId;
         this.madeOn = madeOn;
         this.resultJson = null;
         this.resultStatus = null;
@@ -155,14 +151,6 @@ public class CommandSource {
 
     public void setResourceId(Long resourceId) {
         this.resourceId = resourceId;
-    }
-
-    public Long getOfficeId() {
-        return officeId;
-    }
-
-    public void setOfficeId(Long officeId) {
-        this.officeId = officeId;
     }
 
     public String getCommandAsJson() {

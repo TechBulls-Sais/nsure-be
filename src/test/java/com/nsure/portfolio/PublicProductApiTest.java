@@ -22,12 +22,18 @@ class PublicProductApiTest {
     void landingProductsAreReadableWithoutSigningIn() throws Exception {
         mockMvc.perform(get("/public/products"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(5))
+                .andExpect(jsonPath("$.length()").value(6))
+                // Tap Cover (spec 02): Bronze is seeded inactive (decision D1), so the public catalogue (BR-1) shows
+                // only the three active plans.
+                .andExpect(jsonPath("$[?(@.name == 'Tap Cover')].tiers.length()").value(3))
                 .andExpect(jsonPath("$[?(@.name == 'Term Life')].featuredOrder").value(1))
                 .andExpect(jsonPath("$[?(@.name == 'Care Cash')].featuredOrder").value(3))
                 .andExpect(jsonPath("$[?(@.name == 'Whole of Life')].featuredOrder").value(Matchers.contains(Matchers.nullValue())))
                 .andExpect(jsonPath("$[?(@.name == 'Term Life')].tagline").value("Their tomorrow.\nYour peace of mind."))
                 .andExpect(jsonPath("$[?(@.name == 'Term Life')].image").value("/products/term-life.jpg"))
+                // Tap Cover has its own photo, distinct from every other product's.
+                .andExpect(jsonPath("$[?(@.name == 'Tap Cover')].image").value("/products/tap-cover.jpg"))
+                .andExpect(jsonPath("$[*].image").value(Matchers.hasItems("/products/tap-cover.jpg", "/products/term-life.jpg")))
                 .andExpect(jsonPath("$[?(@.name == 'Term Life')].tiers.length()").value(3));
     }
 

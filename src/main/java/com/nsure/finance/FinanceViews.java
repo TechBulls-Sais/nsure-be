@@ -38,7 +38,24 @@ public final class FinanceViews {
 
     public record GlBatchView(String ref, String status, int journalCount, int lineCount, BigDecimal debitTotal,
             BigDecimal creditTotal, String createdBy, LocalDateTime createdAt, String glReference,
-            String acknowledgedBy, LocalDateTime acknowledgedAt, String note) {
+            String acknowledgedBy, LocalDateTime acknowledgedAt, String note, String submittedBy,
+            LocalDateTime submittedAt, String reconciledBy, LocalDateTime reconciledAt) {
+    }
+
+    /** A manual journal: proposed by one person, posted only once someone else approves it (Blueprint §7). */
+    public record ManualJournalView(String ref, String description, String reason, java.time.LocalDate accountingDate,
+            List<ManualLineView> lines, BigDecimal amount, String status, String madeBy, LocalDateTime madeAt,
+            String checkedBy, LocalDateTime checkedAt, String decisionNote, String journalRef) {
+    }
+
+    public record ManualLineView(String account, BigDecimal debit, BigDecimal credit) {
+    }
+
+    /** A receipt in suspense and its clearance request, if any (Blueprint §7: named ownership and maker-checker). */
+    public record SuspenseView(Long id, String provider, String providerRef, String policyRef, BigDecimal amount,
+            String status, String detail, LocalDateTime receivedAt, String clearanceAction, String clearancePolicyRef,
+            String clearanceReason, String requestedBy, LocalDateTime requestedAt, String clearedBy,
+            LocalDateTime clearedAt) {
     }
 
     public record TrialBalanceRow(String code, String name, String accountType, BigDecimal debit, BigDecimal credit,

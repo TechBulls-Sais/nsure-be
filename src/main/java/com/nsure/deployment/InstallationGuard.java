@@ -84,8 +84,7 @@ public class InstallationGuard implements SmartInitializingSingleton {
             throw new IllegalStateException("Bootstrap user " + bootstrapUsername + " exists but is not an enabled"
                     + " Super Admin; resolve it by hand rather than letting startup change it.");
         }
-        jdbc.update("insert into app_user (username, password, enabled, office_id)"
-                        + " select ?, ?, ?, id from office where name = 'Head Office'",
+        jdbc.update("insert into app_user (username, password, enabled) values (?, ?, ?)",
                 bootstrapUsername, passwords.encode(bootstrapPassword), Boolean.TRUE);
         jdbc.update("insert into app_user_role (user_id, role_id) select u.id, r.id from app_user u, app_role r"
                 + " where u.username = ? and r.name = 'Super Admin'", bootstrapUsername);

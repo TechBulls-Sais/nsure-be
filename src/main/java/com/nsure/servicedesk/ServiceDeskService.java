@@ -36,7 +36,8 @@ public class ServiceDeskService {
     public static final String ENTITY = "Service Case";
 
     private static final Set<String> TYPES = Set.of(ServiceCase.SERVICE_REQUEST, ServiceCase.COMPLAINT);
-    private static final Set<String> CHANNELS = Set.of("PORTAL", "PHONE", "EMAIL", "WALK_IN");
+    private static final Set<String> CHANNELS = Set.of("PORTAL", "PHONE", "EMAIL", "WALK_IN", "WHATSAPP");
+    private static final java.util.regex.Pattern CASE_REF = java.util.regex.Pattern.compile("\\b(?:SR|CMP)-\\d+\\b");
     private static final Set<String> PRIORITIES = Set.of("LOW", "NORMAL", "HIGH");
     private static final Set<String> STATES = Set.of(ServiceCase.OPEN, ServiceCase.IN_PROGRESS, ServiceCase.PAUSED,
             ServiceCase.RESOLVED, ServiceCase.CLOSED);
@@ -207,6 +208,39 @@ public class ServiceDeskService {
         return detailOf(c);
     }
 
+    /**
+     * Inbound correspondence from a customer (Solution Blueprint §5: replies linked to service cases). Added to the
+     * customer's open case it names, otherwise a new service request is opened for it. Returns the case reference.
+     */
+    @Transactional
+    public String linkCorrespondence(String customerRef, String channel, String text, String actor) {
+        CustomerAccount customer = em.createQuery("select c from CustomerAccount c where c.ref = :ref",
+                        CustomerAccount.class)
+                .setParameter("ref", customerRef)
+                .getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Customer " + customerRef + " not found"));
+        String snippet = text.length() <= 300 ? text : text.substring(0, 300) + "…";
+        java.util.regex.Matcher named = CASE_REF.matcher(text.toUpperCase(Locale.ROOT));
+        while (named.find()) {
+            ServiceCase c = em.createQuery("select c from ServiceCase c where c.ref = :ref and c.customerRef = :customer",
+                            ServiceCase.class)
+                    .setParameter("ref", named.group())
+                    .setParameter("customer", customer.getRef())
+                    .getResultStream().findFirst().orElse(null);
+            if (c != null && !ServiceCase.CLOSED.equals(c.getStatus())) {
+                record(c, "Reply Received", c.getStatus(), channel + ": " + snippet, actor);
+                return c.getRef();
+            }
+        }
+        com.fasterxml.jackson.databind.node.ObjectNode body =
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+        body.put("caseType", ServiceCase.SERVICE_REQUEST);
+        body.put("category", "Customer correspondence");
+        body.put("subject", "Message received by " + ("WHATSAPP".equals(channel) ? "WhatsApp" : "Email"));
+        body.put("description", text.length() <= 1000 ? text : text.substring(0, 1000));
+        return create(customer, body, channel, actor).getRef();
+    }
+
     // ── customer portal ──────────────────────────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
@@ -251,7 +285,7 @@ public class ServiceDeskService {
             throw new IllegalArgumentException("Priority must be LOW, NORMAL or HIGH.");
         }
         String linkedRef = upper(text(body, "linkedRef"));
-        if (linkedRef != null && !belongsTo(linkedRef, customer.getName())) {
+        if (linkedRef != null && !belongsTo(linkedRef, customer.getRef())) {
             throw new IllegalArgumentException(linkedRef + " is not a policy or claim of " + customer.getName() + ".");
         }
         boolean complaint = ServiceCase.COMPLAINT.equals(caseType);
@@ -272,16 +306,16 @@ public class ServiceDeskService {
         return c;
     }
 
-    private boolean belongsTo(String ref, String customerName) {
-        Long policies = em.createQuery("select count(p) from InsurancePolicy p where p.ref = :ref and p.customerName = :name",
+    private boolean belongsTo(String ref, String customerRef) {
+        Long policies = em.createQuery("select count(p) from InsurancePolicy p where p.ref = :ref and p.customerRef = :customer",
                         Long.class)
-                .setParameter("ref", ref).setParameter("name", customerName).getSingleResult();
+                .setParameter("ref", ref).setParameter("customer", customerRef).getSingleResult();
         if (policies > 0) {
             return true;
         }
-        Long claims = em.createQuery("select count(c) from InsuranceClaim c where c.ref = :ref and c.customerName = :name",
+        Long claims = em.createQuery("select count(c) from InsuranceClaim c where c.ref = :ref and c.customerRef = :customer",
                         Long.class)
-                .setParameter("ref", ref).setParameter("name", customerName).getSingleResult();
+                .setParameter("ref", ref).setParameter("customer", customerRef).getSingleResult();
         return claims > 0;
     }
 

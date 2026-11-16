@@ -111,12 +111,18 @@ class PolicyWorkflowApiTest {
                 .andExpect(jsonPath("$.requests[0].beneficiaries[0].primary").value(true))
                 .andExpect(jsonPath("$.customer.policies").value(0));
 
-        // Spec 01 BR-8: no second open purchase for the same product and tier.
+        // Spec 01 BR-8: re-entering checkout reuses the unexpired pending policy; no duplicate is created.
         mockMvc.perform(json(post("/portfolio/shop"), "kefilwe", "{\"product\":\"Term Life\",\"tier\":\"Silver\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.requests.length()").value(1))
+                .andExpect(jsonPath("$.requests[0].id").value(policy));
+
+        // Spec 01 BR-5: no payment before the OTP-verified declaration.
+        mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/pay"), "kefilwe", "{\"method\":\"Orange Money\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value(
-                        "You already have Term Life Silver awaiting payment (" + policy + "). Pay it from Your policies."));
-
+                        "Complete the declaration and consent step before paying for " + policy + "."));
+        declare("kefilwe", policy);
         mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/pay"), "kefilwe", "{\"method\":\"Cash\"}"))
                 .andExpect(status().isBadRequest());
         mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/pay"), "kefilwe", "{\"method\":\"Orange Money\"}"))
@@ -189,6 +195,7 @@ class PolicyWorkflowApiTest {
 
         // Lapse: Active, grace period over, nothing paid.
         String lapsing = buy("gaone", "{\"product\":\"Term Life\",\"tier\":\"Silver\"}");
+        declare("gaone", lapsing);
         mockMvc.perform(json(post("/portfolio/shop/policies/" + lapsing + "/pay"), "gaone", "{\"method\":\"Card\"}"))
                 .andExpect(status().isOk());
         tx.executeWithoutResult(status -> em.createQuery(
@@ -201,9 +208,9 @@ class PolicyWorkflowApiTest {
         mockMvc.perform(post("/portfolio/policies/sweep").with(httpBasic("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lapsed[?(@ == '" + lapsing + "')]").isNotEmpty());
+        // Spec 10 W-5 / TC-18: grace over → in force without cover for 3 months (lapse comes after that window).
         mockMvc.perform(get("/portfolio/shop").with(httpBasic("gaone", "password1")))
-                .andExpect(jsonPath("$.policies[?(@.id == '" + lapsing + "')].status").value("Lapsed"))
-                .andExpect(jsonPath("$.policies[?(@.id == '" + lapsing + "')].lapseDate").value(LocalDate.now().toString()));
+                .andExpect(jsonPath("$.policies[?(@.id == '" + lapsing + "')].status").value("Active - No Cover"));
     }
 
     @Test
@@ -224,7 +231,7 @@ class PolicyWorkflowApiTest {
         mockMvc.perform(json(post("/portfolio/policies/" + policy + "/beneficiaries"), "admin",
                         "{\"fullName\":\"Child 6\",\"relationship\":\"Child\"}"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("A policy can have at most 5 beneficiaries."));
+                .andExpect(jsonPath("$.message").value("A Term Life policy can have at most 5 beneficiaries."));
 
         Integer first = JsonPath.read(body, "$.requests[0].beneficiaries[0].id");
         mockMvc.perform(delete("/portfolio/shop/policies/" + policy + "/beneficiaries/" + first)
@@ -257,9 +264,20 @@ class PolicyWorkflowApiTest {
         return JsonPath.read(body, "$.requests[0].id");
     }
 
+    /** Spec 01 BR-5: the OTP-verified declaration with all four consents, before the first premium. */
+    private void declare(String user, String policy) throws Exception {
+        String sent = mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/declaration/otp"), user, "{}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String code = JsonPath.read(sent, "$.devCode");
+        mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/declaration"), user, "{\"code\":\"" + code
+                        + "\",\"accuracy\":true,\"terms\":true,\"dataProtection\":true,\"falseInformation\":true}"))
+                .andExpect(status().isOk());
+    }
+
     static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        String password = user.equals("admin") || user.equals("onboarding") || user.equals("customer")
-                || user.equals("assessor") ? "password" : "password1";
+        String password = user.equals("admin") || user.equals("secadmin") || user.equals("onboarding") || user.equals("customer")
+                || user.equals("assessor") || user.equals("assessor2") ? "password" : "password1";
         return request.with(httpBasic(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

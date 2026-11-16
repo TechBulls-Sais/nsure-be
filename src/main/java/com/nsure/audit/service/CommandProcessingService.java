@@ -85,14 +85,13 @@ public class CommandProcessingService {
             }
             detach(prior);
             prior.reopenForRetry(
-                    sanitized.json(), request.resourceId(), request.officeId(), OffsetDateTime.now(ZoneOffset.UTC));
+                    sanitized.json(), request.resourceId(), OffsetDateTime.now(ZoneOffset.UTC));
             audit = writer.saveNew(prior);
         } else {
             CommandSource created = new CommandSource();
             created.setActionName(action);
             created.setEntityName(entity);
             created.setResourceId(request.resourceId());
-            created.setOfficeId(request.officeId());
             created.setCommandAsJson(sanitized.json());
             created.setMakerId(user.getId());
             created.setMadeOn(OffsetDateTime.now(ZoneOffset.UTC));
@@ -108,7 +107,6 @@ public class CommandProcessingService {
                 request.resourceId(),
                 originalJson,
                 idempotencyKey,
-                request.officeId(),
                 request.idempotencyRetry());
 
         try {
@@ -140,6 +138,9 @@ public class CommandProcessingService {
         } catch (IllegalArgumentException ex) {
             recordFailure(audit, 400, ex.getMessage());
             throw new CommandFailedException(400, audit.getId(), ex.getMessage());
+        } catch (com.nsure.common.exception.ConflictException ex) {
+            recordFailure(audit, 409, ex.getMessage());
+            throw new CommandFailedException(409, audit.getId(), ex.getMessage());
         } catch (DataIntegrityViolationException ex) {
             recordFailure(audit, 409, "Duplicate or invalid reference");
             throw new CommandFailedException(409, audit.getId(), "Duplicate or invalid reference");

@@ -46,6 +46,23 @@ public class PolicyDocument {
     @Column(name = "layout_version", nullable = false)
     private int layoutVersion;
 
+    // Blueprint §8: the content hash of the file as issued or uploaded, checked on every download.
+    @Column(name = "sha256", length = 64)
+    private String sha256;
+
+    // CURRENT, or SUPERSEDED by a controlled replacement; an issued document is never overwritten or deleted.
+    @Column(name = "status", nullable = false, length = 20)
+    private String status = DocumentCustody.CURRENT;
+
+    @Column(name = "superseded_by")
+    private Long supersededBy;
+
+    @Column(name = "superseded_reason", length = 500)
+    private String supersededReason;
+
+    @Column(name = "superseded_at")
+    private LocalDateTime supersededAt;
+
     protected PolicyDocument() {
     }
 
@@ -100,5 +117,46 @@ public class PolicyDocument {
 
     public int getLayoutVersion() {
         return layoutVersion;
+    }
+
+    /** Records the content hash of the stored file. */
+    public void seal(String sha256) {
+        this.sha256 = sha256;
+    }
+
+    /** Marks this document as replaced by {@code replacementId}, keeping the file and the reason. */
+    public void supersede(Long replacementId, String reason) {
+        this.status = DocumentCustody.SUPERSEDED;
+        this.supersededBy = replacementId;
+        this.supersededReason = reason;
+        this.supersededAt = LocalDateTime.now();
+    }
+
+    public void linkReplacement(Long replacementId) {
+        this.supersededBy = replacementId;
+    }
+
+    public boolean isCurrent() {
+        return DocumentCustody.CURRENT.equals(status);
+    }
+
+    public String getSha256() {
+        return sha256;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public Long getSupersededBy() {
+        return supersededBy;
+    }
+
+    public String getSupersededReason() {
+        return supersededReason;
+    }
+
+    public LocalDateTime getSupersededAt() {
+        return supersededAt;
     }
 }

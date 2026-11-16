@@ -77,7 +77,9 @@ public final class PortfolioViews {
             boolean inGrace,
             List<BeneficiaryView> beneficiaries,
             // Documents filed on a policy (generated schedules); empty on applications and receipts.
-            List<DocumentView> documents
+            List<DocumentView> documents,
+            // Spec 01 BR-23: the product's beneficiary limit (default 5; Tap Cover 1).
+            int maxBeneficiaries
     ) {
     }
 
@@ -153,11 +155,20 @@ public final class PortfolioViews {
             String checkOverrideReason,
             // Set on an approved or paid claim that went through despite a failed hard check, or with no checks
             // run ("Paid despite failed checks: Policy Active, ..."); empty otherwise. ClaimWorkflow.auditFlag.
-            String auditFlag
+            String auditFlag,
+            // Spec 12 C-12: whether every STP gate passed, and the coded gate that stopped it (CHECKS_FAILED,
+            // STP_DISABLED, OVER_CEILING, NO_VERIFIED_PAYOUT, PRODUCT_OPT_OUT, CLAIM_LIMIT).
+            Boolean stpEligible,
+            String stpIneligibleCode,
+            // The written reason when the assessor approved their own claim under the break-glass authority (C-9).
+            String fourEyesOverrideReason
     ) {
     }
 
-    /** One evidence file on a claim; download it from .../claims/{ref}/documents/{id}. */
+    /**
+     * One file on a policy or claim; download it from .../documents/{id}. {@code status} is CURRENT or SUPERSEDED (by
+     * {@code supersededBy}, for {@code supersededReason}); {@code sha256} is the content hash checked on download.
+     */
     public record DocumentView(
             Long id,
             String type,
@@ -165,7 +176,11 @@ public final class PortfolioViews {
             String contentType,
             long size,
             String uploadedBy,
-            String uploadedAt
+            String uploadedAt,
+            String status,
+            String sha256,
+            Long supersededBy,
+            String supersededReason
     ) {
     }
 

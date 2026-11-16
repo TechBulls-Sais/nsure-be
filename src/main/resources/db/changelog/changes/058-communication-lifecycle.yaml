@@ -1,0 +1,77 @@
+databaseChangeLog:
+  # Solution Blueprint §5 (SH-09B): provider status callbacks (queued, submitted, delivered, failed, read), inbound
+  # replies linked to service cases or a triage queue, approved bulk operational notices, and scheduled reminders.
+  - changeSet:
+      id: 058-message-status-times
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: com_message
+            columns:
+              - column: {name: delivered_at, type: timestamp(6)}
+              - column: {name: read_at, type: timestamp(6)}
+  - changeSet:
+      id: 058-inbound-correspondence
+      author: nsure
+      changes:
+        - createTable:
+            tableName: com_inbound
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: provider_message_id, type: varchar(80), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_com_inbound_provider}}
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: sender, type: varchar(200), constraints: {nullable: false}}
+              - column: {name: body, type: varchar(2000), constraints: {nullable: false}}
+              - column: {name: received_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: customer_ref, type: varchar(40)}
+              - column: {name: case_ref, type: varchar(40)}
+              - column: {name: note, type: varchar(500)}
+              - column: {name: handled_by, type: varchar(100)}
+              - column: {name: handled_at, type: timestamp(6)}
+        - createIndex:
+            tableName: com_inbound
+            indexName: ix_com_inbound_customer
+            columns:
+              - column: {name: customer_ref}
+              - column: {name: channel}
+              - column: {name: received_at}
+  - changeSet:
+      id: 058-bulk-notice
+      author: nsure
+      changes:
+        - createTable:
+            tableName: com_bulk_notice
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(30), constraints: {unique: true, uniqueConstraintName: uk_com_bulk_notice_ref}}
+              - column: {name: template_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: product, type: varchar(100)}
+              - column: {name: policy_status, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(1000), constraints: {nullable: false}}
+              - column: {name: recipients, type: int, constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: timestamp(6)}
+              - column: {name: queued, type: int}
+              - column: {name: suppressed, type: int}
+  - changeSet:
+      id: 058-reminder-and-notice-templates
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO com_template (code, event_type, channel, audience, version, subject, body, status, created_by, created_at, approved_by, approved_at)
+              SELECT 'PREMIUM_DUE_EMAIL', 'PremiumDueReminder', 'EMAIL', 'CUSTOMER', 1,
+                     'Premium due on {{dueDate}} for {{policyRef}}',
+                     'Dear {{customerName}}, your {{product}} premium of {{amount}} for policy {{policyRef}} is due on {{dueDate}}. Pay securely in your portal: {{portalLink}}',
+                     'APPROVED', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+              WHERE NOT EXISTS (SELECT 1 FROM com_template x WHERE x.code = 'PREMIUM_DUE_EMAIL');
+              INSERT INTO com_template (code, event_type, channel, audience, version, subject, body, status, created_by, created_at, approved_by, approved_at)
+              SELECT 'SERVICE_NOTICE_EMAIL', 'OperationalNotice', 'EMAIL', 'CUSTOMER', 1,
+                     'An update about your Nsure cover',
+                     'Dear {{customerName}}, we have an update about your cover. Read it securely in your portal: {{portalLink}}',
+                     'APPROVED', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+              WHERE NOT EXISTS (SELECT 1 FROM com_template x WHERE x.code = 'SERVICE_NOTICE_EMAIL');

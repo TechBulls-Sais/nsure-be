@@ -9,7 +9,6 @@ public record AuditResponse(
         String actionName,
         String entityName,
         Long resourceId,
-        Long officeId,
         Long makerId,
         OffsetDateTime madeOn,
         Long checkerId,

@@ -59,6 +59,12 @@ class CommunicationApiTest {
     private CommunicationEventHandler handler;
 
     @Autowired
+    private MessagingWebhooks webhooks;
+
+    @Autowired
+    private JdbcTemplate jdbc;
+
+    @Autowired
     private EntityManager em;
 
     @Autowired
@@ -172,8 +178,17 @@ class CommunicationApiTest {
                 .andExpect(jsonPath("$.status").value("SUPPRESSED"))
                 .andExpect(jsonPath("$.eventType").value("ServiceMessage"))
                 .andExpect(jsonPath("$.ref").value(containsString("MSG-")));
-        mockMvc.perform(json(post("/communications/messages"), "service",
-                        "{\"customerRef\":\"" + ref + "\",\"channel\":\"WHATSAPP\",\"body\":\"Please see your portal.\"}"))
+        // Blueprint §5: a free-form WhatsApp message only within 24 hours of the customer's last WhatsApp message.
+        String whatsapp = "{\"customerRef\":\"" + ref + "\",\"channel\":\"WHATSAPP\",\"body\":\"Please see your portal.\"}";
+        mockMvc.perform(json(post("/communications/messages"), "service", whatsapp))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(containsString("within 24 hours")));
+        callback("inbound", "{\"providerMessageId\":\"wa-in-1\",\"channel\":\"WHATSAPP\",\"from\":\"+26772123456\","
+                + "\"text\":\"Hello, is my cover active?\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("LINKED"))
+                .andExpect(jsonPath("$.caseRef").value(org.hamcrest.Matchers.startsWith("SR-")));
+        mockMvc.perform(json(post("/communications/messages"), "service", whatsapp))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("QUEUED"));
 
@@ -240,7 +255,8 @@ class CommunicationApiTest {
                         "{\"code\":\"OPS_DRAFT\",\"eventType\":\"ClaimPaid\",\"channel\":\"EMAIL\",\"subject\":\"x\",\"body\":\"y\"}"))
                 .andExpect(status().isForbidden());
 
-        // Super Admin (admin) may approve a version they drafted. A specialist who only drafts still cannot.
+        // Nobody approves a version they drafted, the administrator included (Nsure Life NS-UX-004): a second
+        // administrator does.
         String own = mockMvc.perform(json(post("/communications/templates"), "admin",
                         "{\"code\":\"CLAIM_PAID_WHATSAPP\",\"eventType\":\"ClaimPaid\",\"channel\":\"WHATSAPP\","
                                 + "\"body\":\"Hi {{customerName}}, claim {{claimRef}} is paid. {{portalLink}}\"}"))
@@ -249,9 +265,11 @@ class CommunicationApiTest {
                 .andReturn().getResponse().getContentAsString();
         Number ownId = JsonPath.read(own, "$.id");
         mockMvc.perform(post("/communications/templates/" + ownId + "/approve").with(httpBasic("admin", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/communications/templates/" + ownId + "/approve").with(httpBasic("secadmin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPROVED"))
-                .andExpect(jsonPath("$.approvedBy").value("admin"));
+                .andExpect(jsonPath("$.approvedBy").value("secadmin"));
 
         // Unknown merge fields are refused at approval.
         String bad = mockMvc.perform(json(post("/communications/templates"), "service",
@@ -302,6 +320,7 @@ class CommunicationApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String policy = JsonPath.read(body, "$.requests[0].id");
+        declare(username, policy);
         mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/pay"), username, "{\"method\":\"Orange Money\"}"))
                 .andExpect(status().isOk());
         return policy;
@@ -319,6 +338,120 @@ class CommunicationApiTest {
                 .filter(m -> templateCode.equals(m.get("templateCode"))).toList();
         assertThat(matching).as("messages for " + templateCode).hasSize(1);
         return matching.get(0);
+    }
+
+    /** Spec 01 BR-5: the OTP-verified declaration with all four consents, before the first premium. */
+    private void declare(String user, String policy) throws Exception {
+        String sent = mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/declaration/otp"), user, "{}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String code = JsonPath.read(sent, "$.devCode");
+        mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/declaration"), user, "{\"code\":\"" + code
+                        + "\",\"accuracy\":true,\"terms\":true,\"dataProtection\":true,\"falseInformation\":true}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void providerCallbacksRepliesBulkNoticesAndRemindersFollowTheBlueprint() throws Exception {
+        String ref = customer("Kagiso Rapula", "kagisor");
+        String policy = buyAndPay("kagisor");
+        outbox.dispatch();
+        mockMvc.perform(post("/communications/dispatch").with(httpBasic("service", "password")))
+                .andExpect(status().isOk());
+        Map<String, Object> issued = one(messagesFor(policy), "POLICY_ISSUED_EMAIL");
+        assertThat(issued.get("status")).isEqualTo("DELIVERED");
+        String providerId = (String) issued.get("providerMessageId");
+
+        // Status callbacks: signed only; states move forward; late or repeated callbacks change nothing.
+        String read = "{\"providerMessageId\":\"" + providerId + "\",\"status\":\"READ\"}";
+        mockMvc.perform(post("/integration/messaging/status").contentType(MediaType.APPLICATION_JSON).content(read))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/integration/messaging/status").contentType(MediaType.APPLICATION_JSON)
+                        .header("X-Nsure-Signature", "sha256=" + "0".repeat(64)).content(read))
+                .andExpect(status().isForbidden());
+        callback("status", read).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READ"));
+        callback("status", "{\"providerMessageId\":\"" + providerId + "\",\"status\":\"DELIVERED\"}")
+                .andExpect(jsonPath("$.status").value("READ"));
+        callback("status", "{\"providerMessageId\":\"" + providerId + "\",\"status\":\"FAILED\"}")
+                .andExpect(jsonPath("$.status").value("READ"));
+        callback("status", "{\"providerMessageId\":\"EML-UNKNOWN\",\"status\":\"READ\"}")
+                .andExpect(jsonPath("$.status").value("IGNORED"));
+        assertThat((String) one(messagesFor(policy), "POLICY_ISSUED_EMAIL").get("readAt")).isNotBlank();
+
+        // Inbound replies: a known sender opens a case; a reply naming that case joins it; a repeat is stored once.
+        String first = callback("inbound", "{\"providerMessageId\":\"em-in-1\",\"channel\":\"EMAIL\","
+                        + "\"from\":\"KagisoR@example.com\",\"text\":\"Please change my beneficiary.\"}")
+                .andExpect(jsonPath("$.status").value("LINKED"))
+                .andReturn().getResponse().getContentAsString();
+        String caseRef = JsonPath.read(first, "$.caseRef");
+        callback("inbound", "{\"providerMessageId\":\"em-in-2\",\"channel\":\"EMAIL\",\"from\":\"kagisor@example.com\","
+                        + "\"text\":\"Re: " + caseRef + " here is the new name.\"}")
+                .andExpect(jsonPath("$.caseRef").value(caseRef));
+        callback("inbound", "{\"providerMessageId\":\"em-in-2\",\"channel\":\"EMAIL\",\"from\":\"kagisor@example.com\","
+                        + "\"text\":\"Re: " + caseRef + " here is the new name.\"}")
+                .andExpect(jsonPath("$.caseRef").value(caseRef));
+
+        // An unknown sender waits in triage until a person says who it is.
+        String unknown = callback("inbound", "{\"providerMessageId\":\"em-in-3\",\"channel\":\"EMAIL\","
+                        + "\"from\":\"someone@elsewhere.example\",\"text\":\"Is this the claims line?\"}")
+                .andExpect(jsonPath("$.status").value("TRIAGE"))
+                .andReturn().getResponse().getContentAsString();
+        // The unfiltered list ("All" in the UI) returns every inbound message.
+        mockMvc.perform(get("/communications/inbound").with(httpBasic("ops", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(3)));
+        String triage = mockMvc.perform(get("/communications/inbound?status=TRIAGE").with(httpBasic("ops", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Integer triageId = JsonPath.<List<Integer>>read(triage, "$[*].id").get(0);
+        assertThat(JsonPath.read(unknown, "$.caseRef") == null).isTrue();
+        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "ops", "{\"customerRef\":\"" + ref + "\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "service", "{\"customerRef\":\"" + ref + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("LINKED"))
+                .andExpect(jsonPath("$.handledBy").value("service"));
+        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "service", "{\"customerRef\":\"" + ref + "\"}"))
+                .andExpect(status().isConflict());
+
+        // A bulk operational notice is requested by one person and released by another.
+        String templates = mockMvc.perform(get("/communications/templates").with(httpBasic("ops", "password")))
+                .andReturn().getResponse().getContentAsString();
+        Integer notice = JsonPath.<List<Integer>>read(templates, "$[?(@.code == 'SERVICE_NOTICE_EMAIL')].id").get(0);
+        String requested = mockMvc.perform(json(post("/communications/bulk-notices"), "admin", "{\"templateId\":" + notice
+                        + ",\"policyStatus\":\"Active\",\"product\":\"Term Life\",\"reason\":\"Branch closed for the public holiday\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andReturn().getResponse().getContentAsString();
+        String noticeRef = JsonPath.read(requested, "$.ref");
+        assertThat((Integer) JsonPath.read(requested, "$.recipients")).isPositive();
+        mockMvc.perform(post("/communications/bulk-notices/" + noticeRef + "/approve").with(httpBasic("admin", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/communications/bulk-notices/" + noticeRef + "/approve").with(httpBasic("ops", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SENT"))
+                .andExpect(jsonPath("$.decidedBy").value("ops"));
+        assertThat(messagesFor(noticeRef)).isNotEmpty();
+        assertThat(one(messagesFor(noticeRef).stream().filter(m -> ref.equals(m.get("customerRef"))).toList(),
+                "SERVICE_NOTICE_EMAIL").get("body").toString()).contains("Dear Kagiso Rapula");
+
+        // Scheduled premium reminders: one per policy and due date, however often the sweep runs.
+        String due = java.time.LocalDate.now().plusDays(3).toString();
+        jdbc.update("update ins_policy set next_premium_due = ? where record_ref = ?", java.sql.Date.valueOf(due), policy);
+        mockMvc.perform(post("/communications/reminders/run").with(httpBasic("service", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.published").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)));
+        mockMvc.perform(post("/communications/reminders/run").with(httpBasic("service", "password")))
+                .andExpect(jsonPath("$.published").value(0));
+        outbox.dispatch();
+        assertThat(one(messagesFor(policy + "@" + due), "PREMIUM_DUE_EMAIL").get("subject").toString())
+                .contains(due, policy);
+    }
+
+    /** A provider callback signed with this installation's webhook secret. */
+    private org.springframework.test.web.servlet.ResultActions callback(String path, String body) throws Exception {
+        return mockMvc.perform(post("/integration/messaging/" + path).contentType(MediaType.APPLICATION_JSON)
+                .header("X-Nsure-Signature", "sha256=" + webhooks.hmac(body)).content(body));
     }
 
     static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {

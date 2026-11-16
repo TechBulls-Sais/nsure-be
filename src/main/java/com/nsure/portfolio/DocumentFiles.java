@@ -45,6 +45,19 @@ public class DocumentFiles {
         return new FileSystemResource(path);
     }
 
+    /** The SHA-256 of the stored file, to compare with the hash recorded when it was issued (Blueprint §8). */
+    String sha256Of(String storagePath, String what) {
+        Path path = resolve(storagePath);
+        if (!Files.isRegularFile(path)) {
+            throw new NotFoundException("The file for " + what + " is missing from storage.");
+        }
+        try {
+            return DocumentCustody.sha256(Files.readAllBytes(path));
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not read the document", e);
+        }
+    }
+
     /** Removes a file whose row was not saved; an orphan left behind is harmless. */
     void deleteQuietly(String storagePath) {
         try {

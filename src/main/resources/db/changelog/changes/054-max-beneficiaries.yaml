@@ -1,0 +1,12 @@
+databaseChangeLog:
+  - changeSet:
+      id: 054-max-beneficiaries
+      author: nsure
+      comment: Spec 01 BR-23 / 09 D5 - the beneficiary limit is a product setting, default 5, Tap Cover 1 (TC-40).
+      changes:
+        - addColumn:
+            tableName: ins_product
+            columns:
+              - column: {name: max_beneficiaries, type: int, defaultValueNumeric: 5, constraints: {nullable: false}}
+        - sql:
+            sql: UPDATE ins_product SET max_beneficiaries = 1 WHERE name = 'Tap Cover';

@@ -34,6 +34,10 @@ public class Permission extends AuditableEntity {
     @Column(name = "can_maker_checker", nullable = false)
     private boolean canMakerChecker;
 
+    /** The spec 04 capability this code realises (claim.approve, rate.publish …); null outside that vocabulary. */
+    @Column(length = 64)
+    private String capability;
+
     public boolean hasCode(String checkCode) {
         return code != null && code.equalsIgnoreCase(checkCode);
     }
@@ -60,6 +64,10 @@ public class Permission extends AuditableEntity {
 
     public String getFunctionName() {
         return functionName;
+    }
+
+    public String getCapability() {
+        return capability;
     }
 
     public boolean isCanMakerChecker() {
