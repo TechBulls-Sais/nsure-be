@@ -31,7 +31,7 @@ class DeclarationApiTest {
         String code = sendCode("bontle", policy);
         mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/declaration"), "bontle",
                         "{\"code\":\"" + code + "\",\"accuracy\":true,\"terms\":true}"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("Please confirm the data protection notice, "
                         + "that false information may void the policy."));
         mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/declaration"), "bontle",
@@ -58,7 +58,7 @@ class DeclarationApiTest {
         for (int attempt = 1; attempt <= 2; attempt++) {
             mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/declaration"), "oratile",
                             "{\"code\":\"000000\"," + CONSENTS + "}"))
-                    .andExpect(status().isBadRequest())
+                    .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.message").value("That code is not right. You have " + (3 - attempt)
                             + " attempt(s) left."));
         }

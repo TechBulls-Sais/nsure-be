@@ -35,13 +35,13 @@ class RoleGuardsTest {
         long portal = roleId("Policyholder / End User");
         MockHttpServletResponse grant = call(put("/roles/" + portal + "/permissions"), "admin",
                 "{\"permissions\":{\"READ_CLAIM\":true}}");
-        assertThat(grant.getStatus()).isEqualTo(400);
+        assertThat(grant.getStatus()).isEqualTo(422);
         assertThat(grant.getContentAsString()).contains("cannot be granted permissions — every portal customer holds it");
-        assertThat(call(put("/roles/" + portal), "admin", "{\"deskAccess\":true}").getStatus()).isEqualTo(400);
-        assertThat(call(put("/roles/" + portal), "admin", "{\"name\":\"Customers\"}").getStatus()).isEqualTo(400);
-        assertThat(call(delete("/roles/" + portal), "admin", null).getStatus()).isEqualTo(400);
+        assertThat(call(put("/roles/" + portal), "admin", "{\"deskAccess\":true}").getStatus()).isEqualTo(422);
+        assertThat(call(put("/roles/" + portal), "admin", "{\"name\":\"Customers\"}").getStatus()).isEqualTo(422);
+        assertThat(call(delete("/roles/" + portal), "admin", null).getStatus()).isEqualTo(422);
         assertThat(call(put("/admin/approval-authorities/" + portal), "admin", "{\"maxPayoutAmount\":1000}").getStatus())
-                .isEqualTo(400);
+                .isEqualTo(422);
     }
 
     @Test
@@ -53,14 +53,14 @@ class RoleGuardsTest {
         approved(call(put("/users/" + customer), "admin", "{\"roleIds\":[" + portal + "," + club + "]}"));
         MockHttpServletResponse arm = call(put("/roles/" + club + "/permissions"), "admin",
                 "{\"permissions\":{\"READ_CLAIM\":true}}");
-        assertThat(arm.getStatus()).isEqualTo(400);
+        assertThat(arm.getStatus()).isEqualTo(422);
         assertThat(arm.getContentAsString()).contains("is held by 1 portal customer(s)");
-        assertThat(call(put("/roles/" + club), "admin", "{\"deskAccess\":true}").getStatus()).isEqualTo(400);
+        assertThat(call(put("/roles/" + club), "admin", "{\"deskAccess\":true}").getStatus()).isEqualTo(422);
 
         // …and an armed role cannot be handed to a customer login either.
         MockHttpServletResponse armed = call(put("/users/" + customer), "admin",
                 "{\"roleIds\":[" + portal + "," + roleId("Claims Assessor") + "]}");
-        assertThat(armed.getStatus()).isEqualTo(400);
+        assertThat(armed.getStatus()).isEqualTo(422);
         assertThat(armed.getContentAsString()).contains("is linked to a customer record");
         approved(call(put("/users/" + customer), "admin", "{\"roleIds\":[" + portal + "]}"));
     }
@@ -82,13 +82,13 @@ class RoleGuardsTest {
         for (String wildcard : List.of("ALL_FUNCTIONS", "ALL_FUNCTIONS_READ", "CHECKER_SUPER_USER")) {
             MockHttpServletResponse refused = call(put("/roles/" + role + "/permissions"), "admin",
                     "{\"permissions\":{\"" + wildcard + "\":true}}");
-            assertThat(refused.getStatus()).isEqualTo(400);
+            assertThat(refused.getStatus()).isEqualTo(422);
             assertThat(refused.getContentAsString()).contains("Unknown permission " + wildcard);
         }
         // The administrator role cannot drop the codes needed to restore grants, so nobody is locked out.
         MockHttpServletResponse lifeline = call(put("/roles/" + roleId("Super Admin") + "/permissions"), "admin",
                 "{\"permissions\":{\"PERMISSIONS_ROLE\":false}}");
-        assertThat(lifeline.getStatus()).isEqualTo(400);
+        assertThat(lifeline.getStatus()).isEqualTo(422);
         assertThat(lifeline.getContentAsString()).contains("must keep PERMISSIONS_ROLE");
     }
 
@@ -120,13 +120,13 @@ class RoleGuardsTest {
         assertThat(call(delete("/permissions/1"), "admin", null).getStatus()).isEqualTo(403);
         MockHttpServletResponse unknown = call(put("/roles/" + roleId("Actuary") + "/permissions"), "admin",
                 "{\"permissions\":{\"MAKE_COFFEE\":true}}");
-        assertThat(unknown.getStatus()).isEqualTo(400);
+        assertThat(unknown.getStatus()).isEqualTo(422);
         // Relabelling is allowed; renaming the code is not.
         String permissions = mockMvc.perform(get("/permissions").with(httpBasic("admin", "password")))
                 .andReturn().getResponse().getContentAsString();
         Integer readClaim = JsonPath.<List<Integer>>read(permissions, "$[?(@.code == 'READ_CLAIM')].id").get(0);
         assertThat(call(put("/permissions/" + readClaim), "admin", "{\"code\":\"READ_CLAIMS\"}").getStatus())
-                .isEqualTo(400);
+                .isEqualTo(422);
         assertThat(call(put("/permissions/" + readClaim), "admin", "{\"functionName\":\"View claims\"}").getStatus())
                 .isEqualTo(200);
         assertThat(JsonPath.<List<String>>read(permissions, "$[?(@.code == 'APPROVE_CLAIM')].capability"))
@@ -138,7 +138,7 @@ class RoleGuardsTest {
         long assessors = roleId("Claims Assessor");
         MockHttpServletResponse zero = call(put("/admin/approval-authorities/" + assessors), "admin",
                 "{\"maxPayoutAmount\":0}");
-        assertThat(zero.getStatus()).isEqualTo(400);
+        assertThat(zero.getStatus()).isEqualTo(422);
         assertThat(zero.getContentAsString()).contains("Delete the row to remove the limit.");
         String list = mockMvc.perform(get("/admin/approval-authorities").with(httpBasic("admin", "password")))
                 .andReturn().getResponse().getContentAsString();

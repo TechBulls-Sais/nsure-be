@@ -53,7 +53,7 @@ class CustomerPortalApiTest {
                         .with(httpBasic("customer", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"product\":\"Term Life\"}"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("KYC must be successful before you can buy a policy."));
 
         // Onboarding reviews customers; adding a policy needs CREATE_POLICY, which it does not hold.
@@ -67,7 +67,7 @@ class CustomerPortalApiTest {
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"Neo Modise\",\"product\":\"Term Life\",\"amount\":500000,\"premium\":420}"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("Mark KYC successful before adding a policy."));
 
         mockMvc.perform(post("/portfolio/customers")

@@ -20,14 +20,17 @@ public class Outbox {
     private final EntityManager em;
     private final ObjectMapper mapper;
     private final ObjectProvider<DomainEventHandler> handlers;
+    private final AggregateSequences sequences;
 
-    public Outbox(EntityManager em, ObjectMapper mapper, ObjectProvider<DomainEventHandler> handlers) {
+    public Outbox(EntityManager em, ObjectMapper mapper, ObjectProvider<DomainEventHandler> handlers,
+            AggregateSequences sequences) {
         this.em = em;
         this.mapper = mapper;
         this.handlers = handlers;
+        this.sequences = sequences;
     }
 
-    /** Publishes with a new correlation id. Must run inside the business transaction. */
+    /** Publishes under the current request's correlation id (a new one outside a request). Must run inside the business transaction. */
     @Transactional(propagation = Propagation.MANDATORY)
     public OutboxEvent publish(String eventType, String aggregateRef, Map<String, ?> data, String actor) {
         return publish(eventType, aggregateRef, data, actor, null);
@@ -46,8 +49,9 @@ public class Outbox {
         if (payload.length() > 4000) {
             throw new IllegalStateException("Event " + eventType + " payload is too large; publish references only");
         }
-        OutboxEvent event = new OutboxEvent(eventType, aggregateRef, payload, correlationId,
-                actor == null ? "system" : actor);
+        String correlation = correlationId != null ? correlationId : com.nsure.common.CorrelationId.current();
+        OutboxEvent event = new OutboxEvent(eventType, aggregateRef, payload, correlation,
+                actor == null ? "system" : actor, sequences.next(aggregateRef));
         em.persist(event);
         for (DomainEventHandler handler : handlers.orderedStream().toList()) {
             if (handler.eventTypes().contains(eventType)) {

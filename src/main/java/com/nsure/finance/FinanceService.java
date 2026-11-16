@@ -9,6 +9,7 @@ import com.nsure.security.domain.AppUser;
 import com.nsure.security.service.PlatformSecurityContext;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
@@ -31,13 +32,15 @@ public class FinanceService {
     private final PlatformSecurityContext security;
     private final Subledger subledger;
     private final IntegrationService integration;
+    private final com.nsure.audit.evidence.EvidenceChain evidence;
 
     public FinanceService(EntityManager em, PlatformSecurityContext security, Subledger subledger,
-            IntegrationService integration) {
+            IntegrationService integration, com.nsure.audit.evidence.EvidenceChain evidence) {
         this.em = em;
         this.security = security;
         this.subledger = subledger;
         this.integration = integration;
+        this.evidence = evidence;
     }
 
     // ── enquiries ─────────────────────────────────────────────────────────────────────────────────
@@ -53,8 +56,11 @@ public class FinanceService {
     @Transactional(readOnly = true)
     public List<FinanceViews.RuleView> rules() {
         reader();
-        return em.createQuery("select r from PostingRule r order by r.id", PostingRule.class).getResultList()
-                .stream().map(FinanceService::rule).toList();
+        Map<String, List<PostingRule>> byType = new LinkedHashMap<>();
+        subledger.ruleVersions().forEach(r -> byType.computeIfAbsent(r.getEventType(), t -> new ArrayList<>()).add(r));
+        List<FinanceViews.RuleView> views = new ArrayList<>();
+        byType.values().forEach(versions -> views.addAll(ruleViews(versions)));
+        return views;
     }
 
     @Transactional(readOnly = true)
@@ -157,8 +163,13 @@ public class FinanceService {
 
     // ── commands ──────────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Proposes the next version of a posting rule (NS-SH08-001). Nothing changes until a different user approves it,
+     * and then only for events dated on or after its effective date; journals already posted keep their version.
+     * {@code baseVersion}, when sent, is the version the user edited: a newer one makes this a 409, not an overwrite.
+     */
     @Transactional
-    public FinanceViews.RuleView updateRule(String eventType, JsonNode body) {
+    public FinanceViews.RuleView proposeRule(String eventType, JsonNode body) {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("MANAGE_FINANCE");
         String debit = required(body, "debitAccount");
@@ -179,14 +190,84 @@ public class FinanceService {
         if (!Set.of(PostingRule.ACTIVE, PostingRule.INACTIVE).contains(status)) {
             throw new IllegalArgumentException("Status must be ACTIVE or INACTIVE.");
         }
-        PostingRule rule = subledger.rule(eventType);
-        if (rule == null) {
-            rule = new PostingRule(eventType);
-            em.persist(rule);
+        String reason = required(body, "reason");
+        if (reason.length() > 500) {
+            throw new IllegalArgumentException("Keep the reason to 500 characters.");
         }
-        rule.change(debit, credit, text(body, "amountField", "amount"), domain,
-                text(body, "description", eventType), status, user.getUsername());
-        return rule(rule);
+        LocalDate effective = date(body, "effectiveFrom", LocalDate.now());
+        List<PostingRule> versions = subledger.ruleVersions(eventType);
+        versions.stream().filter(PostingRule::isPending).findFirst().ifPresent(pending -> {
+            throw new ConflictException(eventType + " v" + pending.getVersion() + " is awaiting approval."
+                    + " Approve or reject it before proposing another change.");
+        });
+        int latest = versions.isEmpty() ? 0 : versions.get(0).getVersion();
+        if (body.hasNonNull("baseVersion") && body.get("baseVersion").asInt() != latest) {
+            throw new ConflictException(eventType + " changed to v" + latest + " while you were editing v"
+                    + body.get("baseVersion").asInt() + ". Reload to see the current rule.");
+        }
+        requireValidStart(eventType, effective, null);
+        PostingRule current = subledger.ruleInForce(eventType, effective).orElse(null);
+        PostingRule next = new PostingRule(eventType, latest + 1, debit, credit, text(body, "amountField", "amount"),
+                domain, text(body, "description", eventType), status, effective, reason, user.getUsername());
+        em.persist(next);
+        evidence.record(user.getUsername(), "Proposed posting rule", "PostingRule", eventType + " v" + next.getVersion(),
+                (current == null ? "(none)" : "v" + current.getVersion() + " " + current.summary()) + " → "
+                        + next.summary() + ", effective " + effective
+                        + (effective.isBefore(LocalDate.now()) ? " (backdated)" : "") + ". " + reason);
+        em.flush();
+        return ruleView(next);
+    }
+
+    /** A different user approves a proposed version; it applies from its effective date (Blueprint §7, D07). */
+    @Transactional
+    public FinanceViews.RuleView approveRule(String eventType, int version) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("APPROVE_JOURNAL");
+        PostingRule rule = pendingRule(eventType, version, user);
+        // Re-checked now: journals may have posted since it was proposed, making its start date a backdate.
+        requireValidStart(eventType, rule.getEffectiveFrom(), rule.getId());
+        rule.approve(user.getUsername());
+        evidence.record(user.getUsername(), "Approved posting rule", "PostingRule", eventType + " v" + version,
+                rule.summary() + ", effective " + rule.getEffectiveFrom() + ", proposed by " + rule.getProposedBy());
+        em.flush();
+        return ruleView(rule);
+    }
+
+    @Transactional
+    public FinanceViews.RuleView rejectRule(String eventType, int version, JsonNode body) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("APPROVE_JOURNAL");
+        PostingRule rule = pendingRule(eventType, version, user);
+        String reason = required(body, "reason");
+        rule.reject(user.getUsername(), reason.length() <= 500 ? reason : reason.substring(0, 500));
+        evidence.record(user.getUsername(), "Rejected posting rule", "PostingRule", eventType + " v" + version, reason);
+        em.flush();
+        return ruleView(rule);
+    }
+
+    private PostingRule pendingRule(String eventType, int version, AppUser checker) {
+        PostingRule rule = ruleVersion(eventType, version);
+        if (!rule.isPending()) {
+            throw new ConflictException(eventType + " v" + version + " is "
+                    + rule.getApprovalStatus().toLowerCase(Locale.ROOT).replace('_', ' ') + ".");
+        }
+        if (checker.getUsername().equalsIgnoreCase(rule.getProposedBy())) {
+            throw new com.nsure.security.exception.NoAuthorizationException("You proposed " + eventType + " v"
+                    + version + ", so another user must approve or reject it (maker-checker).");
+        }
+        return rule;
+    }
+
+    private static LocalDate date(JsonNode body, String field, LocalDate fallback) {
+        String value = text(body, field, null);
+        if (value == null) {
+            return fallback;
+        }
+        try {
+            return LocalDate.parse(value);
+        } catch (DateTimeParseException ex) {
+            throw new IllegalArgumentException(field + " must be a date (yyyy-MM-dd).");
+        }
     }
 
     @Transactional
@@ -194,7 +275,9 @@ public class FinanceService {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("MANAGE_FINANCE");
         String reason = required(body, "reason");
-        Journal reversal = subledger.reverse(journalByRef(ref), reason, user.getUsername());
+        Journal original = journalByRef(ref);
+        com.nsure.common.ExpectedVersion.check("Journal " + ref, original.getRowVersion());
+        Journal reversal = subledger.reverse(original, reason, user.getUsername());
         return journal(reversal, accountNames());
     }
 
@@ -457,20 +540,76 @@ public class FinanceService {
         return debitNature ? d.subtract(c) : c.subtract(d);
     }
 
-    private static FinanceViews.RuleView rule(PostingRule r) {
-        return new FinanceViews.RuleView(r.getEventType(), r.getDebitAccount(), r.getCreditAccount(),
-                r.getAmountField(), r.getDomain(), r.getDescription(), r.getStatus(), r.getVersion(),
-                r.getUpdatedBy(), r.getUpdatedAt());
+    /** Views of one event type's versions (newest first), with each approved version's last day and today's rule. */
+    private List<FinanceViews.RuleView> ruleViews(List<PostingRule> versions) {
+        LocalDate today = LocalDate.now();
+        List<PostingRule> approved = versions.stream().filter(PostingRule::isApproved).toList();
+        Long inForce = approved.stream()
+                .filter(r -> !r.getEffectiveFrom().isAfter(today))
+                .max(java.util.Comparator.comparing(PostingRule::getEffectiveFrom)
+                        .thenComparingInt(PostingRule::getVersion))
+                .map(PostingRule::getId).orElse(null);
+        List<FinanceViews.RuleView> views = new ArrayList<>();
+        for (PostingRule r : versions) {
+            LocalDate to = null;
+            if (r.isApproved()) {
+                to = approved.stream()
+                        .filter(n -> n.getEffectiveFrom().isAfter(r.getEffectiveFrom())
+                                || (n.getEffectiveFrom().equals(r.getEffectiveFrom()) && n.getVersion() > r.getVersion()))
+                        .map(n -> n.getEffectiveFrom().minusDays(1))
+                        .min(LocalDate::compareTo).orElse(null);
+            }
+            views.add(new FinanceViews.RuleView(r.getId(), r.getEventType(), r.getDebitAccount(), r.getCreditAccount(),
+                    r.getAmountField(), r.getDomain(), r.getDescription(), r.getStatus(), r.getVersion(),
+                    r.getEffectiveFrom(), to, r.getApprovalStatus(), r.getId().equals(inForce), r.getChangeReason(),
+                    r.getProposedBy(), r.getRecordedAt(), r.getApprovedBy(), r.getApprovedAt(), r.getRejectionReason()));
+        }
+        return views;
+    }
+
+    private FinanceViews.RuleView ruleView(PostingRule rule) {
+        return ruleViews(subledger.ruleVersions(rule.getEventType())).stream()
+                .filter(v -> v.id().equals(rule.getId())).findFirst().orElseThrow();
+    }
+
+    private PostingRule ruleVersion(String eventType, int version) {
+        return subledger.ruleVersions(eventType).stream().filter(r -> r.getVersion() == version).findFirst()
+                .orElseThrow(() -> new NotFoundException("Posting rule " + eventType + " v" + version + " not found"));
+    }
+
+    /**
+     * A version may not start before an approved one (versions take effect in order), and a backdated version may not
+     * start on or before a day already posted for its event type: a posted day keeps the rule it was posted under.
+     */
+    private void requireValidStart(String eventType, LocalDate effective, Long ignoreId) {
+        LocalDate latestApproved = subledger.ruleVersions(eventType).stream()
+                .filter(r -> r.isApproved() && !r.getId().equals(ignoreId))
+                .map(PostingRule::getEffectiveFrom).max(LocalDate::compareTo).orElse(null);
+        if (latestApproved != null && effective.isBefore(latestApproved)) {
+            throw new IllegalArgumentException("A new version of " + eventType + " cannot start before " + latestApproved
+                    + ", when the latest approved version starts.");
+        }
+        if (effective.isBefore(LocalDate.now())) {
+            LocalDate lastPosted = em.createQuery("select max(j.eventDate) from Journal j where j.eventType = :type"
+                            + " and j.reversesRef is null", LocalDate.class)
+                    .setParameter("type", eventType).getSingleResult();
+            if (lastPosted != null && !effective.isAfter(lastPosted)) {
+                throw new IllegalArgumentException(eventType + " events up to " + lastPosted + " are already posted"
+                        + " under earlier versions. A backdated version can start no earlier than "
+                        + lastPosted.plusDays(1) + ".");
+            }
+        }
     }
 
     private static FinanceViews.JournalView journal(Journal j, Map<String, String> names) {
         return new FinanceViews.JournalView(j.getRef(), j.getEventType(), j.getSourceRef(), j.getDomain(),
                 j.getEventDate(), j.getAccountingDate(), j.getPeriodCode(), j.getCurrency(), j.getAmount(),
-                j.getDescription(), j.getRuleVersion(), j.getStatus(), j.getReversesRef(), j.getReversedByRef(),
+                j.getDescription(), j.getRuleVersion(), j.getPostingRuleId(), j.getStatus(), j.getReversesRef(),
+                j.getReversedByRef(),
                 j.getGlBatchRef(), j.getCreatedBy(), j.getCreatedAt(),
                 j.getLines().stream().map(l -> new FinanceViews.LineView(l.getLineNo(), l.getAccountCode(),
                         names.getOrDefault(l.getAccountCode(), l.getAccountCode()), l.getDebit(), l.getCredit()))
-                        .toList());
+                        .toList(), j.getRowVersion());
     }
 
     private static FinanceViews.GlBatchView batch(GlBatch b) {

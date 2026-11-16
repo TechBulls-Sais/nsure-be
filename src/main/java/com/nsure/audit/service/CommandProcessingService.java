@@ -41,6 +41,7 @@ public class CommandProcessingService {
     private final CommandPayloadSanitizer sanitizer;
     private final ObjectMapper mapper;
     private final EntityManager entityManager;
+    private final com.nsure.audit.evidence.EvidenceChain evidence;
 
     public CommandProcessingService(
             PlatformSecurityContext security,
@@ -50,7 +51,9 @@ public class CommandProcessingService {
             MakerCheckerPolicy makerChecker,
             CommandPayloadSanitizer sanitizer,
             ObjectMapper mapper,
-            EntityManager entityManager) {
+            EntityManager entityManager,
+            com.nsure.audit.evidence.EvidenceChain evidence) {
+        this.evidence = evidence;
         this.security = security;
         this.commands = commands;
         this.writer = writer;
@@ -75,10 +78,20 @@ public class CommandProcessingService {
         String originalJson = request.json() == null || request.json().isBlank() ? "{}" : request.json();
         SanitizeResult sanitized = sanitizer.sanitize(originalJson);
 
-        Optional<CommandSource> existing = findExisting(action, entity, idempotencyKey);
+        String requestHash = sanitizer.fingerprint(action, entity, request.resourceId(), originalJson);
+
+        Optional<CommandSource> existing = findExisting(user.getId(), action, entity, idempotencyKey);
         CommandSource audit;
         if (existing.isPresent()) {
             CommandSource prior = existing.get();
+            // NS-API-002: a reused key must carry the same request. Only an explicit retry of a command that failed
+            // (and so changed nothing) may send a corrected request under its key.
+            boolean retryingFailure = request.idempotencyRetry()
+                    && (CommandStatus.ERROR.equals(prior.getStatus()) || CommandStatus.REJECTED.equals(prior.getStatus()));
+            if (!retryingFailure && prior.getRequestHash() != null && !prior.getRequestHash().equals(requestHash)) {
+                throw new IdempotencyConflictException(prior.getId(), prior.getStatus(),
+                        "This Idempotency-Key was already used for a different request", null);
+            }
             CommandOutcome replay = existingOutcome(prior, request.idempotencyRetry());
             if (replay != null) {
                 return replay;
@@ -86,6 +99,7 @@ public class CommandProcessingService {
             detach(prior);
             prior.reopenForRetry(
                     sanitized.json(), request.resourceId(), OffsetDateTime.now(ZoneOffset.UTC));
+            prior.setRequestHash(requestHash);
             audit = writer.saveNew(prior);
         } else {
             CommandSource created = new CommandSource();
@@ -96,6 +110,7 @@ public class CommandProcessingService {
             created.setMakerId(user.getId());
             created.setMadeOn(OffsetDateTime.now(ZoneOffset.UTC));
             created.setIdempotencyKey(idempotencyKey);
+            created.setRequestHash(idempotencyKey == null ? null : requestHash);
             created.setStatus(CommandStatus.UNDER_PROCESSING);
             audit = writer.saveNew(created);
         }
@@ -117,6 +132,10 @@ public class CommandProcessingService {
             entityManager.flush();
             if (needsChecker) {
                 audit.markAwaitingApproval();
+                // The change itself is rolled back until approved, so this evidence is written on its own.
+                evidence.recordNow(user.getUsername(), "Requested " + action + "_" + entity, entity,
+                        request.resourceId() == null ? null : String.valueOf(request.resourceId()),
+                        "Command " + audit.getId() + " awaits a checker");
                 if (sanitized.truncated()) {
                     audit.setResultJson(truncationNote(sanitized));
                 }
@@ -125,6 +144,8 @@ public class CommandProcessingService {
             }
             String resultJson = withTruncation(result.json(), sanitized);
             audit.markProcessed(result.resourceId(), resultJson);
+            evidence.record(user.getUsername(), action + "_" + entity, entity,
+                    result.resourceId() == null ? null : String.valueOf(result.resourceId()), "Command " + audit.getId());
             writer.saveSame(audit);
             return new CommandOutcome(audit.getId(), result.resourceId(), CommandStatus.PROCESSED, resultJson, false);
         } catch (AwaitingApprovalException ex) {
@@ -136,8 +157,9 @@ public class CommandProcessingService {
             recordFailure(audit, 403, ex.getMessage());
             throw new CommandFailedException(403, audit.getId(), ex.getMessage());
         } catch (IllegalArgumentException ex) {
-            recordFailure(audit, 400, ex.getMessage());
-            throw new CommandFailedException(400, audit.getId(), ex.getMessage());
+            // A business rule refused the command (NS-API-001).
+            recordFailure(audit, 422, ex.getMessage());
+            throw new CommandFailedException(422, audit.getId(), ex.getMessage());
         } catch (com.nsure.common.exception.ConflictException ex) {
             recordFailure(audit, 409, ex.getMessage());
             throw new CommandFailedException(409, audit.getId(), ex.getMessage());
@@ -180,11 +202,12 @@ public class CommandProcessingService {
         };
     }
 
-    private Optional<CommandSource> findExisting(String action, String entity, String idempotencyKey) {
+    private Optional<CommandSource> findExisting(Long makerId, String action, String entity, String idempotencyKey) {
         if (idempotencyKey == null) {
             return Optional.empty();
         }
-        return commands.findByActionNameAndEntityNameAndIdempotencyKey(action, entity, idempotencyKey);
+        return commands.findByMakerIdAndActionNameAndEntityNameAndIdempotencyKey(makerId, action, entity,
+                idempotencyKey);
     }
 
     private void recordFailure(CommandSource audit, int status, String message) {

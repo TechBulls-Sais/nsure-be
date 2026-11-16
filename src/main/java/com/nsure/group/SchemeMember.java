@@ -10,6 +10,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -36,6 +37,11 @@ public class SchemeMember {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    // Optimistic locking (NS-TXN-001): a write based on a stale copy is refused with 409, never overwrites.
+    @Version
+    @Column(name = "row_version", nullable = false)
+    private long rowVersion;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "scheme_id", nullable = false)
@@ -265,5 +271,9 @@ public class SchemeMember {
 
     public LocalDateTime getUpdatedAt() {
         return updatedAt;
+    }
+
+    public long getRowVersion() {
+        return rowVersion;
     }
 }

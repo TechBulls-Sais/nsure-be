@@ -30,6 +30,14 @@ public class InsurancePolicy extends CoverRecord implements TieredCover {
     @Column(name = "rate_table_version", length = 30)
     private String rateTableVersion;
 
+    // NS-IL01-006: the application this policy was issued from (issued once), and the key that makes staff issue
+    // idempotent.
+    @Column(name = "application_ref", length = 20, unique = true)
+    private String applicationRef;
+
+    @Column(name = "issue_key", length = 80, unique = true)
+    private String issueKey;
+
     // Who last decided this policy's state by hand (cancelled it, or recorded its payment), when, and why.
     @Column(name = "reviewed_by", length = 100)
     private String reviewedBy;
@@ -68,6 +76,22 @@ public class InsurancePolicy extends CoverRecord implements TieredCover {
     @Override
     public void setTier(String tier) {
         this.tier = tier;
+    }
+
+    public String getApplicationRef() {
+        return applicationRef;
+    }
+
+    public void setApplicationRef(String applicationRef) {
+        this.applicationRef = applicationRef;
+    }
+
+    public String getIssueKey() {
+        return issueKey;
+    }
+
+    public void setIssueKey(String issueKey) {
+        this.issueKey = issueKey;
     }
 
     @Override
@@ -164,5 +188,41 @@ public class InsurancePolicy extends CoverRecord implements TieredCover {
 
     public long getRowVersion() {
         return rowVersion;
+    }
+
+    // The accepted quote this record was priced from (NS-IL01-001, NS-SH03-003).
+    @jakarta.persistence.Column(name = "quote_ref", length = 20)
+    private String quoteRef;
+
+    @jakarta.persistence.Column(name = "quote_version")
+    private Integer quoteVersion;
+
+    public String getQuoteRef() {
+        return quoteRef;
+    }
+
+    public Integer getQuoteVersion() {
+        return quoteVersion;
+    }
+
+    public void setQuote(String quoteRef, Integer quoteVersion) {
+        this.quoteRef = quoteRef;
+        this.quoteVersion = quoteVersion;
+    }
+
+    // The product terms version this policy was issued under (NS-SH02-004, NS-IL03-001); set once, never changed.
+    @jakarta.persistence.Column(name = "product_version_id")
+    private Long productVersionId;
+
+    public Long getProductVersionId() {
+        return productVersionId;
+    }
+
+    void pinProductVersion(Long id) {
+        if (this.productVersionId != null && !this.productVersionId.equals(id)) {
+            throw new IllegalStateException("Policy " + getRef() + " is already pinned to product terms "
+                    + this.productVersionId + ".");
+        }
+        this.productVersionId = id;
     }
 }

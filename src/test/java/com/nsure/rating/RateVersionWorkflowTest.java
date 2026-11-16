@@ -83,7 +83,7 @@ class RateVersionWorkflowTest {
                 .andExpect(status().isOk());
         mockMvc.perform(post("/admin/rate-tables/RT-00103/versions/2/approve").with(httpBasic("actuary", "password"))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"overrideReason\":\"Board-approved re-rate\"}"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(Matchers.startsWith("A version with gaps cannot be published")));
     }
 

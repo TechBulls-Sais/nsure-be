@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -17,9 +18,40 @@ import org.springframework.web.bind.annotation.RestController;
 public class PortfolioController {
 
     private final PortfolioService portfolio;
+    private final ProductTerms productTerms;
 
-    public PortfolioController(PortfolioService portfolio) {
+    public PortfolioController(PortfolioService portfolio, ProductTerms productTerms) {
         this.portfolio = portfolio;
+        this.productTerms = productTerms;
+    }
+
+    // ── versioned product terms (NS-SH02-003/004): propose, a second person approves, new business only ──────
+
+    @GetMapping("/products/{product}/versions")
+    public List<ProductTerms.VersionView> productVersions(@PathVariable String product) {
+        return productTerms.versions(product);
+    }
+
+    @PostMapping("/products/{product}/versions")
+    public ProductTerms.VersionView proposeProductVersion(@PathVariable String product, @RequestBody JsonNode body) {
+        return productTerms.propose(product, body);
+    }
+
+    @PostMapping("/products/{product}/versions/{version}/approve")
+    public ProductTerms.VersionView approveProductVersion(@PathVariable String product, @PathVariable int version) {
+        return productTerms.approve(product, version);
+    }
+
+    @PostMapping("/products/{product}/versions/{version}/reject")
+    public ProductTerms.VersionView rejectProductVersion(@PathVariable String product, @PathVariable int version,
+            @RequestBody JsonNode body) {
+        return productTerms.reject(product, version, body);
+    }
+
+    /** The product terms a policy was issued under, whatever the product says today. */
+    @GetMapping("/policies/{ref}/terms")
+    public ProductTerms.VersionView policyTerms(@PathVariable String ref) {
+        return productTerms.policyTerms(ref);
     }
 
     @GetMapping("/customers")
@@ -161,9 +193,12 @@ public class PortfolioController {
         return portfolio.policies();
     }
 
+    /** Staff issue an offer; the first premium recorded on it issues cover. Idempotency-Key makes a resubmit safe. */
     @PostMapping("/policies")
-    public PortfolioViews.CoverView createPolicy(@RequestBody JsonNode body) {
-        return portfolio.createPolicy(body);
+    public PortfolioViews.CoverView createPolicy(@RequestBody JsonNode body,
+            @org.springframework.web.bind.annotation.RequestHeader(value = "Idempotency-Key", required = false)
+            String idempotencyKey) {
+        return portfolio.createPolicy(body, idempotencyKey);
     }
 
     @GetMapping("/claims")
@@ -188,11 +223,83 @@ public class PortfolioController {
         return portfolio.rerunClaimChecks(ref);
     }
 
-    /** assess, approve ({payoutAmount}), reject ({reason}) or pay. */
-    @PostMapping("/claims/{ref}/{action:assess|approve|reject|pay}")
+    /** A claim's reserve history and the benefit limits it draws on. */
+    @GetMapping("/claims/{ref}/financials")
+    public PortfolioViews.ClaimFinancialsView claimFinancials(@PathVariable String ref) {
+        return portfolio.claimFinancials(ref);
+    }
+
+    /** assess, approve ({payoutAmount}), reject ({reason}), pay, confirm-payout ({providerReference}) or payout-failed ({reason}). */
+    @PostMapping("/claims/{ref}/{action:assess|approve|reject|pay|confirm-payout|payout-failed|reopen}")
     public PortfolioViews.ClaimView claimAction(
             @PathVariable String ref, @PathVariable String action, @RequestBody(required = false) JsonNode body) {
         return portfolio.claimAction(ref, action, body);
+    }
+
+    // ── application capture (NS-IL01-002/003) ─────────────────────────────────────────────────────────
+
+    @GetMapping("/applications/{ref}/checklist")
+    public PortfolioViews.ApplicationChecklistView applicationChecklist(@PathVariable String ref) {
+        return portfolio.applicationChecklist(ref);
+    }
+
+    /** The disclosure questions a product asks. */
+    @GetMapping("/application-questions")
+    public List<PortfolioViews.DisclosureItem> applicationQuestions(@RequestParam String product) {
+        return portfolio.applicationQuestions(product);
+    }
+
+    /** Completes a draft: {proposerName?, payerName?, mandateMethod?, channel?, disclosures?, declarationAccepted?}. */
+    @PutMapping("/applications/{ref}/details")
+    public PortfolioViews.ApplicationChecklistView updateApplicationDetails(@PathVariable String ref, @RequestBody JsonNode body) {
+        return portfolio.updateApplicationDetails(ref, body);
+    }
+
+    @PostMapping("/applications/{ref}/submit")
+    public PortfolioViews.ApplicationChecklistView submitApplication(@PathVariable String ref) {
+        return portfolio.submitApplication(ref);
+    }
+
+    /** {documentType, note}: evidence received and checked. */
+    @PostMapping("/applications/{ref}/evidence")
+    public PortfolioViews.ApplicationChecklistView recordApplicationEvidence(@PathVariable String ref, @RequestBody JsonNode body) {
+        return portfolio.recordApplicationEvidence(ref, body);
+    }
+
+    // ── stored quotes (NS-IL01-001/004) ──────────────────────────────────────────────────────────────
+
+    /** {customerRef, product, tier, lives?}: a priced, stored quote, not yet accepted. */
+    @PostMapping("/quotes")
+    public PortfolioViews.QuoteRecordView createQuote(@RequestBody JsonNode body) {
+        return portfolio.createQuote(body);
+    }
+
+    @GetMapping("/quotes")
+    public List<PortfolioViews.QuoteRecordView> quotes(@RequestParam(required = false) String customerRef) {
+        return portfolio.quotes(customerRef);
+    }
+
+    /** Every version of the quote, newest first. */
+    @GetMapping("/quotes/{ref}")
+    public List<PortfolioViews.QuoteRecordView> quoteVersions(@PathVariable String ref) {
+        return portfolio.quoteVersions(ref);
+    }
+
+    /** {version?, note?}: the customer accepted the latest offer. */
+    @PostMapping("/quotes/{ref}/accept")
+    public PortfolioViews.QuoteRecordView acceptQuote(@PathVariable String ref, @RequestBody(required = false) JsonNode body) {
+        return portfolio.acceptQuote(ref, body);
+    }
+
+    /** Price it again from the current facts and rates: the next version, showing what changed. */
+    @PostMapping("/quotes/{ref}/requote")
+    public PortfolioViews.QuoteRecordView requote(@PathVariable String ref) {
+        return portfolio.requote(ref);
+    }
+
+    @GetMapping("/quotes/{ref}/replay")
+    public PortfolioViews.QuoteReplayView replayQuote(@PathVariable String ref, @RequestParam(required = false) Integer version) {
+        return portfolio.replayQuote(ref, version);
     }
 
     @GetMapping("/products")
@@ -210,10 +317,8 @@ public class PortfolioController {
         return portfolio.receipts();
     }
 
-    @PutMapping("/receipts/{ref}")
-    public PortfolioViews.CoverView updateReceipt(@PathVariable String ref, @RequestBody JsonNode body) {
-        return portfolio.updateReceipt(ref, body);
-    }
+    // There is deliberately no PUT /receipts/{ref}: a receipt is never edited (NS-SH04-005). It is created by a
+    // collected premium and changed only by a recorded return or reversal (POST /collections/receipts/{ref}/reverse).
 
     @GetMapping("/product-configs")
     public List<PortfolioViews.ConfigView> productConfigs() {
@@ -228,5 +333,11 @@ public class PortfolioController {
     @PutMapping("/product-configs/{ref}")
     public PortfolioViews.ConfigView updateConfig(@PathVariable String ref, @RequestBody JsonNode body) {
         return portfolio.saveConfig(ref, body);
+    }
+
+    /** Every saved state of a configuration, newest first: nothing a save replaced is lost. */
+    @GetMapping("/product-configs/{ref}/versions")
+    public List<ProductConfigHistory.VersionView> configVersions(@PathVariable String ref) {
+        return portfolio.configVersions(ref);
     }
 }

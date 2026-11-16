@@ -17,8 +17,8 @@ import org.hibernate.type.SqlTypes;
 @Table(
         name = "command_source",
         uniqueConstraints = @UniqueConstraint(
-                name = "uk_command_idem",
-                columnNames = {"action_name", "entity_name", "idempotency_key"}))
+                name = "uk_command_idem_maker",
+                columnNames = {"maker_id", "action_name", "entity_name", "idempotency_key"}))
 public class CommandSource {
 
     @Id
@@ -64,6 +64,18 @@ public class CommandSource {
 
     @Column(name = "idempotency_key", length = 64)
     private String idempotencyKey;
+
+    /** Fingerprint of the request (secrets redacted, keys sorted): a reused key must carry the same request. */
+    @Column(name = "request_hash", length = 64)
+    private String requestHash;
+
+    public String getRequestHash() {
+        return requestHash;
+    }
+
+    public void setRequestHash(String requestHash) {
+        this.requestHash = requestHash;
+    }
 
     public String getPermissionCode() {
         return PermissionCode.code(actionName, entityName);

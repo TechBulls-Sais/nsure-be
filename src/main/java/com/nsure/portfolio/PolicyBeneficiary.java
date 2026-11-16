@@ -50,12 +50,57 @@ public class PolicyBeneficiary {
     @Column(name = "display_order", nullable = false)
     private int displayOrder;
 
+    // NS-DAT-002: a designation is dated, never deleted. It applies from effectiveFrom (inclusive) until
+    // removedFrom (exclusive); recordedAt / removedAt are when the system learned of each. Rows from before
+    // dating have no effectiveFrom and count from the policy's start.
+    @Column(name = "effective_from", updatable = false)
+    private java.time.LocalDate effectiveFrom;
+
+    @Column(name = "recorded_at", updatable = false)
+    private java.time.LocalDateTime recordedAt;
+
+    @Column(name = "removed_from")
+    private java.time.LocalDate removedFrom;
+
+    @Column(name = "removed_by", length = 100)
+    private String removedBy;
+
+    @Column(name = "removed_at")
+    private java.time.LocalDateTime removedAt;
+
     protected PolicyBeneficiary() {
     }
 
     public PolicyBeneficiary(InsurancePolicy policy, int displayOrder) {
         this.policy = policy;
         this.displayOrder = displayOrder;
+        this.effectiveFrom = java.time.LocalDate.now();
+        this.recordedAt = java.time.LocalDateTime.now().withNano(0);
+    }
+
+    /** Ends the designation from {@code from} (exclusive of that day onwards). The row is kept, never deleted. */
+    void remove(java.time.LocalDate from, String by) {
+        this.removedFrom = from;
+        this.removedBy = by;
+        this.removedAt = java.time.LocalDateTime.now().withNano(0);
+        this.primary = false;
+    }
+
+    /** Whether this person was a designated beneficiary on {@code date}. */
+    public boolean inForceOn(java.time.LocalDate date) {
+        return (effectiveFrom == null || !effectiveFrom.isAfter(date)) && (removedFrom == null || removedFrom.isAfter(date));
+    }
+
+    public java.time.LocalDate getEffectiveFrom() {
+        return effectiveFrom;
+    }
+
+    public java.time.LocalDate getRemovedFrom() {
+        return removedFrom;
+    }
+
+    public String getRemovedBy() {
+        return removedBy;
     }
 
     public Long getId() {

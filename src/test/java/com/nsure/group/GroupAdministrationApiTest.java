@@ -64,10 +64,10 @@ class GroupAdministrationApiTest {
         String scheme = scheme();
         mockMvc.perform(json(post("/group/schemes/" + scheme + "/categories"), "grpadmin",
                         category("STAFF", "SALARY_MULTIPLE", "3", null, "500000", "0.45", 18, 18)))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/group/schemes/" + scheme + "/categories"), "grpadmin",
                         category("STAFF", "FIXED", null, null, "500000", "0.45", 18, 64)))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/group/schemes/" + scheme + "/categories"), "grpadmin",
                         category("STAFF", "SALARY_MULTIPLE", "3", null, "500000", "0.45", 18, 64)))
                 .andExpect(status().isOk())
@@ -154,10 +154,10 @@ class GroupAdministrationApiTest {
         mockMvc.perform(json(post("/group/members/" + member + "/underwriting"), "customer", "{\"decision\":\"ACCEPT\"}"))
                 .andExpect(status().isForbidden());
         mockMvc.perform(json(post("/group/members/" + member + "/underwriting"), "grpadmin", "{\"decision\":\"DECLINE\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/group/members/" + member + "/underwriting"), "grpadmin",
                         "{\"decision\":\"ACCEPT\",\"acceptedAmount\":700000}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/group/members/" + member + "/underwriting"), "grpadmin",
                         "{\"decision\":\"DECLINE\",\"reason\":\"Medical evidence not provided\"}"))
                 .andExpect(status().isOk())
@@ -167,7 +167,7 @@ class GroupAdministrationApiTest {
                 .andExpect(jsonPath("$.underwritingDecision").value("DECLINE"))
                 .andExpect(jsonPath("$.underwrittenBy").value("grpadmin"));
         mockMvc.perform(json(post("/group/members/" + member + "/underwriting"), "grpadmin", "{\"decision\":\"ACCEPT\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
     }
 
     @Test
@@ -208,7 +208,7 @@ class GroupAdministrationApiTest {
         assertThat((String) JsonPath.read(staged, "$.rows[0].status")).isEqualTo("VALID");
 
         mockMvc.perform(post("/group/census-batches/" + batch + "/commit").with(httpBasic("grpadmin", "password")))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(get("/group/census-batches/" + batch).with(httpBasic("grpadmin", "password")))
                 .andExpect(jsonPath("$.status").value("VALIDATED"));
         assertThat(memberCount(scheme)).isZero();
@@ -224,7 +224,7 @@ class GroupAdministrationApiTest {
                 "P1,Pula,Full,1985-01-01,STAFF,,JOIN,2026-03-01\nP2,Pula,Half,1985-01-01,STAFF,,JOIN,2026-03-16"));
 
         mockMvc.perform(json(post("/group/schemes/" + scheme + "/invoices"), "grpadmin", "{\"period\":\"2026-13\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/group/schemes/" + scheme + "/invoices"), "customer", "{\"period\":\"2026-03\"}"))
                 .andExpect(status().isForbidden());
         // 100 000 cover at 1.00 per mille = 100.00 a month; P2 covered 16 of 31 days = 51.61.
@@ -267,7 +267,7 @@ class GroupAdministrationApiTest {
                 .andExpect(jsonPath("$.invoice.receipts.length()").value(1));
         mockMvc.perform(json(post("/group/invoices/" + invoice + "/receipts"), "grpadmin",
                         "{\"amount\":60,\"reference\":\"EFT-2\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(get("/group/schemes").with(httpBasic("grpadmin", "password")))
                 .andExpect(jsonPath("$[?(@.ref == '" + scheme + "')].outstandingBalance").value(51.61));
         mockMvc.perform(json(post("/group/invoices/" + invoice + "/receipts"), "grpadmin",

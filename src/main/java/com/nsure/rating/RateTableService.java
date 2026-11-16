@@ -153,6 +153,25 @@ public class RateTableService {
     }
 
     /**
+     * Prices against the version a quote was given (NS-SH03-005): a replay under the original version must reproduce
+     * the amount, whatever is published now. Empty when no version of the tier's tables has that label.
+     */
+    @Transactional(readOnly = true)
+    public Optional<PolicyPrice> priceAtVersion(CoverTier tier, List<LifeToPrice> lives, LocalDate onDate,
+            String versionLabel) {
+        Optional<RateTableVersion> version = em.createQuery("select v from RateTableVersion v join fetch v.rateTable t"
+                        + " where t.tier.id = :tier order by v.versionNo desc", RateTableVersion.class)
+                .setParameter("tier", tier.getId())
+                .getResultStream()
+                .filter(v -> v.getLabel().equals(versionLabel))
+                .findFirst();
+        if (version.isEmpty()) {
+            return Optional.empty();
+        }
+        return priceWith(tier, lives, onDate, version);
+    }
+
+    /**
      * Prices against one given version. The impact preview (spec 11 E-21) uses this same function against a draft,
      * so the preview can never drift from the price it predicts.
      */

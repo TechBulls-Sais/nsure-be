@@ -1,0 +1,247 @@
+databaseChangeLog:
+  # Gap register §2, batch 2: collections (SH04) and claims (SH05) of the Nsure Life Detailed Product Specification.
+  - changeSet:
+      id: 062-billing-schedule
+      author: nsure
+      comment: >-
+        NS-SH04-001/003: a due schedule of uniquely referenced instalments whose billed amount never changes;
+        adjustments and allocations (including partial and split ones) are separate records against them.
+      changes:
+        - createTable:
+            tableName: bil_instalment
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_bil_instalment_ref}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: customer_ref, type: varchar(20)}
+              - column: {name: period_start, type: date, constraints: {nullable: false}}
+              - column: {name: period_end, type: date, constraints: {nullable: false}}
+              - column: {name: due_date, type: date, constraints: {nullable: false}}
+              - column: {name: billed_amount, type: "decimal(19,2)", constraints: {nullable: false}}
+              - column: {name: currency, type: varchar(3), constraints: {nullable: false}}
+              - column: {name: purpose, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: bil_instalment
+            columnNames: policy_ref, period_start
+            constraintName: uk_bil_instalment_period
+        - createTable:
+            tableName: bil_allocation
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_bil_allocation_ref}}
+              - column: {name: instalment_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_bil_allocation_instalment, references: bil_instalment(id)}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: source_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: source_ref, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: amount, type: "decimal(19,2)", constraints: {nullable: false}}
+              - column: {name: allocated_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: allocated_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: reversed_by, type: varchar(100)}
+              - column: {name: reversed_at, type: datetime}
+              - column: {name: reversal_ref, type: varchar(20)}
+        - createIndex:
+            tableName: bil_allocation
+            indexName: ix_bil_allocation_source
+            columns:
+              - column: {name: source_type}
+              - column: {name: source_ref}
+        - createTable:
+            tableName: bil_adjustment
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_bil_adjustment_ref}}
+              - column: {name: instalment_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_bil_adjustment_instalment, references: bil_instalment(id)}}
+              - column: {name: amount, type: "decimal(19,2)", constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: made_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: made_at, type: datetime, constraints: {nullable: false}}
+
+  - changeSet:
+      id: 062-receipt-reversal
+      author: nsure
+      comment: >-
+        NS-SH04-002/005, AT-SH04-02: a returned, reversed or charged-back receipt is never deleted. The reversal is its
+        own record; the period's premium record is marked not live so the period can be paid again.
+      changes:
+        - createTable:
+            tableName: bil_receipt_reversal
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_bil_reversal_ref}}
+              - column: {name: receipt_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_bil_reversal_receipt}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: kind, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: amount, type: "decimal(19,2)", constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: transaction_id, type: bigint}
+              - column: {name: reversed_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: reversed_at, type: datetime, constraints: {nullable: false}}
+        - addColumn:
+            tableName: premium_payment
+            columns:
+              - column: {name: live, type: int, defaultValueNumeric: 1}
+        # The new key comes first: MySQL keeps the old one while the policy foreign key needs an index on policy_id.
+        - addUniqueConstraint:
+            tableName: premium_payment
+            columnNames: policy_id, period_start, live
+            constraintName: ux_premium_payment_live_period
+        - dropUniqueConstraint:
+            tableName: premium_payment
+            constraintName: ux_premium_payment_period
+        - sql:
+            sql: >-
+              INSERT INTO fin_posting_rule (event_type, debit_account, credit_account, amount_field, business_domain,
+              description, status, version, updated_by, updated_at) VALUES
+              ('PaymentReturned', '4000', '1000', 'amount', 'INDIVIDUAL', 'Premium receipt returned or charged back',
+              'ACTIVE', 1, 'system', CURRENT_TIMESTAMP)
+
+  - changeSet:
+      id: 062-suspense-split
+      author: nsure
+      comment: >-
+        NS-SH04-003: cash in suspense can be split across policies and part-applied; what is not applied stays in
+        suspense as an unapplied balance.
+      changes:
+        - addColumn:
+            tableName: int_inbound_message
+            columns:
+              - column: {name: allocated_amount, type: "decimal(15,2)", defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: clearance_allocations, type: varchar(2000)}
+
+  - changeSet:
+      id: 062-statement-reconciliation
+      author: nsure
+      comment: >-
+        NS-SH04-006: a provider or bank statement reconciled to receipts; missing, duplicate, amount/currency mismatch
+        and not-yet-on-statement items stay open with an owner and their age.
+      changes:
+        - createTable:
+            tableName: bil_statement
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_bil_statement_ref}}
+              - column: {name: provider, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: period_from, type: date, constraints: {nullable: false}}
+              - column: {name: period_to, type: date, constraints: {nullable: false}}
+              - column: {name: uploaded_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: uploaded_at, type: datetime, constraints: {nullable: false}}
+        - createTable:
+            tableName: bil_recon_item
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: statement_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_bil_recon_statement, references: bil_statement(id)}}
+              - column: {name: side, type: varchar(10), constraints: {nullable: false}}
+              - column: {name: line_no, type: int}
+              - column: {name: provider_ref, type: varchar(120), constraints: {nullable: false}}
+              - column: {name: amount, type: "decimal(19,2)"}
+              - column: {name: currency, type: varchar(3)}
+              - column: {name: value_date, type: date}
+              - column: {name: status, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: matched_type, type: varchar(30)}
+              - column: {name: matched_ref, type: varchar(120)}
+              - column: {name: expected_amount, type: "decimal(19,2)"}
+              - column: {name: owner, type: varchar(100)}
+              - column: {name: resolved_by, type: varchar(100)}
+              - column: {name: resolved_at, type: datetime}
+              - column: {name: resolution, type: varchar(500)}
+
+  - changeSet:
+      id: 062-claim-life-evidence-reserve-limits
+      author: nsure
+      comment: >-
+        NS-SH05-001/003/005: a claim names the covered life it is for; product evidence is tracked against a checklist;
+        a case reserve moves with the claim; per-life and policy limits are reserved at approval and consumed on
+        settlement.
+      changes:
+        - addColumn:
+            tableName: ins_claim
+            columns:
+              - column: {name: covered_life_id, type: bigint}
+              - column: {name: covered_life_name, type: varchar(200)}
+              - column: {name: reserve_amount, type: "decimal(19,2)", defaultValueNumeric: 0, constraints: {nullable: false}}
+        - createTable:
+            tableName: clm_reserve_movement
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: claim_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: change_amount, type: "decimal(19,2)", constraints: {nullable: false}}
+              - column: {name: balance, type: "decimal(19,2)", constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - createIndex:
+            tableName: clm_reserve_movement
+            indexName: ix_clm_reserve_claim
+            columns:
+              - column: {name: claim_ref}
+        - createTable:
+            tableName: clm_limit_entry
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: life_key, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: claim_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: entry, type: varchar(12), constraints: {nullable: false}}
+              - column: {name: amount, type: "decimal(19,2)", constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - createIndex:
+            tableName: clm_limit_entry
+            indexName: ix_clm_limit_policy
+            columns:
+              - column: {name: policy_ref}
+        - createTable:
+            tableName: clm_evidence_requirement
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: product, type: varchar(100)}
+              - column: {name: claim_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: document_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: mandatory, type: int, constraints: {nullable: false}}
+              - column: {name: display_order, type: int, constraints: {nullable: false}}
+        - sql:
+            sql: >-
+              INSERT INTO clm_evidence_requirement (product, claim_type, document_type, mandatory, display_order) VALUES
+              (NULL, 'Death benefit', 'Death certificate', 1, 1),
+              (NULL, 'Death benefit', 'Identity document', 1, 2),
+              (NULL, 'Death benefit', 'Signed declaration', 0, 3),
+              (NULL, 'Funeral benefit', 'Death certificate', 1, 1),
+              (NULL, 'Funeral benefit', 'Identity document', 1, 2),
+              (NULL, 'Disability benefit', 'Medical report', 1, 1),
+              (NULL, 'Disability benefit', 'Identity document', 1, 2),
+              (NULL, 'Hospital admission', 'Hospital bill', 1, 1),
+              (NULL, 'Hospital admission', 'Medical report', 0, 2)
+        - sql:
+            sql: >-
+              UPDATE ins_claim SET reserve_amount = COALESCE(payout_amount, amount)
+              WHERE status IN ('Initiated', 'Under Review', 'Recommended', 'Approved', 'Payout Sent', 'Payout Failed')
+
+  - changeSet:
+      id: 062-backfill-collected-premiums
+      author: nsure
+      comment: >-
+        Premiums collected before the due schedule existed get their settled instalment and allocation, so paid-to
+        and history are worked out the same way for every policy. References carry an H (historic) to stay apart from
+        the running series.
+      changes:
+        - sql:
+            sql: >-
+              INSERT INTO bil_instalment (record_ref, policy_ref, customer_ref, period_start, period_end, due_date,
+              billed_amount, currency, purpose, status, row_version, created_by, created_at)
+              SELECT CONCAT('BIL-H', p.id), p.policy_ref, p.customer_ref, p.period_start, p.period_end, p.period_start,
+              p.amount, p.currency, 'HISTORIC', 'PAID', 0, 'migration', CURRENT_TIMESTAMP
+              FROM premium_payment p
+              WHERE p.status = 'SUCCESSFUL'
+              AND NOT EXISTS (SELECT 1 FROM bil_instalment i WHERE i.policy_ref = p.policy_ref
+              AND i.period_start = p.period_start)
+        - sql:
+            sql: >-
+              INSERT INTO bil_allocation (record_ref, instalment_id, policy_ref, source_type, source_ref, amount,
+              allocated_by, allocated_at)
+              SELECT CONCAT('ALC-H', p.id), i.id, p.policy_ref, 'RECEIPT', p.receipt_ref, p.amount, 'migration', p.paid_at
+              FROM premium_payment p JOIN bil_instalment i ON i.record_ref = CONCAT('BIL-H', p.id)
+              WHERE p.status = 'SUCCESSFUL' AND p.receipt_ref IS NOT NULL

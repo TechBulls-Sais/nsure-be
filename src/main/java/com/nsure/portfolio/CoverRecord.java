@@ -27,8 +27,9 @@ public abstract class CoverRecord {
     @Column(nullable = false, length = 100)
     private String product;
 
-    @Column(nullable = false)
-    private int amount;
+    /** Sum assured or claim amount, in pula and thebe (NS-DAT-003). */
+    @Column(nullable = false, precision = 19, scale = 2)
+    private BigDecimal amount;
 
     /** Monthly premium in pula and thebe; on a rate-table plan it is the sum of the covered lives' rates. */
     @Column(nullable = false, precision = 12, scale = 2)
@@ -79,11 +80,11 @@ public abstract class CoverRecord {
         this.product = product;
     }
 
-    public int getAmount() {
+    public BigDecimal getAmount() {
         return amount;
     }
 
-    public void setAmount(int amount) {
+    public void setAmount(BigDecimal amount) {
         this.amount = amount;
     }
 

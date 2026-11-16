@@ -3,6 +3,7 @@ package com.nsure.portfolio;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
@@ -129,8 +130,23 @@ public class InsuranceClaim extends CoverRecord {
     @Column(name = "check_rules_version", nullable = false)
     private int checkRulesVersion = 1;
 
-    @Column(name = "payout_amount")
-    private Integer payoutAmount;
+    // NS-SH05-001: the covered life the claim is for (null id: the policyholder), and the current case reserve.
+    @Column(name = "covered_life_id")
+    private Long coveredLifeId;
+
+    @Column(name = "covered_life_name", length = 200)
+    private String coveredLifeName;
+
+    @Column(name = "reserve_amount", nullable = false, precision = 19, scale = 2)
+    private BigDecimal reserveAmount = BigDecimal.ZERO;
+
+    // Optimistic locking (NS-TXN-001): a write based on a stale copy is refused with 409, never overwrites.
+    @jakarta.persistence.Version
+    @Column(name = "row_version", nullable = false)
+    private long rowVersion;
+
+    @Column(name = "payout_amount", precision = 19, scale = 2)
+    private BigDecimal payoutAmount;
 
     @Column(name = "payout_reference", length = 60)
     private String payoutReference;
@@ -418,11 +434,11 @@ public class InsuranceClaim extends CoverRecord {
         this.checkOverrideReason = checkOverrideReason;
     }
 
-    public Integer getPayoutAmount() {
+    public BigDecimal getPayoutAmount() {
         return payoutAmount;
     }
 
-    public void setPayoutAmount(Integer payoutAmount) {
+    public void setPayoutAmount(BigDecimal payoutAmount) {
         this.payoutAmount = payoutAmount;
     }
 
@@ -434,8 +450,46 @@ public class InsuranceClaim extends CoverRecord {
         return paidAt;
     }
 
-    public void pay(String reference) {
+    /** The payout instruction is with the provider; it is not paid until the provider confirms it. */
+    public void sendPayout(String reference) {
         this.payoutReference = reference;
+        this.paidAt = null;
+    }
+
+    /** The provider confirmed the payout settled. */
+    public void confirmPayout() {
         this.paidAt = LocalDateTime.now();
+    }
+
+    public long getRowVersion() {
+        return rowVersion;
+    }
+
+    public Long getCoveredLifeId() {
+        return coveredLifeId;
+    }
+
+    public String getCoveredLifeName() {
+        return coveredLifeName;
+    }
+
+    void coveredLife(Long id, String name) {
+        this.coveredLifeId = id;
+        this.coveredLifeName = name;
+    }
+
+    public BigDecimal getReserveAmount() {
+        return reserveAmount;
+    }
+
+    void setReserveAmount(BigDecimal reserveAmount) {
+        this.reserveAmount = reserveAmount;
+    }
+
+    /** A rejected claim is reviewed again: the earlier decision stays in the history, not on the claim. */
+    void reopen() {
+        this.adjudicatedBy = null;
+        this.resolvedAt = null;
+        this.rejectionReason = null;
     }
 }

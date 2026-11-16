@@ -134,7 +134,7 @@ class RateTableApiTest {
                 .andExpect(jsonPath("$.message").value("You authored this rate version, so you cannot also publish it. "
                         + "A second approver must action it."));
         mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/3/reject").with(httpBasic("actuary", "password")))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/3/reject")
                         .with(httpBasic("actuary", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -156,7 +156,7 @@ class RateTableApiTest {
                                   {"lifeType":"Main Insured","ageFrom":35,"ageTo":65,"coverAmount":90000,"monthlyPremium":0}
                                 ]}
                                 """))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(Matchers.containsString(
                         "Row 1: 'Spouse' is not in the Life Assured Rules of plan 'Bronze'. Allowed: Main Insured")))
                 .andExpect(jsonPath("$.message").value(Matchers.containsString("Row 3: premium must be greater than 0")))
@@ -179,7 +179,7 @@ class RateTableApiTest {
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"name":"Naledi Kgosi","product":"Family Funeral","tier":"Bronze","premium":1}
+                                {"declarationAccepted":true,"disclosures":{"TOBACCO":"NO","TREATMENT":"NO"},"name":"Naledi Kgosi","product":"Family Funeral","tier":"Bronze","premium":1}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.rateTableVersion").value("RT-00001-v1"))

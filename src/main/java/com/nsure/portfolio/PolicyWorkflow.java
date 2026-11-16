@@ -63,9 +63,14 @@ public class PolicyWorkflow {
     private final WorkflowHistory history;
     private final Outbox outbox;
     private final ReferenceNumbers references;
+    private final com.nsure.collections.BillingService billing;
+
+    private final ProductTerms productTerms;
 
     public PolicyWorkflow(EntityManager em, ControlService controls, WorkflowHistory history, Outbox outbox,
-            ReferenceNumbers references) {
+            ReferenceNumbers references, com.nsure.collections.BillingService billing, ProductTerms productTerms) {
+        this.productTerms = productTerms;
+        this.billing = billing;
         this.references = references;
         this.em = em;
         this.controls = controls;
@@ -77,6 +82,8 @@ public class PolicyWorkflow {
     void openPending(InsurancePolicy policy) {
         policy.setStatus(PENDING_PAYMENT);
         policy.setPaymentDueBy(LocalDateTime.now().plusHours(paymentWindowHours()));
+        // The terms it is sold under today stay with it for life (NS-SH02-004, NS-IL03-001).
+        productTerms.pin(policy);
     }
 
     /** Logged once the new policy has its id and reference. */
@@ -127,7 +134,7 @@ public class PolicyWorkflow {
                 policy.setStatus(ACTIVE);
                 policy.setPaymentDueBy(null);
                 policy.setRecordDate(today.format(DISPLAY));
-                CustomerAccount account = account(policy.getCustomerName());
+                CustomerAccount account = account(policy);
                 account.setPolicyCount(account.getPolicyCount() + 1);
                 account.setProduct(policy.getProduct());
                 em.createQuery("select p from InsuranceProduct p where p.name = :name", InsuranceProduct.class)
@@ -142,15 +149,16 @@ public class PolicyWorkflow {
                 LocalDate from = policy.getNextPremiumDue() == null ? today : policy.getNextPremiumDue();
                 LocalDate next = from.plusMonths(months(policy));
                 policy.setNextPremiumDue(next);
-                policy.setGracePeriodEnd(next.plusDays(product(policy).getGracePeriodDays()));
+                policy.setGracePeriodEnd(next.plusDays(terms(policy).getGracePeriodDays()));
                 details = "Premium " + bwp(policy.getPremium()) + " by " + paymentMethod + " · next due " + next;
             }
             case ACTIVE_NO_COVER -> {
                 // TC-18: cover resumes immediately; the original cover start stands, so no new waiting period.
+                billing.waiveBefore(policy.getRef(), today, actor);
                 LocalDate next = today.plusMonths(months(policy));
                 policy.setStatus(ACTIVE);
                 policy.setNextPremiumDue(next);
-                policy.setGracePeriodEnd(next.plusDays(product(policy).getGracePeriodDays()));
+                policy.setGracePeriodEnd(next.plusDays(terms(policy).getGracePeriodDays()));
                 details = "Premium " + bwp(policy.getPremium()) + " by " + paymentMethod
                         + " · cover resumed from " + today + " with no new waiting period · next due " + next;
             }
@@ -159,12 +167,15 @@ public class PolicyWorkflow {
         }
         policy.setPaymentMethod(paymentMethod);
         String receiptRef = receipt(policy, paymentMethod);
+        // The receipt settles the period's instalment on the due schedule (NS-SH04-001/003).
+        billing.collect(policy, period.start(), period.end(), period.purpose(), receiptRef, actor);
         em.persist(new PremiumPayment(policy, period.start(), period.end(), paymentMethod, receiptRef, transactionId,
                 actor));
         boolean first = PENDING_PAYMENT.equals(previous);
+        // Cover applies from its start date on a first premium, and from today when a premium resumes it.
         history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(),
                 first ? "Payment Received" : "Premium Received",
-                previous, policy.getStatus(), details, actor);
+                previous, policy.getStatus(), details, actor, first ? policy.getCoverStartDate() : today);
         // Downstream effects (subledger, commission, reinsurance, messages) follow from these events, after commit.
         if (first) {
             Map<String, Object> issued = new LinkedHashMap<>();
@@ -173,6 +184,12 @@ public class PolicyWorkflow {
             issued.put("product", policy.getProduct());
             issued.put("sumAssured", policy.getAmount());
             issued.put("premium", policy.getPremium().toPlainString());
+            // The versions the contract was issued under (NS-API-003): consumers never look them up later.
+            issued.put("productVersion", terms(policy).getLabel());
+            issued.put("productVersionId", policy.getProductVersionId());
+            issued.put("rateTableVersion", policy.getRateTableVersion());
+            issued.put("quoteRef", policy.getQuoteRef());
+            issued.put("quoteVersion", policy.getQuoteVersion());
             outbox.publish(Events.POLICY_ISSUED, ref, issued, actor);
         }
         Map<String, Object> premium = new LinkedHashMap<>();
@@ -259,11 +276,13 @@ public class PolicyWorkflow {
         policy.setStatus(CANCELLED);
         policy.setPaymentDueBy(null);
         policy.review(actor, note);
+        // Cover runs to the end of the day it is cancelled: the cancellation applies from the next day.
         history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Cancelled", previous,
                 CANCELLED, PENDING_PAYMENT.equals(previous) ? note
                         : (coolingOff ? "Cooling-off cancellation within " + COOLING_OFF_DAYS
                                 + " days of the policy start: premiums refundable unless an insured event occurred · "
-                                : "Cancelled on the policyholder's written request · ") + note, actor);
+                                : "Cancelled on the policyholder's written request · ") + note, actor,
+                LocalDate.now().plusDays(1));
         outbox.publish(Events.POLICY_CANCELLED, ref, Map.of("policyRef", ref, "customerName",
                 policy.getCustomerName(), "product", policy.getProduct(), "reason", note), actor);
         return policy;
@@ -298,12 +317,17 @@ public class PolicyWorkflow {
                 .getResultList();
         List<String> moved = new java.util.ArrayList<>();
         for (InsurancePolicy policy : overdue) {
+            // NS-SH04-004: money that may still arrive or be applied holds the cover decision.
+            if (!billing.unresolvedPayments(policy.getRef()).isEmpty()) {
+                continue;
+            }
             policy.setStatus(ACTIVE_NO_COVER);
+            // Cover ended the day after grace ran out, whenever the sweep notices it (NS-DAT-002).
             history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Cover Ended", ACTIVE,
                     ACTIVE_NO_COVER, "Grace period ended " + policy.getGracePeriodEnd() + " with the premium due "
                             + policy.getNextPremiumDue() + " unpaid. The policy stays in force without cover for "
                             + NO_COVER_MONTHS + " months; paying resumes cover with no new waiting period.",
-                    WorkflowHistory.SYSTEM);
+                    WorkflowHistory.SYSTEM, policy.getGracePeriodEnd().plusDays(1));
             moved.add(policy.getRef());
         }
         List<InsurancePolicy> noCover = em.createQuery(
@@ -312,7 +336,8 @@ public class PolicyWorkflow {
                 .getResultList();
         for (InsurancePolicy policy : noCover) {
             LocalDate coverEnd = policy.getNextPremiumDue() != null ? policy.getNextPremiumDue() : policy.getGracePeriodEnd();
-            if (coverEnd == null || !coverEnd.plusMonths(NO_COVER_MONTHS).isBefore(today)) {
+            if (coverEnd == null || !coverEnd.plusMonths(NO_COVER_MONTHS).isBefore(today)
+                    || !billing.unresolvedPayments(policy.getRef()).isEmpty()) {
                 continue;
             }
             policy.setStatus(LAPSED);
@@ -332,7 +357,7 @@ public class PolicyWorkflow {
      */
     void terminateIfClaimEndsCover(InsurancePolicy policy, InsuranceClaim claim, String actor) {
         if (!Set.of(ACTIVE, ACTIVE_NO_COVER).contains(policy.getStatus())
-                || claim.getPayoutAmount() == null || claim.getPayoutAmount() < policy.getAmount()) {
+                || claim.getPayoutAmount() == null || claim.getPayoutAmount().compareTo(policy.getAmount()) < 0) {
             return;
         }
         boolean spouseCovered = em.createQuery("select count(l) from PolicyLifeCover l where l.policy = :policy"
@@ -347,8 +372,15 @@ public class PolicyWorkflow {
         }
         String previous = policy.getStatus();
         policy.setStatus(CLAIMED);
+        // The claim's event ended the cover: nothing after it is covered.
+        LocalDate ended;
+        try {
+            ended = LocalDate.parse(claim.getEventDate().trim()).plusDays(1);
+        } catch (RuntimeException unparseable) {
+            ended = LocalDate.now().plusDays(1);
+        }
         history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Claimed", previous, CLAIMED,
-                "Ended by claim " + claim.getRef() + " (TC-24)", actor);
+                "Ended by claim " + claim.getRef() + " (TC-24)", actor, ended);
     }
 
     boolean expireIfOverdue(InsurancePolicy policy) {
@@ -372,7 +404,7 @@ public class PolicyWorkflow {
                     + "; its beneficiaries can no longer be changed.");
         }
         List<PolicyBeneficiary> existing = beneficiaries(policy);
-        int max = product(policy).getMaxBeneficiaries();
+        int max = terms(policy).getMaxBeneficiaries();
         if (existing.size() >= max) {
             throw new IllegalArgumentException("A " + policy.getProduct() + " policy can have at most " + max
                     + (max == 1 ? " beneficiary." : " beneficiaries."));
@@ -398,21 +430,39 @@ public class PolicyWorkflow {
                 .filter(item -> item.getId().equals(beneficiaryId))
                 .findFirst()
                 .orElseThrow(() -> new NotFoundException("Beneficiary " + beneficiaryId + " is not on " + ref));
-        em.remove(row);
-        if (row.isPrimary()) {
+        boolean wasPrimary = row.isPrimary();
+        // NS-DAT-002: end-dated, not deleted. They stop being a beneficiary now, so the roster drops them at once,
+        // but they remain the beneficiary of record for anything that happened before today.
+        LocalDate from = LocalDate.now();
+        row.remove(from, actor);
+        if (wasPrimary) {
             beneficiaries(policy).stream().filter(item -> !item.getId().equals(beneficiaryId)).findFirst()
                     .ifPresent(next -> next.setPrimary(true));
         }
         history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Beneficiary Removed",
-                policy.getStatus(), policy.getStatus(), row.getFullName(), actor);
+                policy.getStatus(), policy.getStatus(), row.getFullName() + " (" + row.getRelationship()
+                        + "), no longer a beneficiary from " + from, actor, from);
     }
 
+    /** The beneficiaries designated now. */
     List<PolicyBeneficiary> beneficiaries(InsurancePolicy policy) {
+        return em.createQuery(
+                        "select b from PolicyBeneficiary b where b.policy = :policy and b.removedFrom is null"
+                                + " order by b.displayOrder, b.id", PolicyBeneficiary.class)
+                .setParameter("policy", policy)
+                .getResultList();
+    }
+
+    /** The beneficiaries designated on {@code date}, including any removed since (NS-SH05-002). */
+    List<PolicyBeneficiary> beneficiariesOn(InsurancePolicy policy, LocalDate date) {
         return em.createQuery(
                         "select b from PolicyBeneficiary b where b.policy = :policy order by b.displayOrder, b.id",
                         PolicyBeneficiary.class)
                 .setParameter("policy", policy)
-                .getResultList();
+                .getResultList()
+                .stream()
+                .filter(b -> b.inForceOn(date))
+                .toList();
     }
 
     /** A beneficiary as sent by a form; validated before anything is stored. */
@@ -467,6 +517,11 @@ public class PolicyWorkflow {
                 .orElseThrow(() -> new NotFoundException("Policy " + ref + " not found"));
     }
 
+    /** The product terms version the policy was issued under: its waiting period, grace, beneficiary limit, wording. */
+    public ProductVersion terms(InsurancePolicy policy) {
+        return productTerms.of(policy);
+    }
+
     InsuranceProduct product(InsurancePolicy policy) {
         return em.createQuery("select p from InsuranceProduct p where p.name = :name", InsuranceProduct.class)
                 .setParameter("name", policy.getProduct())
@@ -481,12 +536,34 @@ public class PolicyWorkflow {
         LocalDate next = months > 0 ? start.plusMonths(months) : start.plusYears(1);
         policy.setCoverStartDate(start);
         policy.setNextPremiumDue(next);
-        policy.setGracePeriodEnd(next.plusDays(product(policy).getGracePeriodDays()));
+        policy.setGracePeriodEnd(next.plusDays(terms(policy).getGracePeriodDays()));
         policy.setLapseDate(null);
     }
 
+    /**
+     * A receipt was returned or reversed (AT-SH04-02): the policy is paid only up to its first unsettled period, and
+     * grace runs from there. When that grace is already over, cover ends now; otherwise the daily sweep decides.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void reviewCoverAfterReversal(InsurancePolicy policy, LocalDate unpaidFrom, String reason, String actor) {
+        String previous = policy.getStatus();
+        LocalDate graceEnd = unpaidFrom.plusDays(terms(policy).getGracePeriodDays());
+        policy.setNextPremiumDue(unpaidFrom);
+        policy.setGracePeriodEnd(graceEnd);
+        String detail = reason + " · paid to " + unpaidFrom.minusDays(1) + "; grace ends " + graceEnd;
+        LocalDate effective = LocalDate.now();
+        if (ACTIVE.equals(previous) && graceEnd.isBefore(LocalDate.now())) {
+            policy.setStatus(ACTIVE_NO_COVER);
+            // The cover ended when that grace ran out, in the past; recorded now, effective then (NS-DAT-002).
+            effective = graceEnd.plusDays(1);
+            detail += " · grace was already over, so cover ended on " + graceEnd;
+        }
+        history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Cover Review", previous,
+                policy.getStatus(), detail, actor, effective);
+    }
+
     /** Months one premium pays for, from the tier's premium frequency; monthly when the policy has no tier. */
-    int months(InsurancePolicy policy) {
+    public int months(InsurancePolicy policy) {
         String frequency = policy.getTier() == null ? null : em.createQuery(
                         "select t.premiumFrequency from CoverTier t where t.product.name = :product and t.name = :tier",
                         String.class)
@@ -516,7 +593,7 @@ public class PolicyWorkflow {
         row.setCustomerName(policy.getCustomerName());
         row.setCustomerRef(policy.getCustomerRef());
         row.setProduct(policy.getProduct());
-        row.setAmount(policy.getPremium().setScale(0, RoundingMode.UP).intValue());
+        row.setAmount(policy.getPremium().setScale(2, RoundingMode.HALF_UP));
         row.setPremium(BigDecimal.ZERO);
         row.setStatus("Paid");
         row.setRecordDate(LocalDate.now().format(DISPLAY));
@@ -525,15 +602,13 @@ public class PolicyWorkflow {
         return row.getRef();
     }
 
-    private CustomerAccount account(String customerName) {
-        return em.createQuery(
-                        "select c from CustomerAccount c where c.name = :name order by c.displayOrder asc",
-                        CustomerAccount.class)
-                .setParameter("name", customerName)
-                .setMaxResults(1)
+    /** The policy's customer by reference, never by display name (NS-SH01-001). */
+    private CustomerAccount account(InsurancePolicy policy) {
+        return em.createQuery("select c from CustomerAccount c where c.ref = :ref", CustomerAccount.class)
+                .setParameter("ref", policy.getCustomerRef())
                 .getResultStream()
                 .findFirst()
-                .orElseThrow(() -> new NotFoundException("Customer " + customerName + " not found"));
+                .orElseThrow(() -> new NotFoundException("Customer " + policy.getCustomerRef() + " not found"));
     }
 
     static String paymentMethod(String method) {

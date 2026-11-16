@@ -49,6 +49,16 @@ public final class Events {
     /** Template event type for approved bulk operational notices; never published on the bus. */
     public static final String OPERATIONAL_NOTICE = "OperationalNotice";
 
+    // Individual new business (spec IL01).
+    public static final String APPLICATION_SUBMITTED = "ApplicationSubmitted";
+    public static final String OFFER_ACCEPTED = "OfferAccepted";
+
+    // Collections and claims (spec SH04, SH05).
+    public static final String INVOICE_ISSUED = "InvoiceIssued";
+    public static final String RECEIPT_ALLOCATED = "ReceiptAllocated";
+    public static final String PAYMENT_RETURNED = "PaymentReturned";
+    public static final String BENEFIT_LIMIT_CONSUMED = "BenefitLimitConsumed";
+
     private Events() {
     }
 }

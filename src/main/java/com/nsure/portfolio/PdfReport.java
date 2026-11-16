@@ -275,7 +275,8 @@ final class PdfReport {
     }
 
     static String money(Number amount) {
-        return "BWP " + String.format(Locale.ENGLISH, "%,.2f", amount.doubleValue()).replace(".00", "");
+        Object exact = amount instanceof java.math.BigDecimal decimal ? decimal : amount.doubleValue();
+        return "BWP " + String.format(Locale.ENGLISH, "%,.2f", exact).replace(".00", "");
     }
 
     // ── layout ───────────────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,43 @@
+databaseChangeLog:
+  # Versioning verification §3 defects 1 and 4: cover was judged on when a change was recorded, and a removed
+  # beneficiary was deleted outright (NS-DAT-002, NS-SH05-002, AT-SH05-01).
+  - changeSet:
+      id: 068-workflow-log-effective-date
+      author: nsure
+      comment: >-
+        A transition now records the day it applies to the business as well as the day it was recorded. Existing
+        entries are backfilled from their recorded day, which is what they were previously judged on.
+      changes:
+        - addColumn:
+            tableName: workflow_log
+            columns:
+              - column: {name: effective_date, type: date}
+        - sql:
+            sql: UPDATE workflow_log SET effective_date = CAST(performed_at AS DATE) WHERE effective_date IS NULL
+  - changeSet:
+      id: 068-beneficiary-dates
+      author: nsure
+      comment: >-
+        A beneficiary designation is dated and end-dated instead of deleted, so a claim is matched against the
+        beneficiaries registered on its event date. Existing designations count from the policy's cover start (or
+        its record date when it has none), which is the earliest they could have applied.
+      changes:
+        - addColumn:
+            tableName: ins_policy_beneficiary
+            columns:
+              - column: {name: effective_from, type: date}
+              - column: {name: recorded_at, type: datetime}
+              - column: {name: removed_from, type: date}
+              - column: {name: removed_by, type: varchar(100)}
+              - column: {name: removed_at, type: datetime}
+        - sql:
+            sql: >-
+              UPDATE ins_policy_beneficiary SET effective_from = COALESCE(
+              (SELECT p.cover_start_date FROM ins_policy p WHERE p.id = ins_policy_beneficiary.policy_id),
+              DATE '2000-01-01') WHERE effective_from IS NULL
+        - createIndex:
+            tableName: ins_policy_beneficiary
+            indexName: ix_beneficiary_policy_dates
+            columns:
+              - column: {name: policy_id}
+              - column: {name: removed_from}

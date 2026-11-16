@@ -4,6 +4,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -67,11 +68,12 @@ class PortfolioApiTest {
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"name":"Lerato Ndlovu","product":"Term Life","amount":250000,"premium":180}
+                                {"declarationAccepted":true,"disclosures":{"TOBACCO":"NO","TREATMENT":"NO"},"customerRef":"CUS-1007","product":"Term Life","amount":250000,"premium":180}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("APP-2049"))
-                .andExpect(jsonPath("$.status").value("Under review"));
+                // NS-IL01-003: identity verification is outstanding while the customer is Pending KYC.
+                .andExpect(jsonPath("$.status").value("Evidence needed"));
 
         mockMvc.perform(put("/portfolio/applications/APP-2049")
                         .with(httpBasic("admin", "password"))
@@ -88,6 +90,13 @@ class PortfolioApiTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("POL-10843"));
+        // NS-IL01-006: a staff issue is an offer; recording the first premium issues cover.
+        mockMvc.perform(post("/portfolio/policies/POL-10843/payments")
+                        .with(httpBasic("admin", "password"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"method\":\"Bank EFT\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Active"));
 
         // A claim is lodged against a policy; its status is the workflow's, never sent by the client.
         mockMvc.perform(post("/portfolio/claims")
@@ -118,12 +127,16 @@ class PortfolioApiTest {
                 .andExpect(jsonPath("$.status").value("Rejected"))
                 .andExpect(jsonPath("$.rejectionReason").value("Duplicate of an earlier claim"));
 
+        // NS-SH04-005: a receipt is never re-statused in place; only a payment or a recorded reversal changes it.
+        String receiptsBefore = mockMvc.perform(get("/portfolio/receipts").with(httpBasic("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
         mockMvc.perform(put("/portfolio/receipts/INV-0091")
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"status\":\"Paid\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("Paid"));
+                .andExpect(status().is4xxClientError());
+        mockMvc.perform(get("/portfolio/receipts").with(httpBasic("admin", "password")))
+                .andExpect(content().json(receiptsBefore));
 
         mockMvc.perform(post("/portfolio/product-configs")
                         .with(httpBasic("admin", "password"))
@@ -144,6 +157,28 @@ class PortfolioApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.name").value("Group Life Plus"))
                 .andExpect(jsonPath("$.version").value(2));
+        // NS-SH02-003, NS-DAT-004: the save replaced nothing; both states are kept.
+        mockMvc.perform(get("/portfolio/product-configs/CFG-004/versions").with(httpBasic("admin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].version").value(2))
+                .andExpect(jsonPath("$[0].snapshot.name").value("Group Life Plus"))
+                .andExpect(jsonPath("$[1].version").value(1))
+                .andExpect(jsonPath("$[1].snapshot.name").value("Group Life"))
+                .andExpect(jsonPath("$[1].status").value("Draft"));
+        // Maker-checker: whoever wrote the content cannot make it Active, and activation cannot carry changes.
+        String reviewed = """
+                {"name":"Group Life Plus","code":"GL-01","status":"Active","benefits":["Death benefit"],"channels":["Broker portal"]}
+                """;
+        mockMvc.perform(put("/portfolio/product-configs/CFG-004").with(httpBasic("admin", "password"))
+                        .contentType(MediaType.APPLICATION_JSON).content(reviewed))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(put("/portfolio/product-configs/CFG-004").with(httpBasic("admin", "password"))
+                        .contentType(MediaType.APPLICATION_JSON).content(reviewed.replace("Group Life Plus", "Group Life Max")))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(post("/portfolio/product-configs").with(httpBasic("admin", "password"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(reviewed.replace("GL-01", "GL-02")))
+                .andExpect(status().isForbidden());
 
         mockMvc.perform(put("/portfolio/applications/APP-0000")
                         .with(httpBasic("admin", "password"))

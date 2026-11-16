@@ -6,7 +6,9 @@ import java.time.LocalDateTime;
 
 /**
  * An outbox event as a handler sees it (spec §10 NS-API-003): references and the minimum data, never documents or
- * secrets. {@code eventId} is the idempotency key a handler stores with whatever it creates.
+ * secrets. {@code eventId} is the idempotency key a handler stores with whatever it creates; {@code aggregateVersion}
+ * is its place in the aggregate's history, and the dispatcher delivers each aggregate's events to a handler in that
+ * order (NS-API-004).
  */
 public record DomainEvent(
         String eventId,
@@ -14,7 +16,15 @@ public record DomainEvent(
         String aggregateRef,
         String correlationId,
         LocalDateTime occurredAt,
-        JsonNode data) {
+        JsonNode data,
+        int schemaVersion,
+        Long aggregateVersion) {
+
+    /** An event built outside the outbox (replays in tests): schema version 1, no aggregate version. */
+    public DomainEvent(String eventId, String eventType, String aggregateRef, String correlationId,
+            LocalDateTime occurredAt, JsonNode data) {
+        this(eventId, eventType, aggregateRef, correlationId, occurredAt, data, 1, null);
+    }
 
     public String text(String field) {
         JsonNode value = data.get(field);

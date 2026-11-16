@@ -53,7 +53,7 @@ class CoverTierApiTest {
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"name":"Naledi Kgosi","product":"Family Funeral","tier":"Bronze"}
+                                {"declarationAccepted":true,"disclosures":{"TOBACCO":"NO","TREATMENT":"NO"},"name":"Naledi Kgosi","product":"Family Funeral","tier":"Bronze"}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.tier").value("Bronze"))
@@ -77,7 +77,7 @@ class CoverTierApiTest {
                         .content("""
                                 {"name":"Amara Dube","product":"Term Life","tier":"Platinum"}
                                 """))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("Tier Platinum is not available for Term Life."));
     }
 }

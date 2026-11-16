@@ -94,15 +94,15 @@ class ConfigurationReleaseApiTest {
 
         String customer = customer("Lorato Phiri", "lorato");
         mockMvc.perform(json(post("/portfolio/policies"), "admin", policy(customer, "{}", null)))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(Matchers.containsString("employerReference")));
         mockMvc.perform(json(post("/portfolio/policies"), "admin",
                         policy(customer, "{\"employerReference\":\"EMP-1\",\"shoeSize\":9}", null)))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(Matchers.containsString("shoeSize")));
         mockMvc.perform(json(post("/portfolio/policies"), "admin",
                         policy(customer, "{\"employerReference\":\"" + "X".repeat(21) + "\"}", null)))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         String issued = mockMvc.perform(json(post("/portfolio/policies"), "admin",
                         policy(customer, "{\"employerReference\":\"EMP-1024\"}", formV1)))
                 .andExpect(status().isOk())
@@ -128,7 +128,7 @@ class ConfigurationReleaseApiTest {
                 .andExpect(status().isConflict());
         mockMvc.perform(json(post("/portfolio/policies"), "admin",
                         policy(customer, "{\"employerReference\":\"EMP-2\"}", null)))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(Matchers.containsString("payrollNumber")));
 
         // The old policy is still edited against its own form: no payroll number needed.
@@ -153,16 +153,16 @@ class ConfigurationReleaseApiTest {
         mockMvc.perform(json(post("/admin/config-releases"), "configurator",
                         "{\"code\":\"BAD-1\",\"description\":\"x\",\"forms\":[{\"product\":\"Term Life\",\"fields\":"
                                 + "[{\"key\":\"premium\",\"type\":\"NUMBER\",\"label\":\"Premium\"}]}]}"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(Matchers.containsString("core policy field")));
         mockMvc.perform(json(post("/admin/config-releases"), "configurator",
                         "{\"code\":\"BAD-2\",\"description\":\"x\",\"forms\":[{\"product\":\"Space Cover\",\"fields\":["
                                 + EMPLOYER + "]}]}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/admin/config-releases"), "configurator",
                         "{\"code\":\"BAD-3\",\"description\":\"x\",\"forms\":[{\"product\":\"Care Cash\",\"fields\":"
                                 + "[{\"key\":\"tierChoice\",\"type\":\"ENUM\",\"label\":\"Choice\",\"allowedValues\":[\"A\"]}]}]}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/admin/config-releases"), "actuary", "{\"code\":\"NOPE\",\"description\":\"x\"}"))
                 .andExpect(status().isForbidden());
 
@@ -171,7 +171,7 @@ class ConfigurationReleaseApiTest {
         long id = draft[0];
         long v = act(id, "submit", "configurator", draft[1], 200);
         mockMvc.perform(json(post("/admin/config-releases/" + id + "/reject"), "actuary", "{\"expectedVersion\":" + v + "}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/admin/config-releases/" + id + "/reject"), "actuary",
                         "{\"expectedVersion\":" + v + ",\"reason\":\"Wording not approved\"}"))
                 .andExpect(status().isOk())

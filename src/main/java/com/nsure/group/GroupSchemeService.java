@@ -179,6 +179,7 @@ public class GroupSchemeService {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("MANAGE_SCHEME");
         GroupScheme scheme = records.lockedScheme(schemeRef);
+        com.nsure.common.ExpectedVersion.check("Scheme " + schemeRef, scheme.getRowVersion());
         String code = GroupRecords.requiredText(body, "code", "Category code", 20).toUpperCase(Locale.ROOT);
         if (!CODE.matcher(code).matches()) {
             throw new IllegalArgumentException("Category code may use only letters, digits, - and _");
@@ -198,6 +199,7 @@ public class GroupSchemeService {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("MANAGE_SCHEME");
         GroupScheme scheme = records.lockedScheme(schemeRef);
+        com.nsure.common.ExpectedVersion.check("Scheme " + schemeRef, scheme.getRowVersion());
         BenefitCategory category = findCategory(scheme, code.toUpperCase(Locale.ROOT));
         if (category == null) {
             throw new NotFoundException("Category " + code + " not found on scheme " + schemeRef);
@@ -278,6 +280,7 @@ public class GroupSchemeService {
         }
         records.lockedScheme(member.getScheme().getRef());
         em.refresh(member);
+        com.nsure.common.ExpectedVersion.check("Member " + member.getMemberKey(), member.getRowVersion());
         if (!SchemeMember.UNDERWRITING_PENDING.equals(member.getStatus())) {
             throw new IllegalArgumentException("Member " + member.getMemberKey() + " has no cover pending underwriting");
         }
@@ -310,6 +313,7 @@ public class GroupSchemeService {
         em.persist(new MemberChange(member, "UNDERWRITING", LocalDate.now(), member.getSalary(), coverBefore, null,
                 decision + (reason == null ? "" : ": " + reason), user.getUsername()));
         records.refreshTotals(member.getScheme());
+        em.flush(); // so the view carries the member's new version (NS-TXN-001)
         return GroupRecords.memberView(member);
     }
 

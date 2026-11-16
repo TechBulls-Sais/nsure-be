@@ -52,9 +52,11 @@ public class FinanceControls {
     private final PolicyWorkflow policies;
     private final Outbox outbox;
     private final ObjectMapper mapper;
+    private final com.nsure.collections.BillingService billing;
 
     public FinanceControls(EntityManager em, PlatformSecurityContext security, Subledger subledger,
-            PolicyWorkflow policies, Outbox outbox, ObjectMapper mapper) {
+            PolicyWorkflow policies, Outbox outbox, ObjectMapper mapper, com.nsure.collections.BillingService billing) {
+        this.billing = billing;
         this.em = em;
         this.security = security;
         this.subledger = subledger;
@@ -162,13 +164,23 @@ public class FinanceControls {
         String action = required(body, "action", 3, 20).toUpperCase(Locale.ROOT);
         String reason = required(body, "reason", 10, 1000);
         String policyRef = null;
+        String plan = null;
         if (ALLOCATE.equals(action)) {
-            policyRef = required(body, "policyRef", 3, 40);
-            allocationProblem(policyRef, receipt.getAmount());
+            JsonNode lines = body.get("allocations");
+            if (lines != null && lines.isArray() && !lines.isEmpty()) {
+                // NS-SH04-003: split across policies, or part-pay an instalment; the rest stays unapplied.
+                List<FinanceViews.SuspenseLine> parsed = lines(lines);
+                checkLines(parsed, receipt.getUnapplied());
+                plan = writeLines(parsed);
+                policyRef = parsed.get(0).policyRef();
+            } else {
+                policyRef = required(body, "policyRef", 3, 40);
+                allocationProblem(policyRef, receipt.getUnapplied());
+            }
         } else if (!REFUND.equals(action)) {
             throw new IllegalArgumentException("Action must be ALLOCATE or REFUND.");
         }
-        receipt.requestClearance(action, policyRef, reason, maker.getUsername());
+        receipt.requestClearance(action, policyRef, plan, reason, maker.getUsername());
         return suspenseView(receipt);
     }
 
@@ -186,16 +198,45 @@ public class FinanceControls {
         data.put("inboundId", receipt.getId());
         data.put("providerRef", receipt.getProviderRef());
         data.put("action", receipt.getClearanceAction());
-        data.put("amount", receipt.getAmount().toPlainString());
         if (ALLOCATE.equals(receipt.getClearanceAction())) {
-            String policyRef = receipt.getClearancePolicyRef();
-            allocationProblem(policyRef, receipt.getAmount());
-            // Suspense receipts arrive through the bank feed; the history records who approved the allocation.
-            policies.pay(policyRef, "Bank EFT", "suspense:" + checker.getUsername());
-            data.put("policyRef", policyRef);
-            receipt.cleared(InboundMessage.APPLIED, policyRef, "Allocated from suspense to " + policyRef + ": "
-                    + receipt.getClearanceReason(), checker.getUsername());
+            List<FinanceViews.SuspenseLine> lines;
+            if (receipt.getClearanceAllocations() == null) {
+                allocationProblem(receipt.getClearancePolicyRef(), receipt.getUnapplied());
+                lines = List.of(new FinanceViews.SuspenseLine(receipt.getClearancePolicyRef(), receipt.getUnapplied()));
+            } else {
+                lines = readLines(receipt.getClearanceAllocations());
+                checkLines(lines, receipt.getUnapplied());
+            }
+            BigDecimal applied = BigDecimal.ZERO;
+            List<String> done = new ArrayList<>();
+            for (FinanceViews.SuspenseLine line : lines) {
+                InsurancePolicy policy = policies.policy(line.policyRef());
+                PolicyWorkflow.Period period = policies.nextPeriod(policy);
+                BigDecimal outstanding = billing.outstandingFor(policy, period.start());
+                if (line.amount().compareTo(outstanding) == 0) {
+                    // Settles the instalment: the premium is collected and cover follows, as for any payment.
+                    policies.pay(line.policyRef(), "Bank EFT", "suspense:" + checker.getUsername());
+                    done.add(line.policyRef() + " BWP " + line.amount().toPlainString() + " (instalment settled)");
+                } else {
+                    billing.applyPart(policy, period.start(), period.end(), period.purpose(), "SUS-" + receipt.getId(),
+                            line.amount(), checker.getUsername());
+                    done.add(line.policyRef() + " BWP " + line.amount().toPlainString() + " (part payment)");
+                }
+                applied = applied.add(line.amount());
+            }
+            data.put("policyRef", lines.get(0).policyRef());
+            BigDecimal left = receipt.getUnapplied().subtract(applied);
+            if (left.signum() == 0) {
+                receipt.applied(applied);
+                receipt.cleared(InboundMessage.APPLIED, lines.get(0).policyRef(), "Allocated from suspense: "
+                        + String.join("; ", done) + " · " + receipt.getClearanceReason(), checker.getUsername());
+            } else {
+                receipt.partlyApplied(applied, "Applied " + String.join("; ", done) + " · BWP " + left.toPlainString()
+                        + " still unapplied");
+            }
+            data.put("amount", applied.toPlainString());
         } else {
+            data.put("amount", receipt.getUnapplied().toPlainString());
             receipt.cleared(InboundMessage.REFUNDED, null, "Refunded from suspense: " + receipt.getClearanceReason(),
                     checker.getUsername());
         }
@@ -243,16 +284,86 @@ public class FinanceControls {
         return receipt;
     }
 
-    /** An allocation must pay exactly the policy's premium; anything else is refunded instead. */
+    /**
+     * A whole-receipt allocation must pay exactly what the policy's next instalment still needs; anything else is
+     * split (allocation lines) or refunded instead.
+     */
     private void allocationProblem(String policyRef, BigDecimal amount) {
+        InsurancePolicy policy = payablePolicy(policyRef);
+        BigDecimal due = billing.outstandingFor(policy, policies.nextPeriod(policy).start());
+        if (due.compareTo(amount) != 0) {
+            throw new IllegalArgumentException("BWP " + amount.toPlainString() + " does not pay the premium of "
+                    + policyRef + " (BWP " + due.toPlainString() + "). Split it or refund it instead.");
+        }
+    }
+
+    /** Each line pays part or all of one policy's next instalment; together they fit in what is unapplied. */
+    private void checkLines(List<FinanceViews.SuspenseLine> lines, BigDecimal unapplied) {
+        BigDecimal total = BigDecimal.ZERO;
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (FinanceViews.SuspenseLine line : lines) {
+            if (!seen.add(line.policyRef())) {
+                throw new IllegalArgumentException(line.policyRef() + " appears twice; put its amount on one line.");
+            }
+            if (line.amount() == null || line.amount().signum() <= 0) {
+                throw new IllegalArgumentException("Each allocation needs an amount above zero.");
+            }
+            InsurancePolicy policy = payablePolicy(line.policyRef());
+            BigDecimal due = billing.outstandingFor(policy, policies.nextPeriod(policy).start());
+            if (line.amount().compareTo(due) > 0) {
+                throw new IllegalArgumentException("BWP " + line.amount().toPlainString() + " is more than the BWP "
+                        + due.toPlainString() + " due on " + line.policyRef() + ".");
+            }
+            total = total.add(line.amount());
+        }
+        if (total.compareTo(unapplied) > 0) {
+            throw new IllegalArgumentException("The allocations total BWP " + total.toPlainString()
+                    + " but only BWP " + unapplied.toPlainString() + " of this receipt is unapplied.");
+        }
+    }
+
+    private InsurancePolicy payablePolicy(String policyRef) {
         InsurancePolicy policy = em.createQuery("select p from InsurancePolicy p where p.ref = :ref",
                         InsurancePolicy.class)
                 .setParameter("ref", policyRef).getResultStream().findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("No policy " + policyRef + "."));
-        if (policy.getPremium() == null || policy.getPremium().compareTo(amount) != 0) {
-            throw new IllegalArgumentException("BWP " + amount.toPlainString() + " does not pay the premium of "
-                    + policyRef + " (BWP " + (policy.getPremium() == null ? "?" : policy.getPremium().toPlainString())
-                    + "). Refund it instead.");
+        policies.nextPeriod(policy);
+        return policy;
+    }
+
+    private List<FinanceViews.SuspenseLine> lines(JsonNode lines) {
+        List<FinanceViews.SuspenseLine> parsed = new ArrayList<>();
+        for (JsonNode line : lines) {
+            String ref = line.hasNonNull("policyRef") ? line.get("policyRef").asText().trim() : "";
+            if (ref.isEmpty()) {
+                throw new IllegalArgumentException("Each allocation needs a policyRef.");
+            }
+            try {
+                parsed.add(new FinanceViews.SuspenseLine(ref,
+                        new BigDecimal(line.path("amount").asText()).setScale(2, RoundingMode.HALF_UP)));
+            } catch (NumberFormatException ex) {
+                throw new IllegalArgumentException("Each allocation needs an amount like 120.50.");
+            }
+        }
+        if (parsed.size() > 20) {
+            throw new IllegalArgumentException("Split a receipt over at most 20 policies.");
+        }
+        return parsed;
+    }
+
+    private String writeLines(List<FinanceViews.SuspenseLine> lines) {
+        try {
+            return mapper.writeValueAsString(lines);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    private List<FinanceViews.SuspenseLine> readLines(String json) {
+        try {
+            return mapper.readValue(json, new TypeReference<List<FinanceViews.SuspenseLine>>() { });
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("The saved allocation lines cannot be read", ex);
         }
     }
 
@@ -266,7 +377,8 @@ public class FinanceControls {
         return new FinanceViews.SuspenseView(m.getId(), m.getProvider(), m.getProviderRef(), m.getBusinessRef(),
                 m.getAmount(), m.getStatus(), m.getDetail(), m.getReceivedAt(), m.getClearanceAction(),
                 m.getClearancePolicyRef(), m.getClearanceReason(), m.getClearanceRequestedBy(),
-                m.getClearanceRequestedAt(), m.getClearedBy(), m.getClearedAt());
+                m.getClearanceRequestedAt(), m.getClearedBy(), m.getClearedAt(), m.getUnapplied(),
+                m.getClearanceAllocations());
     }
 
     private String write(List<FinanceViews.ManualLineView> lines) {

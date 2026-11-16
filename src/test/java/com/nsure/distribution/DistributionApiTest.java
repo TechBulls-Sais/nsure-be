@@ -144,7 +144,7 @@ class DistributionApiTest {
         assign(kept, agent).andExpect(status().isOk());
 
         mockMvc.perform(json(put("/distribution/intermediaries/" + agent), "distribution", "{\"status\":\"SUSPENDED\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(put("/distribution/intermediaries/" + agent), "distribution",
                         "{\"status\":\"SUSPENDED\",\"reason\":\"Complaint under investigation\"}"))
                 .andExpect(status().isOk())
@@ -154,7 +154,7 @@ class DistributionApiTest {
                 .andExpect(jsonPath("$.openAssignments").value(1));
 
         // Refused, and what was already assigned stays as it was.
-        assign(later, agent).andExpect(status().isBadRequest());
+        assign(later, agent).andExpect(status().isUnprocessableEntity());
         mockMvc.perform(get("/distribution/assignments?intermediaryRef=" + agent).with(httpBasic("distribution", "password")))
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].policyRef").value(kept))
@@ -162,11 +162,11 @@ class DistributionApiTest {
         mockMvc.perform(get("/distribution/assignments?policyRef=" + later).with(httpBasic("distribution", "password")))
                 .andExpect(jsonPath("$.length()").value(0));
         // The seeded suspended agent too.
-        assign(later, "INT-00003").andExpect(status().isBadRequest());
+        assign(later, "INT-00003").andExpect(status().isUnprocessableEntity());
 
         // Lapsed needs a reason as well; reinstated, the agent takes business again.
         mockMvc.perform(json(put("/distribution/intermediaries/" + agent), "distribution", "{\"status\":\"LAPSED\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(put("/distribution/intermediaries/" + agent), "distribution", "{\"status\":\"ACTIVE\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.canTakeBusiness").value(true));
@@ -179,7 +179,7 @@ class DistributionApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.canTakeBusiness").value(false));
-        assign(pendingPolicy("Term Life", "Silver"), expired).andExpect(status().isBadRequest());
+        assign(pendingPolicy("Term Life", "Silver"), expired).andExpect(status().isUnprocessableEntity());
 
         assign("POL-99999", agent).andExpect(status().isNotFound());
         assign(kept, "INT-99999").andExpect(status().isNotFound());
@@ -199,7 +199,7 @@ class DistributionApiTest {
         dispatcher.dispatch();
 
         assign(policy, broker).andExpect(status().isOk()).andExpect(jsonPath("$.open").value(true));
-        assign(policy, broker).andExpect(status().isBadRequest());
+        assign(policy, broker).andExpect(status().isUnprocessableEntity());
         mockMvc.perform(get("/distribution/assignments?policyRef=" + policy).with(httpBasic("distribution", "password")))
                 .andExpect(jsonPath("$.length()").value(2))
                 .andExpect(jsonPath("$[0].intermediaryRef").value(broker))
@@ -241,7 +241,7 @@ class DistributionApiTest {
         assertAmount(JsonPath.read(body, "$.netAmount"), accrued);
         // Nothing accrued is left for a second statement.
         mockMvc.perform(json(post("/distribution/statements"), "finance", issue))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
 
         mockMvc.perform(post("/distribution/statements/" + statement + "/pay").with(httpBasic("finance", "password")))
                 .andExpect(status().isOk())
@@ -267,7 +267,7 @@ class DistributionApiTest {
         assertAmount(JsonPath.read(negative, "$.netAmount"), accrued.negate());
         mockMvc.perform(post("/distribution/statements/" + JsonPath.read(negative, "$.ref") + "/pay")
                         .with(httpBasic("finance", "password")))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(get("/distribution/statements").with(httpBasic("distribution", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.ref == '" + statement + "')].status").value("PAID"));
@@ -285,10 +285,10 @@ class DistributionApiTest {
         mockMvc.perform(json(post("/distribution/commission-rules"), "distribution", rule))
                 .andExpect(status().isConflict());
         mockMvc.perform(json(post("/distribution/commission-rules"), "distribution", rule.replace("12.5", "120")))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/distribution/commission-rules"), "distribution",
                         rule.replace("Individual Credit", "Space Cover")))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(get("/distribution/commission-rules").with(httpBasic("distribution", "password")))
                 .andExpect(jsonPath("$[?(@.product == 'Individual Credit' && @.intermediaryType == 'BROKER'"
                         + " && @.current == true)].effectiveFrom").value(today))
@@ -298,7 +298,7 @@ class DistributionApiTest {
         mockMvc.perform(json(post("/distribution/intermediaries"), "distribution",
                         "{\"name\":\"Kopano Agency\",\"type\":\"AGENCY\",\"licenceNumber\":\"X-1\",\"appointmentExpiry\":\""
                                 + LocalDate.now().plusYears(1) + "\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/distribution/intermediaries"), "distribution",
                         "{\"name\":\"Kopano Mmusi\",\"type\":\"AGENT\",\"licenceNumber\":\"NBFIRA-AG-2291\",\"appointmentExpiry\":\""
                                 + LocalDate.now().plusYears(1) + "\"}"))
@@ -306,7 +306,7 @@ class DistributionApiTest {
         mockMvc.perform(json(post("/distribution/intermediaries"), "distribution",
                         "{\"name\":\"Kopano Mmusi\",\"type\":\"AGENT\",\"licenceNumber\":\"X-2\",\"appointmentExpiry\":\""
                                 + LocalDate.now().minusDays(1) + "\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/distribution/intermediaries"), "distribution",
                         "{\"name\":\"Kopano Mmusi\",\"type\":\"AGENT\",\"licenceNumber\":\"X-3\",\"parentRef\":\"INT-00002\","
                                 + "\"appointmentExpiry\":\"" + LocalDate.now().plusYears(1) + "\"}"))

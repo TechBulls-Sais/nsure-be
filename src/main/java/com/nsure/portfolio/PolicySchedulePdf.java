@@ -29,12 +29,13 @@ final class PolicySchedulePdf {
 
     /** {@code premiumMonths}: months one premium pays for; 0 means yearly (as {@link PolicyWorkflow} treats it). */
     static byte[] render(PortfolioViews.CoverView p, CustomerAccount customer, InsuranceProduct product,
-            int premiumMonths, String issuedBy) {
+            ProductVersion terms, int premiumMonths, String issuedBy) {
         int months = premiumMonths <= 0 ? 12 : premiumMonths;
         String per = months == 1 ? "a month" : months == 12 ? "a year" : "every " + months + " months";
         LocalDate coverStart = parse(p.coverStartDate());
-        int waitingDays = product == null ? 0 : product.getWaitingPeriodDays();
-        int graceDays = product == null ? 0 : product.getGracePeriodDays();
+        // The terms the policy was sold under, not whatever the product says today (NS-SH02-004, NS-SH09A-003).
+        int waitingDays = terms == null ? 0 : terms.getWaitingPeriodDays();
+        int graceDays = terms == null ? 0 : terms.getGracePeriodDays();
 
         PdfReport pdf = new PdfReport("Policy schedule " + p.id(), "Policy schedule",
                 p.id() + " · " + p.product() + " · issued " + LocalDateTime.now().format(STAMP) + " by " + issuedBy);
@@ -53,6 +54,7 @@ final class PolicySchedulePdf {
         pdf.row("Policy number", p.id());
         pdf.row("Product", p.product());
         pdf.row("Cover option", blank(p.tier()) ? null : p.tier());
+        pdf.row("Product terms", terms == null ? null : terms.getLabel() + " · " + terms.getWordingRef());
         pdf.row("Status when issued", p.status()
                 + (blank(p.lapseDate()) ? "" : " (lapsed on " + format(parse(p.lapseDate())) + ")"));
         pdf.row("Policy taken out", sameStyle(p.date()));

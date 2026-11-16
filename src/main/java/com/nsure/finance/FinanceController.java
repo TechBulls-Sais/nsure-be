@@ -17,8 +17,11 @@ public class FinanceController {
 
     private final FinanceService finance;
     private final FinanceControls controls;
+    private final com.nsure.audit.evidence.EvidenceChain evidence;
 
-    public FinanceController(FinanceService finance, FinanceControls controls) {
+    public FinanceController(FinanceService finance, FinanceControls controls,
+            com.nsure.audit.evidence.EvidenceChain evidence) {
+        this.evidence = evidence;
         this.controls = controls;
         this.finance = finance;
     }
@@ -33,9 +36,21 @@ public class FinanceController {
         return finance.rules();
     }
 
+    /** Proposes the next version of the rule; it applies only once another user approves it. */
     @PutMapping("/posting-rules/{eventType}")
-    public FinanceViews.RuleView updateRule(@PathVariable String eventType, @RequestBody JsonNode body) {
-        return finance.updateRule(eventType, body);
+    public FinanceViews.RuleView proposeRule(@PathVariable String eventType, @RequestBody JsonNode body) {
+        return finance.proposeRule(eventType, body);
+    }
+
+    @PostMapping("/posting-rules/{eventType}/versions/{version}/approve")
+    public FinanceViews.RuleView approveRule(@PathVariable String eventType, @PathVariable int version) {
+        return finance.approveRule(eventType, version);
+    }
+
+    @PostMapping("/posting-rules/{eventType}/versions/{version}/reject")
+    public FinanceViews.RuleView rejectRule(@PathVariable String eventType, @PathVariable int version,
+            @RequestBody JsonNode body) {
+        return finance.rejectRule(eventType, version, body);
     }
 
     @GetMapping("/journals")
@@ -88,7 +103,10 @@ public class FinanceController {
 
     @PostMapping("/gl-batches")
     public FinanceViews.GlBatchView export() {
-        return finance.exportToGl();
+        FinanceViews.GlBatchView batch = finance.exportToGl();
+        // An export of financial data is audit evidence (NS-SH11-005).
+        evidence.recordNow(null, "Exported GL batch", "GL batch", batch.ref(), null);
+        return batch;
     }
 
     @PostMapping("/gl-batches/{ref}/acknowledge")

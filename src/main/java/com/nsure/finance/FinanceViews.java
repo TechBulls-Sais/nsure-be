@@ -13,9 +13,15 @@ public final class FinanceViews {
     public record AccountView(String code, String name, String accountType) {
     }
 
-    public record RuleView(String eventType, String debitAccount, String creditAccount, String amountField,
-            String domain, String description, String status, int version, String updatedBy,
-            LocalDateTime updatedAt) {
+    /**
+     * One version of a posting rule. {@code effectiveTo} is the last day it applies (inclusive), null while open-ended;
+     * it is before {@code effectiveFrom} when a later version replaced it before it ever applied. {@code updatedBy} /
+     * {@code updatedAt} are who proposed the version and when it was recorded.
+     */
+    public record RuleView(Long id, String eventType, String debitAccount, String creditAccount, String amountField,
+            String domain, String description, String status, int version, LocalDate effectiveFrom,
+            LocalDate effectiveTo, String approvalStatus, boolean inForce, String changeReason, String updatedBy,
+            LocalDateTime updatedAt, String approvedBy, LocalDateTime approvedAt, String rejectionReason) {
     }
 
     public record LineView(int lineNo, String accountCode, String accountName, BigDecimal debit, BigDecimal credit) {
@@ -23,8 +29,8 @@ public final class FinanceViews {
 
     public record JournalView(String ref, String eventType, String sourceRef, String domain, LocalDate eventDate,
             LocalDate accountingDate, String periodCode, String currency, BigDecimal amount, String description,
-            Integer ruleVersion, String status, String reversesRef, String reversedByRef, String glBatchRef,
-            String createdBy, LocalDateTime createdAt, List<LineView> lines) {
+            Integer ruleVersion, Long postingRuleId, String status, String reversesRef, String reversedByRef,
+            String glBatchRef, String createdBy, LocalDateTime createdAt, List<LineView> lines, long version) {
     }
 
     public record PeriodView(String code, String status, String note, String updatedBy, LocalDateTime updatedAt,
@@ -55,7 +61,11 @@ public final class FinanceViews {
     public record SuspenseView(Long id, String provider, String providerRef, String policyRef, BigDecimal amount,
             String status, String detail, LocalDateTime receivedAt, String clearanceAction, String clearancePolicyRef,
             String clearanceReason, String requestedBy, LocalDateTime requestedAt, String clearedBy,
-            LocalDateTime clearedAt) {
+            LocalDateTime clearedAt, BigDecimal unapplied, String allocations) {
+    }
+
+    /** One line of a split suspense allocation (NS-SH04-003). */
+    public record SuspenseLine(String policyRef, BigDecimal amount) {
     }
 
     public record TrialBalanceRow(String code, String name, String accountType, BigDecimal debit, BigDecimal credit,

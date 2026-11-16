@@ -394,15 +394,24 @@ public class CommunicationService {
                 ChannelPreference.class).setParameter("channel", channel).getResultList()) {
             String contact = p.getContact() == null ? "" : p.getContact();
             boolean match = EMAIL.equals(channel) ? contact.trim().equalsIgnoreCase(wanted) : digits(contact).equals(wanted);
-            if (match) {
+            // Only a verified contact links a message to a customer (NS-SH09B-006, AT-SH09B-03).
+            if (match && "Y".equals(p.getVerified())) {
                 em.createQuery("select c from CustomerAccount c where c.ref = :ref", CustomerAccount.class)
                         .setParameter("ref", p.getCustomerRef()).getResultStream().findFirst()
                         .ifPresent(c -> found.put(c.getRef(), c));
             }
         }
+        // The registered email and phone were verified when the customer was onboarded.
         if (EMAIL.equals(channel)) {
             em.createQuery("select c from CustomerAccount c where lower(c.email) = :email", CustomerAccount.class)
                     .setParameter("email", wanted).getResultList().forEach(c -> found.put(c.getRef(), c));
+        } else {
+            for (CustomerAccount c : em.createQuery("select c from CustomerAccount c where c.phone is not null",
+                    CustomerAccount.class).getResultList()) {
+                if (digits(c.getPhone()).equals(wanted)) {
+                    found.put(c.getRef(), c);
+                }
+            }
         }
         return new ArrayList<>(found.values());
     }

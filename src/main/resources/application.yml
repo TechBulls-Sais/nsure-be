@@ -6,7 +6,7 @@ spring:
   application:
     name: nsure-be
   datasource:
-    url: ${NSURE_DB_URL:jdbc:mysql://127.0.0.1:3306/nsure?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8}
+    url: ${NSURE_DB_URL:jdbc:mysql://127.0.0.1:3306/nsure?sslMode=REQUIRED&serverTimezone=UTC&characterEncoding=UTF-8}
     username: ${NSURE_DB_USER:nsure}
     password: ${NSURE_DB_PASSWORD:nsure}
   jpa:
@@ -47,6 +47,13 @@ server:
     include-binding-errors: never
 
 nsure:
+  # Browser sessions (NS-SH11-001): ended after this long without use, and at most this long after sign-in.
+  auth:
+    session-idle-minutes: ${NSURE_SESSION_IDLE_MINUTES:30}
+    session-max-hours: ${NSURE_SESSION_MAX_HOURS:12}
+  integration:
+    # Simulated banks and wallets answer payment status queries (NS-SH04-004); off in shared environments.
+    provider-simulator: true
   # The insurer this installation belongs to. Bound to the database on first start (deployment_identity) and
   # checked on every start and before every migration, so this backend can never run against another insurer's data.
   insurer:
@@ -80,3 +87,7 @@ management:
     web:
       exposure:
         include: health
+# Every log line carries the request's correlation id (NS-API-001), so a support reference finds its trail.
+logging:
+  pattern:
+    level: "%5p [%X{correlationId:-}]"

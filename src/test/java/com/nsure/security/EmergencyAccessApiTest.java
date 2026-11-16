@@ -41,12 +41,12 @@ class EmergencyAccessApiTest {
         assertThat(grant("admin", "admin", "UPDATE_CONTROL", 2, "Self grant during an incident").getStatus())
                 .isEqualTo(403);
         assertThat(grant("admin", "actuary", "READ_CLAIM", 2, "Not a break-glass code at all").getStatus())
-                .isEqualTo(400);
+                .isEqualTo(422);
         assertThat(grant("admin", "actuary", "UPDATE_CONTROL", 9, "Longer than a working day").getStatus())
-                .isEqualTo(400);
-        assertThat(grant("admin", "actuary", "UPDATE_CONTROL", 2, "short").getStatus()).isEqualTo(400);
+                .isEqualTo(422);
+        assertThat(grant("admin", "actuary", "UPDATE_CONTROL", 2, "short").getStatus()).isEqualTo(422);
         assertThat(grant("admin", "customer", "UPDATE_CONTROL", 2, "Customers never get staff powers").getStatus())
-                .isEqualTo(400);
+                .isEqualTo(422);
         assertThat(grant("actuary", "assessor", "UPDATE_CONTROL", 2, "Actuary is not an identity admin").getStatus())
                 .isEqualTo(403);
 
@@ -61,7 +61,7 @@ class EmergencyAccessApiTest {
         // While active it counts as a held permission: the gate opens, the control's own rules still apply.
         String me = body(get("/me"), "actuary");
         assertThat(me).contains("\"UPDATE_CONTROL\"", "\"emergencyAccess\":[{\"permission\":\"UPDATE_CONTROL\"");
-        assertThat(call(put(CONTROL), "actuary", "{\"enabled\":false}").getStatus()).isEqualTo(400);
+        assertThat(call(put(CONTROL), "actuary", "{\"enabled\":false}").getStatus()).isEqualTo(422);
 
         // Alerted: auditors (READ_AUDIT) see it; a user without READ_AUDIT does not.
         assertThat(body(get("/me/alerts"), "compliance")).contains("Emergency access granted: UPDATE_CONTROL");

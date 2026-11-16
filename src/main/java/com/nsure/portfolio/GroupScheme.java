@@ -6,6 +6,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.time.LocalDate;
 
 /**
@@ -19,6 +20,11 @@ public class GroupScheme {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    // Optimistic locking (NS-TXN-001): a write based on a stale copy is refused with 409, never overwrites.
+    @Version
+    @Column(name = "row_version", nullable = false)
+    private long rowVersion;
 
     @Column(name = "record_ref", nullable = false, unique = true, length = 20)
     private String ref;
@@ -137,5 +143,9 @@ public class GroupScheme {
 
     public int getDisplayOrder() {
         return displayOrder;
+    }
+
+    public long getRowVersion() {
+        return rowVersion;
     }
 }

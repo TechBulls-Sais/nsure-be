@@ -24,7 +24,8 @@ import org.springframework.transaction.annotation.Transactional;
  * reference is checked first, so a repeated confirmation returns the existing result. A confirmation that matches a
  * payable policy and its premium is collected through the policy workflow; anything else — unknown policy, wrong
  * amount or currency, a policy that can no longer be paid — goes to suspense and stays visible for reconciliation.
- * Cash is never treated as premium just because a notification arrived (NS-SH04-004).
+ * Cash is never treated as premium just because a notification arrived (NS-SH04-004): the provider is asked
+ * through {@link ProviderStatusClient} first, and a receipt it does not confirm goes to suspense too.
  */
 @Service
 public class PaymentNotifications {
@@ -35,13 +36,15 @@ public class PaymentNotifications {
     private final PlatformSecurityContext security;
     private final PolicyWorkflow policies;
     private final Outbox outbox;
+    private final ProviderStatusClient providerStatus;
 
     public PaymentNotifications(EntityManager em, PlatformSecurityContext security, PolicyWorkflow policies,
-            Outbox outbox) {
+            Outbox outbox, ProviderStatusClient providerStatus) {
         this.em = em;
         this.security = security;
         this.policies = policies;
         this.outbox = outbox;
+        this.providerStatus = providerStatus;
     }
 
     @Transactional
@@ -81,9 +84,13 @@ public class PaymentNotifications {
                 user.getUsername());
         String problem = problem(policyRef, amount, currency);
         if (problem == null) {
+            problem = unconfirmed(provider, providerRef, amount, currency);
+        }
+        if (problem == null) {
             try {
                 policies.pay(policyRef, method, "integration:" + provider);
-                message.outcome(InboundMessage.APPLIED, policyRef, "Premium collected by " + method);
+                message.outcome(InboundMessage.APPLIED, policyRef, "Premium collected by " + method
+                        + "; confirmed by " + provider);
             } catch (IllegalArgumentException ex) {
                 problem = ex.getMessage();
             }
@@ -100,6 +107,25 @@ public class PaymentNotifications {
         }
         em.persist(message);
         return IntegrationService.inbound(message);
+    }
+
+    /** Null when the provider itself confirms it holds this amount under this reference; otherwise why not. */
+    private String unconfirmed(String provider, String providerRef, BigDecimal amount, String currency) {
+        Optional<ProviderStatusClient.ProviderStatus> status = providerStatus.status(provider, providerRef);
+        if (status.isEmpty()) {
+            return provider + " offers no status query: match " + providerRef
+                    + " to the bank statement before allocating it";
+        }
+        ProviderStatusClient.ProviderStatus said = status.get();
+        if (!said.received()) {
+            return provider + " has no record of receiving " + providerRef;
+        }
+        if (said.amount() == null || said.amount().compareTo(amount) != 0 || !currency.equals(said.currency())) {
+            return provider + " confirmed " + said.currency() + " "
+                    + (said.amount() == null ? "?" : said.amount().toPlainString()) + " under " + providerRef
+                    + ", not " + currency + " " + amount.toPlainString();
+        }
+        return null;
     }
 
     private String problem(String policyRef, BigDecimal amount, String currency) {

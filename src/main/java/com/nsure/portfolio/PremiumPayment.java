@@ -9,15 +9,14 @@ import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import org.hibernate.annotations.Immutable;
 
 /**
- * A collected premium for one policy period: the accounting fact (spec 13 S-7). The database holds at most one per
- * policy and period start (unique key), so a premium can never be collected twice for a period, whatever path
- * collected it (spec 01 BR-66, 13 S-9).
+ * A collected premium for one policy period: the accounting fact (spec 13 S-7). The database holds at most one live
+ * collection per policy and period start (unique key), so a premium can never be collected twice for a period,
+ * whatever path collected it (spec 01 BR-66, 13 S-9). Nothing edits it; the only change is {@link #reverse()} when
+ * its receipt is returned, which keeps the record and frees the period (NS-SH04-005).
  */
 @Entity
-@Immutable
 @Table(name = "premium_payment")
 public class PremiumPayment {
 
@@ -63,6 +62,10 @@ public class PremiumPayment {
 
     @Column(name = "paid_at", nullable = false)
     private LocalDateTime paidAt;
+
+    /** 1 while this collection stands; null once its receipt is reversed, so the period can be paid again. */
+    @Column(name = "live")
+    private Integer live = 1;
 
     protected PremiumPayment() {
     }
@@ -134,5 +137,11 @@ public class PremiumPayment {
 
     public LocalDateTime getPaidAt() {
         return paidAt;
+    }
+
+    /** The receipt was returned, reversed or charged back (NS-SH04-005): the record stays, the period reopens. */
+    public void reverse() {
+        this.status = "REVERSED";
+        this.live = null;
     }
 }

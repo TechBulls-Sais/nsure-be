@@ -32,7 +32,9 @@ public class PaymentTransaction {
     public static final String SETTLED = "SETTLED";
     public static final String FAILED = "FAILED";
     public static final String EXPIRED = "EXPIRED";
-    public static final Set<String> TERMINAL = Set.of(SETTLED, FAILED, EXPIRED);
+    /** Settled, then returned or charged back by the provider (NS-SH04-002): the money did not stay. */
+    public static final String RETURNED = "RETURNED";
+    public static final Set<String> TERMINAL = Set.of(SETTLED, FAILED, EXPIRED, RETURNED);
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -183,6 +185,15 @@ public class PaymentTransaction {
     void fail(String reason) {
         this.failureReason = reason;
         this.status = FAILED;
+    }
+
+    /** The provider took the settled money back. Settlement was real once, so the record keeps it; the status says it did not last. */
+    public void returned(String reason) {
+        if (!SETTLED.equals(status)) {
+            throw new IllegalStateException("Only a settled payment can be returned; this one is " + status + ".");
+        }
+        this.failureReason = reason;
+        this.status = RETURNED;
     }
 
     void expire(String reason) {

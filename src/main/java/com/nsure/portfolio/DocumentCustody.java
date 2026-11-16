@@ -1,5 +1,6 @@
 package com.nsure.portfolio;
 
+import com.nsure.audit.evidence.EvidenceChain;
 import com.nsure.common.exception.ConflictException;
 import jakarta.persistence.EntityManager;
 import java.security.MessageDigest;
@@ -32,10 +33,12 @@ public class DocumentCustody {
 
     private final EntityManager em;
     private final DocumentFiles files;
+    private final EvidenceChain evidence;
 
-    public DocumentCustody(EntityManager em, DocumentFiles files) {
+    public DocumentCustody(EntityManager em, DocumentFiles files, EvidenceChain evidence) {
         this.em = em;
         this.files = files;
+        this.evidence = evidence;
     }
 
     public static String sha256(byte[] bytes) {
@@ -60,6 +63,8 @@ public class DocumentCustody {
     /** Logs one download. */
     void logAccess(String kind, Long documentId, String ownerRef, String fileName, String username, String channel) {
         em.persist(new DocumentAccess(kind, documentId, ownerRef, fileName, username, channel));
+        // Opening a document is sensitive access (NS-SH11-005).
+        evidence.record(username, "Downloaded " + kind + " document", kind, ownerRef, fileName + " via " + channel);
     }
 
     /** The downloads of a policy's or claim's documents, newest first. */

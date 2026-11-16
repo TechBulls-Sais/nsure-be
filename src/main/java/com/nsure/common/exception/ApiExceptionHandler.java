@@ -7,6 +7,7 @@ import com.nsure.audit.exception.AwaitingApprovalException;
 import com.nsure.audit.exception.IdempotencyConflictException;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.exception.UnAuthenticatedUserException;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -55,7 +56,7 @@ public class ApiExceptionHandler {
     public ResponseEntity<ApiError> idempotency(IdempotencyConflictException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .contentType(MediaType.APPLICATION_PROBLEM_JSON)
-                .body(ApiError.of(409, ex.getMessage(), ex.getCommandId(), read(ex.getResultJson())));
+                .body(ApiError.of(409, ApiError.IDEMPOTENCY_CONFLICT, ex.getMessage(), ex.getCommandId(), read(ex.getResultJson())));
     }
 
     @ExceptionHandler(CommandFailedException.class)
@@ -75,9 +76,50 @@ public class ApiExceptionHandler {
         return problem(HttpStatus.CONFLICT, ex.getMessage());
     }
 
+    /**
+     * A business rule refused the request (NS-API-001): 422. A malformed request (unreadable JSON, a parameter of
+     * the wrong type, a missing parameter or file) is 400, below.
+     */
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ApiError> badRequest(IllegalArgumentException ex) {
-        return problem(HttpStatus.BAD_REQUEST, ex.getMessage());
+    public ResponseEntity<ApiError> businessRule(IllegalArgumentException ex) {
+        return problem(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage());
+    }
+
+    /** Someone else changed the record since the caller read it (NS-TXN-001): refresh and try again. */
+    @ExceptionHandler(StaleVersionException.class)
+    public ResponseEntity<ApiError> stale(StaleVersionException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(ApiError.of(409, ApiError.STALE_VERSION, ex.getMessage(), List.of()));
+    }
+
+    /** Two transactions raced on the same record and this one lost: the same answer as a stale version. */
+    @ExceptionHandler({jakarta.persistence.OptimisticLockException.class,
+            org.springframework.orm.ObjectOptimisticLockingFailureException.class})
+    public ResponseEntity<ApiError> raced(RuntimeException ex) {
+        return stale(new StaleVersionException("This record was changed by someone else while you were working on it."
+                + " Refresh to see the latest and try again."));
+    }
+
+    @ExceptionHandler(org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiError> wrongType(org.springframework.web.method.annotation.MethodArgumentTypeMismatchException ex) {
+        return invalid(ex.getName(), ex.getName() + " has the wrong format.");
+    }
+
+    @ExceptionHandler(org.springframework.web.bind.MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiError> missingParameter(org.springframework.web.bind.MissingServletRequestParameterException ex) {
+        return invalid(ex.getParameterName(), ex.getParameterName() + " is required.");
+    }
+
+    @ExceptionHandler(org.springframework.web.bind.MissingRequestHeaderException.class)
+    public ResponseEntity<ApiError> missingHeader(org.springframework.web.bind.MissingRequestHeaderException ex) {
+        return invalid(ex.getHeaderName(), ex.getHeaderName() + " header is required.");
+    }
+
+    private ResponseEntity<ApiError> invalid(String field, String message) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(ApiError.of(400, ApiError.INVALID_REQUEST, message, List.of(new ApiError.FieldError(field, message))));
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)

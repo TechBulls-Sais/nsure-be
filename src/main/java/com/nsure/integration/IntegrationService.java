@@ -55,7 +55,8 @@ public class IntegrationService {
         return events.stream().map(e -> {
             List<IntegrationViews.DeliveryView> own = deliveries.getOrDefault(e.getId(), List.of());
             return new IntegrationViews.EventView(e.getEventId(), e.getEventType(), e.getAggregateRef(),
-                    e.getCorrelationId(), e.getPublishedBy(), e.getOccurredAt(), e.getPayload(), status(own), own);
+                    e.getCorrelationId(), e.getPublishedBy(), e.getOccurredAt(), e.getPayload(), status(own), own,
+                    e.getSchemaVersion(), e.getAggregateVersion());
         }).toList();
     }
 

@@ -1,0 +1,69 @@
+databaseChangeLog:
+  # Versioning verification §3 defect 4: product terms were read live, so a change reached every in-force policy
+  # (NS-SH02-003/004, NS-IL03-001, AT-SH02-02).
+  - changeSet:
+      id: 066-product-versions
+      author: nsure
+      comment: >-
+        Immutable versions of each product's contract terms. A version is proposed, approved by a different user,
+        and applies to new business from effective_from. Every product gets v1 with its current values, effective
+        2000-01-01. A product added by a later migration must also be given a v1 here, or it cannot be sold.
+      changes:
+        - createTable:
+            tableName: ins_product_version
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ins_product_version}}
+              - column: {name: product_name, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: version_no, type: int, constraints: {nullable: false}}
+              - column: {name: effective_from, type: date, constraints: {nullable: false}}
+              - column: {name: waiting_period_days, type: int, constraints: {nullable: false}}
+              - column: {name: grace_period_days, type: int, constraints: {nullable: false}}
+              - column: {name: max_beneficiaries, type: int, constraints: {nullable: false}}
+              - column: {name: wording_ref, type: varchar(120), constraints: {nullable: false}}
+              - column: {name: change_reason, type: varchar(500)}
+              - column: {name: proposed_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: recorded_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: approval_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+              - column: {name: rejection_reason, type: varchar(500)}
+        - addUniqueConstraint:
+            tableName: ins_product_version
+            columnNames: product_name, version_no
+            constraintName: uk_product_version_no
+        - addForeignKeyConstraint:
+            baseTableName: ins_product_version
+            baseColumnNames: product_name
+            referencedTableName: ins_product
+            referencedColumnNames: name
+            constraintName: fk_product_version_product
+        - sql:
+            sql: >-
+              INSERT INTO ins_product_version (product_name, version_no, effective_from, waiting_period_days,
+              grace_period_days, max_beneficiaries, wording_ref, change_reason, proposed_by, recorded_at,
+              approval_status, approved_by, approved_at)
+              SELECT p.name, 1, DATE '2000-01-01', p.waiting_period_days, p.grace_period_days, p.max_beneficiaries,
+              'Standard life wording v1.0', 'Terms in force before versioned product terms', 'system',
+              CURRENT_TIMESTAMP, 'APPROVED', 'system', CURRENT_TIMESTAMP
+              FROM ins_product p
+  - changeSet:
+      id: 066-policy-product-version
+      author: nsure
+      comment: >-
+        Each policy is pinned to the product terms version it was issued under. Existing policies were all issued
+        under the only terms that existed, v1.
+      changes:
+        - addColumn:
+            tableName: ins_policy
+            columns:
+              - column: {name: product_version_id, type: bigint}
+        - sql:
+            sql: >-
+              UPDATE ins_policy SET product_version_id = (SELECT v.id FROM ins_product_version v
+              WHERE v.product_name = ins_policy.product AND v.version_no = 1)
+        - addForeignKeyConstraint:
+            baseTableName: ins_policy
+            baseColumnNames: product_version_id
+            referencedTableName: ins_product_version
+            referencedColumnNames: id
+            constraintName: fk_policy_product_version

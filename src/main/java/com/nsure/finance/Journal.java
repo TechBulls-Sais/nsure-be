@@ -9,6 +9,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.OrderBy;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -29,6 +30,11 @@ public class Journal {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    // Optimistic locking (NS-TXN-001): a write based on a stale copy is refused with 409, never overwrites.
+    @Version
+    @Column(name = "row_version", nullable = false)
+    private long rowVersion;
 
     @Column(name = "record_ref", nullable = false, unique = true, length = 20)
     private String ref;
@@ -63,8 +69,12 @@ public class Journal {
     @Column(nullable = false, length = 300)
     private String description;
 
-    @Column(name = "rule_version")
+    @Column(name = "rule_version", updatable = false)
     private Integer ruleVersion;
+
+    /** The exact posting-rule version this journal was posted with (Blueprint §7: each entry retains its rule). */
+    @Column(name = "posting_rule_id", updatable = false)
+    private Long postingRuleId;
 
     @Column(nullable = false, length = 20)
     private String status;
@@ -93,7 +103,8 @@ public class Journal {
 
     Journal(String ref, String eventKey, String eventType, String sourceRef, String domain, LocalDate eventDate,
             LocalDate accountingDate, String periodCode, BigDecimal amount, String description, Integer ruleVersion,
-            String createdBy) {
+            Long postingRuleId, String createdBy) {
+        this.postingRuleId = postingRuleId;
         this.ref = ref;
         this.eventKey = eventKey;
         this.eventType = eventType;
@@ -187,6 +198,10 @@ public class Journal {
         return ruleVersion;
     }
 
+    public Long getPostingRuleId() {
+        return postingRuleId;
+    }
+
     public String getStatus() {
         return status;
     }
@@ -213,5 +228,9 @@ public class Journal {
 
     public List<JournalLine> getLines() {
         return lines;
+    }
+
+    public long getRowVersion() {
+        return rowVersion;
     }
 }

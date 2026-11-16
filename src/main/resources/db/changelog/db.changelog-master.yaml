@@ -176,3 +176,33 @@ databaseChangeLog:
   - include:
       file: changes/059-tap-cover-photo.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/060-spec-conformance-fixes.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/061-platform-foundations.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/062-collections-and-claims.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/063-individual-quotes.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/064-application-capture.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/065-posting-rule-versions.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/066-product-term-versions.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/067-product-config-history.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/068-event-date-cover.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/069-claim-decisions.yaml
+      relativeToChangelogFile: true

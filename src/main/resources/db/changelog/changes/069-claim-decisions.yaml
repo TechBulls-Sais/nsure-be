@@ -1,0 +1,24 @@
+databaseChangeLog:
+  # Versioning verification §3 defect 8: reopening a claim nulled its rejection reason, adjudicator and date, so the
+  # outcome survived only as free text in the log (NS-SH05-004, §09 "Reopen is an authorised action preserving prior
+  # outcome"). Decisions are now kept in their own table. Decisions made before this change are in workflow_log only.
+  - changeSet:
+      id: 069-claim-decisions
+      author: nsure
+      changes:
+        - createTable:
+            tableName: clm_decision
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_clm_decision}}
+              - column: {name: claim_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: sequence_no, type: int, constraints: {nullable: false}}
+              - column: {name: decision, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500)}
+              - column: {name: amount, type: "decimal(19,2)"}
+              - column: {name: decided_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: decided_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: superseded_by, type: int}
+        - addUniqueConstraint:
+            tableName: clm_decision
+            columnNames: claim_ref, sequence_no
+            constraintName: uk_clm_decision_sequence

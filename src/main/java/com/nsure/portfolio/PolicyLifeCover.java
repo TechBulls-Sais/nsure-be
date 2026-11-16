@@ -120,4 +120,8 @@ public class PolicyLifeCover {
     public int getDisplayOrder() {
         return displayOrder;
     }
+
+    public Long getId() {
+        return id;
+    }
 }

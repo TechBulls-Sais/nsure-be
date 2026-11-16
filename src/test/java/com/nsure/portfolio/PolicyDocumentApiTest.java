@@ -144,7 +144,7 @@ class PolicyDocumentApiTest {
         Integer original = JsonPath.read(first, "$[0].id");
 
         mockMvc.perform(json(post("/portfolio/policies/" + policy + "/documents/" + original + "/reissue"), "admin", "{}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/portfolio/policies/" + policy + "/documents/" + original + "/reissue"), "onboarding",
                         "{\"reason\":\"Not my job\"}"))
                 .andExpect(status().isForbidden());
@@ -246,6 +246,8 @@ class PolicyDocumentApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String ref = JsonPath.read(policy, "$.id");
+        mockMvc.perform(json(post("/portfolio/policies/" + ref + "/payments"), "admin", "{\"method\":\"Bank EFT\"}"))
+                .andExpect(status().isOk());
         String surname = name.substring(name.indexOf(' ') + 1);
         mockMvc.perform(json(post("/portfolio/policies/" + ref + "/beneficiaries"), "admin",
                         "{\"fullName\":\"Kopano " + surname + "\",\"relationship\":\"Spouse\",\"mobile\":\"+267 72 000 000\","

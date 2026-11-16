@@ -29,8 +29,11 @@ public class RateTableController {
 
     private final RateTableService rates;
     private final RateVersionService versions;
+    private final com.nsure.audit.evidence.EvidenceChain evidence;
 
-    public RateTableController(RateTableService rates, RateVersionService versions) {
+    public RateTableController(RateTableService rates, RateVersionService versions,
+            com.nsure.audit.evidence.EvidenceChain evidence) {
+        this.evidence = evidence;
         this.rates = rates;
         this.versions = versions;
     }
@@ -106,10 +109,12 @@ public class RateTableController {
 
     @GetMapping("/{ref}/export")
     public ResponseEntity<String> export(@PathVariable String ref, @RequestParam(required = false) Integer version) {
+        String csv = versions.export(ref, version);
+        evidence.recordNow(null, "Exported rate table", "Rate table", ref, version == null ? "current version" : "version " + version);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + ref + ".csv\"")
                 .contentType(new MediaType("text", "csv"))
-                .body(versions.export(ref, version));
+                .body(csv);
     }
 
     /** {csv}: a dry run. Nothing is written; the response shows the diff, issues and the confirm token. */

@@ -83,7 +83,7 @@ public class CessionEventHandler implements DomainEventHandler {
         if (policy.isEmpty()) {
             return;
         }
-        BigDecimal sumAssured = BigDecimal.valueOf(policy.get().getAmount()).setScale(2);
+        BigDecimal sumAssured = policy.get().getAmount().setScale(2, java.math.RoundingMode.HALF_UP);
         BigDecimal share = share(treaty.get(), sumAssured);
         if (share.signum() <= 0) {
             return;

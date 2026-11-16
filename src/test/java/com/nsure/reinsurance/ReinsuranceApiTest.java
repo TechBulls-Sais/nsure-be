@@ -214,7 +214,7 @@ class ReinsuranceApiTest {
         };
         for (String body : invalid) {
             mockMvc.perform(json(post("/reinsurance/treaties"), "reinsurance", body))
-                    .andExpect(status().isBadRequest());
+                    .andExpect(status().isUnprocessableEntity());
         }
         mockMvc.perform(json(post("/reinsurance/treaties"), "finance",
                         treaty("Finance draft", "QUOTA_SHARE", "\"Care Cash\"", "\"cededPercent\":20", from, to)))
@@ -302,13 +302,13 @@ class ReinsuranceApiTest {
 
         mockMvc.perform(json(post("/reinsurance/bordereaux"), "reinsurance",
                         "{\"treatyRef\":\"TRT-00001\",\"period\":\"2026-13\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/reinsurance/bordereaux"), "reinsurance",
                         "{\"treatyRef\":\"TRT-00001\",\"period\":\"" + YearMonth.now().plusMonths(1) + "\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/reinsurance/bordereaux"), "reinsurance",
                         "{\"treatyRef\":\"TRT-00002\",\"period\":\"" + period + "\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/reinsurance/bordereaux"), "reinsurance",
                         "{\"treatyRef\":\"TRT-99999\",\"period\":\"" + period + "\"}"))
                 .andExpect(status().isNotFound());
@@ -363,11 +363,10 @@ class ReinsuranceApiTest {
     }
 
     private BigDecimal sumAssured(String policy) {
-        Integer amount = tx.execute(s -> em.createQuery("select p.amount from InsurancePolicy p where p.ref = :ref",
-                        Integer.class)
+        return tx.execute(s -> em.createQuery("select p.amount from InsurancePolicy p where p.ref = :ref",
+                        BigDecimal.class)
                 .setParameter("ref", policy)
                 .getSingleResult());
-        return BigDecimal.valueOf(amount);
     }
 
     private List<Map<String, Object>> cessions(String policy) throws Exception {

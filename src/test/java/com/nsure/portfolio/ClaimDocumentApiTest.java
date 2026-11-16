@@ -122,20 +122,20 @@ class ClaimDocumentApiTest {
         String path = "/portfolio/claims/" + claim + "/documents";
 
         mockMvc.perform(upload(path, "admin", "password", file("notes.txt", "hello".getBytes(StandardCharsets.UTF_8))))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("Only PDF, JPG and PNG files can be uploaded."));
         // The extension says PDF, the bytes say PNG.
         mockMvc.perform(upload(path, "admin", "password", file("renamed.pdf", PNG)))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(upload(path, "admin", "password", file("empty.pdf", new byte[0])))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("Choose a file to upload."));
         byte[] big = Arrays.copyOf(PDF, (int) ClaimDocumentService.MAX_BYTES + 1);
         mockMvc.perform(upload(path, "admin", "password", file("big.pdf", big)))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("Files can be at most 10 MB."));
         mockMvc.perform(upload(path, "admin", "password", file("id.pdf", PDF)).param("type", "Selfie"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(upload(path, "admin", "password", file("scan.JPEG", new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 0})))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].contentType").value("image/jpeg"));
@@ -147,7 +147,7 @@ class ClaimDocumentApiTest {
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reject"), "assessor", "{\"reason\":\"Not covered\"}"))
                 .andExpect(status().isOk());
         mockMvc.perform(upload("/portfolio/claims/" + claim + "/documents", "admin", "password", file("late.pdf", PDF)))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("Documents can only be added while the claim is open."));
     }
 
@@ -279,6 +279,9 @@ class ClaimDocumentApiTest {
                         "{\"name\":\"" + name + "\",\"product\":\"Term Life\",\"amount\":50000,\"premium\":50}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
+        mockMvc.perform(json(post("/portfolio/policies/" + JsonPath.read(policy, "$.id") + "/payments"), "admin",
+                        "{\"method\":\"Bank EFT\"}"))
+                .andExpect(status().isOk());
         String shop = mockMvc.perform(json(post("/portfolio/shop/claims"), username,
                         "{\"policy\":\"" + JsonPath.read(policy, "$.id") + "\",\"claimantName\":\"Next Of Kin\","
                                 + "\"claimantMobile\":\"+267 72 000 000\",\"claimantRelationship\":\"Spouse\","

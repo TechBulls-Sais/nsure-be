@@ -55,7 +55,7 @@ public final class PortfolioViews {
             String id,
             String name,
             String product,
-            int amount,
+            BigDecimal amount,
             BigDecimal premium,
             String status,
             String date,
@@ -79,8 +79,44 @@ public final class PortfolioViews {
             // Documents filed on a policy (generated schedules); empty on applications and receipts.
             List<DocumentView> documents,
             // Spec 01 BR-23: the product's beneficiary limit (default 5; Tap Cover 1).
-            int maxBeneficiaries
+            int maxBeneficiaries,
+            // The accepted quote this application or policy was priced from (NS-IL01-001).
+            String quoteRef,
+            Integer quoteVersion
     ) {
+    }
+
+    /** One version of a stored quote, with its calculation trace (NS-IL01-001, NS-SH03-005). */
+    public record QuoteRecordView(String ref, int version, boolean latest, String customerRef, String customerName,
+            String product, String tier, BigDecimal sumAssured, BigDecimal premium, String currency,
+            String pricingMethod, String rateVersion, java.time.LocalDate pricedOn, java.time.LocalDate validUntil, boolean expired,
+            String status, String inputHash, String serviceVersion, com.fasterxml.jackson.databind.JsonNode trace,
+            String differences, String acceptedBy, java.time.LocalDateTime acceptedAt, String acceptanceNote,
+            String applicationRef, String policyRef, String createdBy, java.time.LocalDateTime createdAt) {
+    }
+
+    /** One disclosure question and the answer given, if any (NS-IL01-003). */
+    public record DisclosureItem(String code, String question, String answerType, boolean mandatory, String answer) {
+    }
+
+    /** One piece of evidence an application needs, and whether it is in. */
+    public record ApplicationEvidenceItem(String documentType, boolean mandatory, boolean received, String note,
+            String recordedBy, java.time.LocalDateTime recordedAt, String satisfiedBy) {
+    }
+
+    /** What an application captured, and what still stands between it and submission or issue (NS-IL01-002/003). */
+    public record ApplicationChecklistView(String ref, String status, String proposer, String payer, String mandateMethod,
+            String mandateInstitution, String mandateAccount, Integer mandateDebitDay, String channel,
+            String intermediaryCode, String declaredBy, java.time.LocalDateTime declaredAt, String submittedBy,
+            java.time.LocalDateTime submittedAt, List<DisclosureItem> disclosures, List<ApplicationEvidenceItem> evidence,
+            List<String> submissionProblems, List<String> missingEvidence,
+            // Submitted before disclosures and the declaration were captured: they were never recorded for it.
+            boolean preCapture) {
+    }
+
+    /** A stored quote priced again under its own rate version: whether it reproduces the booked amount. */
+    public record QuoteReplayView(String ref, int version, String rateVersion, BigDecimal original, BigDecimal replayed,
+            boolean reproduced, String note) {
     }
 
     public record BeneficiaryView(
@@ -125,7 +161,7 @@ public final class PortfolioViews {
             String id,
             String name,
             String product,
-            int amount,
+            BigDecimal amount,
             BigDecimal premium,
             String status,
             String date,
@@ -145,7 +181,7 @@ public final class PortfolioViews {
             String adjudicatedBy,
             Boolean fourEyesApplied,
             String rejectionReason,
-            Integer payoutAmount,
+            BigDecimal payoutAmount,
             String payoutReference,
             String paidAt,
             // Workflow actions legal from the current state (assess, approve, reject, pay), before permissions.
@@ -161,8 +197,39 @@ public final class PortfolioViews {
             Boolean stpEligible,
             String stpIneligibleCode,
             // The written reason when the assessor approved their own claim under the break-glass authority (C-9).
-            String fourEyesOverrideReason
+            String fourEyesOverrideReason,
+            // Send back in If-Match with a claim action (NS-TXN-001): a claim changed meanwhile is refused with 409.
+            long version,
+            // SH05: the covered life, the case reserve, the evidence checklist and other claims on the policy.
+            String coveredLife,
+            BigDecimal reserve,
+            List<EvidenceItem> evidence,
+            List<RelatedClaim> related
     ) {
+    }
+
+    /** One document a claim type needs, and whether a current copy is on file (NS-SH05-003). */
+    public record EvidenceItem(String documentType, boolean mandatory, boolean received) {
+    }
+
+    /** Another claim on the same policy; {@code possibleDuplicate} when it is for the same life within a week. */
+    public record RelatedClaim(String ref, String status, String eventDate, String coveredLife, String type,
+            boolean possibleDuplicate) {
+    }
+
+    /** A claim's reserve history, decisions and the benefit limits it draws on (NS-SH05-003/004/005). */
+    public record ClaimFinancialsView(String claimRef, BigDecimal reserve, List<ReserveMovementView> movements,
+            BigDecimal lifeLimit, BigDecimal lifeUsed, BigDecimal policyLimit, BigDecimal policyUsed,
+            List<ClaimDecisionView> decisions) {
+    }
+
+    /** One decision on a claim; {@code supersededBy} names the later decision that set it aside (§09 reopen). */
+    public record ClaimDecisionView(int sequence, String decision, String reason, BigDecimal amount, String decidedBy,
+            java.time.LocalDateTime decidedAt, Integer supersededBy) {
+    }
+
+    public record ReserveMovementView(BigDecimal change, BigDecimal balance, String reason, String by,
+            java.time.LocalDateTime at) {
     }
 
     /**
@@ -206,7 +273,9 @@ public final class PortfolioViews {
             String newState,
             String details,
             String performedBy,
-            String performedAt
+            String performedAt,
+            // NS-DAT-002: the day the new state applied, which can differ from when it was recorded.
+            String effectiveDate
     ) {
     }
 

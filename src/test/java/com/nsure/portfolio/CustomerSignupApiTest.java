@@ -51,7 +51,7 @@ class CustomerSignupApiTest {
     void wrongCodeCreatesNothing() throws Exception {
         mockMvc.perform(post("/public/signup").contentType(MediaType.APPLICATION_JSON)
                         .content(details("neo.wrong", "000000")))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("The verification code is incorrect."));
 
         mockMvc.perform(get("/me").with(httpBasic("neo.wrong", "password123")))
@@ -62,14 +62,14 @@ class CustomerSignupApiTest {
     void signupNeedsEveryAddCustomerField() throws Exception {
         mockMvc.perform(post("/public/signup/otp").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"Neo Kgosi\",\"email\":\"neo@example.com\",\"phone\":\"71555123\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
     }
 
     @Test
     void takenUsernameIsRejectedBeforeTheCodeIsSent() throws Exception {
         mockMvc.perform(post("/public/signup/otp").contentType(MediaType.APPLICATION_JSON)
                         .content(details("customer", null)))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("Username customer is already in use."));
     }
 }

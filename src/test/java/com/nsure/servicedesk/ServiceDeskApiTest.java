@@ -90,7 +90,7 @@ class ServiceDeskApiTest {
         // Validation and permissions.
         mockMvc.perform(json(post("/service/cases"), "service",
                         "{\"customerRef\":\"" + NEO + "\",\"caseType\":\"QUESTION\",\"category\":\"x\",\"subject\":\"y\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/service/cases"), "service",
                         "{\"customerRef\":\"CUS-9999\",\"caseType\":\"COMPLAINT\",\"category\":\"x\",\"subject\":\"y\"}"))
                 .andExpect(status().isNotFound());
@@ -137,9 +137,9 @@ class ServiceDeskApiTest {
     void pausingStopsTheSlaClockAndResumingMovesTheDueDate() throws Exception {
         String ref = open("service", NEO, "COMPLAINT", "Premium deducted twice");
         mockMvc.perform(json(post("/service/cases/" + ref + "/pause"), "service", "{}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/service/cases/" + ref + "/resume"), "service", "{}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/service/cases/" + ref + "/pause"), "service",
                         "{\"reason\":\"Awaiting bank statement from customer\"}"))
                 .andExpect(status().isOk())
@@ -186,18 +186,18 @@ class ServiceDeskApiTest {
     void aReopenedCaseKeepsTheEarlierResolutionInHistoryAndOnlyResolvedCasesClose() throws Exception {
         String ref = open("service", NEO, "SERVICE_REQUEST", "Statement request");
         mockMvc.perform(json(post("/service/cases/" + ref + "/close"), "service", "{}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/service/cases/" + ref + "/resolve"), "service", "{}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/service/cases/" + ref + "/escalate"), "service", "{}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/service/cases/" + ref + "/resolve"), "service",
                         "{\"resolution\":\"Statement emailed\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.case.status").value("RESOLVED"))
                 .andExpect(jsonPath("$.case.resolution").value("Statement emailed"));
         mockMvc.perform(json(post("/service/cases/" + ref + "/reopen"), "service", "{}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/service/cases/" + ref + "/reopen"), "service",
                         "{\"reason\":\"Customer did not receive it\"}"))
                 .andExpect(status().isOk())
@@ -213,7 +213,7 @@ class ServiceDeskApiTest {
                 .andExpect(jsonPath("$.case.status").value("CLOSED"))
                 .andExpect(jsonPath("$.history[*].action", hasItem("Closed")));
         mockMvc.perform(json(post("/service/cases/" + ref + "/pause"), "service", "{\"reason\":\"x\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
     }
 
     @Test
@@ -233,7 +233,7 @@ class ServiceDeskApiTest {
 
         mockMvc.perform(json(post("/portfolio/shop/cases"), "customer",
                         "{\"caseType\":\"SERVICE_REQUEST\",\"category\":\"Policy\",\"subject\":\"Change\",\"linkedRef\":\"POL-99999\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
 
         mockMvc.perform(get("/portfolio/shop/cases").with(httpBasic("customer", "password")))
                 .andExpect(status().isOk())

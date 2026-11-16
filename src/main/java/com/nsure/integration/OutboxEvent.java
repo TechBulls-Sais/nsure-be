@@ -30,7 +30,7 @@ public class OutboxEvent {
     @Column(nullable = false, length = 4000)
     private String payload;
 
-    @Column(name = "correlation_id", nullable = false, length = 36)
+    @Column(name = "correlation_id", nullable = false, length = 64)
     private String correlationId;
 
     @Column(name = "published_by", nullable = false, length = 100)
@@ -39,10 +39,20 @@ public class OutboxEvent {
     @Column(name = "occurred_at", nullable = false)
     private LocalDateTime occurredAt;
 
+    /** Version of this event type's data shape (NS-API-003); compatible additions keep it, breaking changes raise it. */
+    @Column(name = "schema_version", nullable = false)
+    private int schemaVersion = 1;
+
+    /** This event's place in its aggregate's history (NS-API-003/004); null on events published before versions. */
+    @Column(name = "aggregate_version")
+    private Long aggregateVersion;
+
     protected OutboxEvent() {
     }
 
-    OutboxEvent(String eventType, String aggregateRef, String payload, String correlationId, String publishedBy) {
+    OutboxEvent(String eventType, String aggregateRef, String payload, String correlationId, String publishedBy,
+            long aggregateVersion) {
+        this.aggregateVersion = aggregateVersion;
         this.eventId = UUID.randomUUID().toString();
         this.eventType = eventType;
         this.aggregateRef = aggregateRef;
@@ -82,5 +92,13 @@ public class OutboxEvent {
 
     public LocalDateTime getOccurredAt() {
         return occurredAt;
+    }
+
+    public int getSchemaVersion() {
+        return schemaVersion;
+    }
+
+    public Long getAggregateVersion() {
+        return aggregateVersion;
     }
 }

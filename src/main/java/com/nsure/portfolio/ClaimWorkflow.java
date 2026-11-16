@@ -1,5 +1,6 @@
 package com.nsure.portfolio;
 
+import com.nsure.common.Money;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.controls.ControlKey;
 import com.nsure.controls.ControlService;
@@ -34,9 +35,14 @@ import org.springframework.transaction.annotation.Transactional;
  * <pre>
  *   lodge ─▶ INITIATED ─five checks─┬─ all pass and STP-eligible ─▶ APPROVED (STP, no adjudicator)
  *                                    └─ otherwise ───────────────▶ UNDER REVIEW
- *   INITIATED / UNDER REVIEW ──assess──▶ RECOMMENDED ──approve (four-eyes)──▶ APPROVED ──pay──▶ PAID
+ *   INITIATED / UNDER REVIEW ──assess──▶ RECOMMENDED ──approve (four-eyes)──▶ APPROVED
+ *   APPROVED / PAYOUT FAILED ──pay──▶ PAYOUT SENT ─┬─ confirm-payout ─▶ PAID (ClaimPaid)
+ *                                                  └─ payout-failed (reason) ─▶ PAYOUT FAILED
  *   INITIATED / UNDER REVIEW / RECOMMENDED ──reject (reason required)──▶ REJECTED
  * </pre>
+ *
+ * A payout is Paid only when the provider or bank confirms it settled (NS-SH05-007, AT-SH05-03): sending the
+ * instruction leaves it in flight, and a failed or returned payout waits for corrected, re-verified details.
  *
  * The system transitions (straight-through approval and routing to review) are reachable only from lodging,
  * never from an action a person sends.
@@ -50,6 +56,8 @@ public class ClaimWorkflow {
     public static final String APPROVED = "Approved";
     public static final String REJECTED = "Rejected";
     public static final String PAID = "Paid";
+    public static final String PAYOUT_SENT = "Payout Sent";
+    public static final String PAYOUT_FAILED = "Payout Failed";
 
     public static final Set<String> OPEN_STATES = Set.of(INITIATED, UNDER_REVIEW, RECOMMENDED);
 
@@ -66,7 +74,10 @@ public class ClaimWorkflow {
         TRANSITIONS.put("assess", new Transition(Set.of(INITIATED, UNDER_REVIEW), RECOMMENDED, "ASSESS_CLAIM"));
         TRANSITIONS.put("approve", new Transition(Set.of(RECOMMENDED), APPROVED, "APPROVE_CLAIM"));
         TRANSITIONS.put("reject", new Transition(Set.of(INITIATED, UNDER_REVIEW, RECOMMENDED), REJECTED, "REJECT_CLAIM"));
-        TRANSITIONS.put("pay", new Transition(Set.of(APPROVED), PAID, "SETTLE_CLAIM"));
+        TRANSITIONS.put("pay", new Transition(Set.of(APPROVED, PAYOUT_FAILED), PAYOUT_SENT, "SETTLE_CLAIM"));
+        TRANSITIONS.put("confirm-payout", new Transition(Set.of(PAYOUT_SENT), PAID, "SETTLE_CLAIM"));
+        TRANSITIONS.put("payout-failed", new Transition(Set.of(PAYOUT_SENT), PAYOUT_FAILED, "SETTLE_CLAIM"));
+        TRANSITIONS.put("reopen", new Transition(Set.of(REJECTED), UNDER_REVIEW, "APPROVE_CLAIM"));
     }
 
     private record Transition(Set<String> from, String to, String permission) {
@@ -83,12 +94,14 @@ public class ClaimWorkflow {
     private final ApprovalAuthorityService approvalLimits;
     private final ProductStpPolicyRepository stpPolicies;
     private final ReferenceNumbers references;
+    private final ClaimFinancials financials;
 
     public ClaimWorkflow(EntityManager em, ControlService controls, FourEyesControl fourEyes,
             PolicyWorkflow policies, WorkflowHistory history, Outbox outbox,
             ApprovalAuthorityService approvalLimits, ProductStpPolicyRepository stpPolicies,
-            ReferenceNumbers references) {
+            ReferenceNumbers references, ClaimFinancials financials) {
         this.references = references;
+        this.financials = financials;
         this.approvalLimits = approvalLimits;
         this.stpPolicies = stpPolicies;
         this.em = em;
@@ -109,7 +122,15 @@ public class ClaimWorkflow {
 
     /** What a claim is lodged with: who claims, what happened, and when. */
     public record Lodgement(String policyRef, String claimantName, String claimantMobile,
-            String claimantRelationship, String eventDate, String description, String claimType) {
+            String claimantRelationship, String eventDate, String description, String claimType,
+            String coveredLife) {
+
+        /** A claim for the policyholder's own life. */
+        public Lodgement(String policyRef, String claimantName, String claimantMobile, String claimantRelationship,
+                String eventDate, String description, String claimType) {
+            this(policyRef, claimantName, claimantMobile, claimantRelationship, eventDate, description, claimType,
+                    null);
+        }
     }
 
     /**
@@ -136,6 +157,7 @@ public class ClaimWorkflow {
         claim.setPolicyRef(policy.getRef());
         // A claim pays the policy's cover; an assessor may approve a partial amount.
         claim.setAmount(policy.getAmount());
+        coveredLife(claim, policy, input.coveredLife());
         claim.setPremium(BigDecimal.ZERO);
         claim.setStatus(INITIATED);
         claim.setRecordDate(LocalDate.now().format(DISPLAY));
@@ -152,6 +174,7 @@ public class ClaimWorkflow {
         em.persist(claim);
         history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Lodged", null, INITIATED,
                 "On " + policy.getRef() + " by " + claimant + " (" + relationship + "), event " + event, actor);
+        financials.reserve(claim, claim.getAmount(), "Initial case reserve on lodging", actor);
 
         boolean allPassed = runChecks(claim, policy);
         StpDecision stp = allPassed
@@ -168,8 +191,9 @@ public class ClaimWorkflow {
             claim.setProcessingType(STP);
             claim.setPayoutAmount(claim.getAmount());
             claim.resolve(null);
+            financials.reserveLimit(claim, policy, claim.getAmount(), WorkflowHistory.SYSTEM);
             history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Auto Approved", INITIATED,
-                    APPROVED, "Straight-through: all five checks passed · payout BWP " + claim.getAmount(),
+                    APPROVED, "Straight-through: all five checks passed · payout BWP " + Money.text(claim.getAmount()),
                     WorkflowHistory.SYSTEM);
             outbox.publish(Events.CLAIM_APPROVED, claim.getRef(), decisionPayload(claim, null), WorkflowHistory.SYSTEM);
         } else {
@@ -190,6 +214,7 @@ public class ClaimWorkflow {
     static final String STP_NO_VERIFIED_PAYOUT = "NO_VERIFIED_PAYOUT";
     static final String STP_PRODUCT_OPT_OUT = "PRODUCT_OPT_OUT";
     static final String STP_CLAIM_LIMIT = "CLAIM_LIMIT";
+    static final String STP_OVER_LIMIT = "OVER_LIMIT";
 
     /** Why a claim whose checks all passed may not be approved straight through. */
     record StpDecision(String code, String text) {
@@ -211,14 +236,20 @@ public class ClaimWorkflow {
         BigDecimal ceiling = product != null && product.getStpCeiling() != null
                 ? product.getStpCeiling()
                 : controls.valueOf(ControlKey.CLAIM_STP_CEILING.key());
-        if (BigDecimal.valueOf(claim.getAmount()).compareTo(ceiling) > 0) {
-            return new StpDecision(STP_OVER_CEILING, "Payout of BWP " + claim.getAmount()
+        if (claim.getAmount().compareTo(ceiling) > 0) {
+            return new StpDecision(STP_OVER_CEILING, "Payout of BWP " + Money.text(claim.getAmount())
                     + " is over the straight-through ceiling of BWP " + ceiling.stripTrailingZeros().toPlainString());
         }
         boolean needsVerifiedPayout = controls.isEnabled(ControlKey.CLAIM_STP_REQUIRES_VERIFIED_PAYOUT.key())
                 && (product == null || product.isRequiresVerifiedPayout());
         if (needsVerifiedPayout && !hasPayoutDetails(claim)) {
             return new StpDecision(STP_NO_VERIFIED_PAYOUT, "No registered beneficiary with payout details to pay");
+        }
+        ClaimFinancials.Limits limits = financials.limits(claim, policy);
+        if (claim.getAmount().compareTo(limits.lifeRemaining().min(limits.policyRemaining())) > 0) {
+            return new StpDecision(STP_OVER_LIMIT, "Payout of BWP " + Money.text(claim.getAmount())
+                    + " is more than what is left of the benefit limit (BWP "
+                    + Money.text(limits.lifeRemaining().min(limits.policyRemaining())) + ")");
         }
         if (product != null && product.getMaxClaimsPerPolicyPerYear() != null) {
             long recent = em.createQuery("select count(c) from InsuranceClaim c where c.policyRef = :policy"
@@ -243,7 +274,7 @@ public class ClaimWorkflow {
         payload.put("policyRef", claim.getPolicyRef());
         payload.put("customerName", claim.getCustomerName());
         payload.put("product", claim.getProduct());
-        payload.put("amount", String.valueOf(claim.getPayoutAmount() != null ? claim.getPayoutAmount() : claim.getAmount()));
+        payload.put("amount", (claim.getPayoutAmount() != null ? claim.getPayoutAmount() : claim.getAmount()).toPlainString());
         payload.put("reason", reason == null ? "" : reason);
         if (claim.getCustomerRef() != null) {
             payload.put("customerRef", claim.getCustomerRef());
@@ -289,7 +320,10 @@ public class ClaimWorkflow {
             actor.validateHasPermissionTo("UPDATE_CLAIM");
         }
         InsuranceClaim claim = claim(ref);
-        requireOpen(claim, "The payee can only be changed while the claim is open");
+        com.nsure.common.ExpectedVersion.check("Claim " + ref, claim.getRowVersion());
+        if (!PAYOUT_FAILED.equals(claim.getStatus())) {
+            requireOpen(claim, "The payee can only be changed while the claim is open or its payout has failed");
+        }
         String name = trim(payee.name());
         String method = trim(payee.payoutMethod());
         String account = trim(payee.accountRef());
@@ -334,7 +368,7 @@ public class ClaimWorkflow {
         claim.recommend(actor.getUsername(), actor.getId());
         claim.setStatus(RECOMMENDED);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Assessed", previous, RECOMMENDED,
-                "Recommended for payout of BWP " + claim.getAmount() + (trim(note).isEmpty() ? "" : " · " + trim(note)),
+                "Recommended for payout of BWP " + Money.text(claim.getAmount()) + (trim(note).isEmpty() ? "" : " · " + trim(note)),
                 actor.getUsername());
         return claim;
     }
@@ -345,7 +379,7 @@ public class ClaimWorkflow {
      * check blocks it; a failed soft check needs {@code overrideReason}, which is kept with the claim.
      */
     @Transactional
-    public InsuranceClaim approve(String ref, Integer requestedPayout, String overrideReason, AppUser actor) {
+    public InsuranceClaim approve(String ref, BigDecimal requestedPayout, String overrideReason, AppUser actor) {
         return approve(ref, requestedPayout, overrideReason, null, actor);
     }
 
@@ -354,7 +388,7 @@ public class ClaimWorkflow {
      * account, the payout amount, and the approver's authority limit (04 §5.3).
      */
     @Transactional
-    public InsuranceClaim approve(String ref, Integer requestedPayout, String overrideReason,
+    public InsuranceClaim approve(String ref, BigDecimal requestedPayout, String overrideReason,
             String fourEyesOverrideReason, AppUser actor) {
         InsuranceClaim claim = claim(ref);
         String previous = guard(claim, "approve", actor);
@@ -386,25 +420,29 @@ public class ClaimWorkflow {
             throw new IllegalArgumentException(
                     "Please verify the payee's payout details against the claim documents before approving.");
         }
-        int payout = requestedPayout == null ? claim.getAmount() : requestedPayout;
-        if (payout <= 0) {
+        BigDecimal payout = requestedPayout == null ? claim.getAmount() : requestedPayout;
+        if (payout.signum() <= 0) {
             throw new IllegalArgumentException("Payout amount must be greater than zero");
         }
-        if (payout > claim.getAmount()) {
+        if (payout.compareTo(claim.getAmount()) > 0) {
             throw new IllegalArgumentException(
-                    "Payout of BWP " + payout + " exceeds the policy cover of BWP " + claim.getAmount());
+                    "Payout of BWP " + Money.text(payout) + " exceeds the policy cover of BWP " + Money.text(claim.getAmount()));
         }
-        approvalLimits.assertWithinLimit(actor, BigDecimal.valueOf(payout));
+        approvalLimits.assertWithinLimit(actor, payout);
+        financials.reserveLimit(claim, policies.policy(claim.getPolicyRef()), payout, actor.getUsername());
         claim.setPayoutAmount(payout);
+        financials.reserve(claim, payout, "Set to the approved payout", actor.getUsername());
+        List<String> missing = financials.missingMandatory(claim);
         claim.setStatus(APPROVED);
         claim.resolve(actor.getUsername());
+        recordDecision(claim, ClaimDecision.APPROVED, softFailed.isEmpty() ? null : reason, payout, actor.getUsername());
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Approved", previous, APPROVED,
-                "Payout: BWP " + payout + (softFailed.isEmpty() ? ""
+                "Payout: BWP " + Money.text(payout) + (softFailed.isEmpty() ? ""
                         : " · approved despite " + String.join(", ", softFailed) + ": " + reason) + switch (separation) {
                             case OVERRIDDEN -> " · FOUR-EYES OVERRIDDEN by the assessor: " + fourEyesReason;
                             case CONTROL_OFF -> " · four-eyes control OFF: separation not enforced";
                             case ENFORCED -> " · four-eyes: assessed by " + claim.getRecommendedBy();
-                        },
+                        } + (missing.isEmpty() ? "" : " · evidence outstanding: " + String.join(", ", missing)),
                 actor.getUsername());
         publishDecision(Events.CLAIM_APPROVED, claim, null, actor);
         return claim;
@@ -424,13 +462,18 @@ public class ClaimWorkflow {
         claim.setRejectionReason(text);
         claim.setStatus(REJECTED);
         claim.resolve(actor.getUsername());
+        recordDecision(claim, ClaimDecision.REJECTED, text, null, actor.getUsername());
+        financials.reserve(claim, BigDecimal.ZERO, "Released: claim rejected", actor.getUsername());
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Rejected", previous, REJECTED,
                 "Reason: " + text, actor.getUsername());
         publishDecision(Events.CLAIM_REJECTED, claim, text, actor);
         return claim;
     }
 
-    /** Pays an approved claim to its payee (mock payout gateway) and closes it. */
+    /**
+     * Sends the payout instruction for an approved claim (or resends one that failed) to the payout rail. The claim
+     * waits in Payout Sent: nothing is paid, posted or reinsured until the provider confirms settlement.
+     */
     @Transactional
     public InsuranceClaim pay(String ref, AppUser actor) {
         InsuranceClaim claim = claim(ref);
@@ -438,19 +481,140 @@ public class ClaimWorkflow {
         if (!hasPayoutDetails(claim)) {
             throw new IllegalArgumentException("This claim has no payout details to pay to.");
         }
+        if (PAYOUT_FAILED.equals(previous) && !claim.isPayoutVerified()) {
+            throw new IllegalArgumentException("The last payout failed. Correct and verify the payee's payout details"
+                    + " before sending it again.");
+        }
         String reference = "PAYOUT-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(Locale.ROOT);
-        claim.pay(reference);
+        claim.sendPayout(reference);
+        claim.setStatus(PAYOUT_SENT);
+        history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(),
+                PAYOUT_FAILED.equals(previous) ? "Payout Resent" : "Payout Sent", previous, PAYOUT_SENT,
+                "BWP " + Money.text(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
+                        + claim.getPayeePayoutMethod() + " " + mask(claim.getPayeeAccountRef()) + " · " + reference
+                        + " · awaiting the provider's confirmation",
+                actor.getUsername());
+        return claim;
+    }
+
+    /**
+     * A rejected claim is reviewed again (NS-SH05-004): a senior decision with a written reason. The earlier
+     * rejection stays in the history; the case reserve is re-established and the checks run again.
+     */
+    @Transactional
+    public InsuranceClaim reopen(String ref, String reason, AppUser actor) {
+        InsuranceClaim claim = claim(ref);
+        String previous = guard(claim, "reopen", actor);
+        String text = trim(reason);
+        if (text.length() < 10) {
+            throw new IllegalArgumentException("Give the reason for reopening this claim (at least 10 characters).");
+        }
+        if (text.length() > 500) {
+            throw new IllegalArgumentException("Keep the reason to 500 characters.");
+        }
+        // The decision being set aside is kept in full (§09: reopening preserves the prior outcome), with the
+        // reopening recorded against it, before the claim row is cleared for the new review.
+        ClaimDecision setAside = decisions(ref).stream().filter(d -> d.getSupersededBy() == null)
+                .reduce((first, second) -> second).orElse(null);
+        ClaimDecision reopening = recordDecision(claim, ClaimDecision.REOPENED, text, null, actor.getUsername());
+        if (setAside != null) {
+            setAside.supersededBy(reopening.getSequenceNo());
+        }
+        claim.reopen();
+        claim.setStatus(UNDER_REVIEW);
+        financials.reserve(claim, claim.getAmount(), "Re-established on reopening", actor.getUsername());
+        history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Reopened", previous, UNDER_REVIEW,
+                "Reason: " + text + (setAside == null ? "" : " · setting aside the " + setAside.getDecision().toLowerCase(Locale.ROOT)
+                        + " of " + setAside.getDecidedAt().toLocalDate() + " by " + setAside.getDecidedBy()
+                        + (setAside.getReason() == null ? "" : ": " + setAside.getReason())), actor.getUsername());
+        return claim;
+    }
+
+    /** Every decision ever made on the claim, oldest first; a superseded one names the decision that set it aside. */
+    public List<ClaimDecision> decisions(String claimRef) {
+        return em.createQuery("select d from ClaimDecision d where d.claimRef = :ref order by d.sequenceNo",
+                ClaimDecision.class).setParameter("ref", claimRef).getResultList();
+    }
+
+    private ClaimDecision recordDecision(InsuranceClaim claim, String decision, String reason, BigDecimal amount,
+            String actor) {
+        int next = decisions(claim.getRef()).stream().mapToInt(ClaimDecision::getSequenceNo).max().orElse(0) + 1;
+        ClaimDecision row = new ClaimDecision(claim.getRef(), next, decision, reason, amount, actor);
+        em.persist(row);
+        return row;
+    }
+
+    /**
+     * The covered life a claim is for (NS-SH05-001): by its id or name on the policy, defaulting to the policyholder.
+     * A claim for another covered life pays that life's cover.
+     */
+    private void coveredLife(InsuranceClaim claim, InsurancePolicy policy, String requested) {
+        String wanted = trim(requested);
+        if (wanted.isEmpty()) {
+            claim.coveredLife(null, policy.getCustomerName());
+            return;
+        }
+        for (PolicyLifeCover life : financials.lives(policy)) {
+            if (String.valueOf(life.getId()).equals(wanted) || wanted.equalsIgnoreCase(trim(life.getFullName()))) {
+                claim.coveredLife(life.getId(), life.getFullName());
+                if (life.getCoverAmount() != null && life.getCoverAmount().signum() > 0) {
+                    claim.setAmount(life.getCoverAmount());
+                }
+                return;
+            }
+        }
+        throw new IllegalArgumentException("Nobody called " + wanted + " is covered by policy " + policy.getRef() + ".");
+    }
+
+    /** The provider or bank failed or returned the payout: the claim waits for corrected, re-verified details. */
+    @Transactional
+    public InsuranceClaim payoutFailed(String ref, String reason, AppUser actor) {
+        InsuranceClaim claim = claim(ref);
+        String previous = guard(claim, "payout-failed", actor);
+        String text = trim(reason);
+        if (text.isEmpty()) {
+            throw new IllegalArgumentException("Give the reason the provider gave for the failed or returned payout.");
+        }
+        if (text.length() > 500) {
+            throw new IllegalArgumentException("The reason is too long.");
+        }
+        claim.clearPayoutVerification();
+        claim.setStatus(PAYOUT_FAILED);
+        history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Payout Failed", previous, PAYOUT_FAILED,
+                claim.getPayoutReference() + " · " + text + " · payout details need verifying again",
+                actor.getUsername());
+        return claim;
+    }
+
+    /**
+     * The provider confirms the payout settled: only now is the claim Paid and ClaimPaid raised. A confirmation that
+     * names another payout reference is refused, so an old instruction cannot settle a resent one.
+     */
+    @Transactional
+    public InsuranceClaim confirmPayout(String ref, String providerReference, AppUser actor) {
+        InsuranceClaim claim = claim(ref);
+        String previous = guard(claim, "confirm-payout", actor);
+        String confirmed = trim(providerReference);
+        if (!confirmed.isEmpty() && !confirmed.equals(claim.getPayoutReference())) {
+            throw new IllegalArgumentException("This confirmation is for " + confirmed + ", but the payout in flight"
+                    + " on " + ref + " is " + claim.getPayoutReference() + ".");
+        }
+        String reference = claim.getPayoutReference();
+        claim.confirmPayout();
+        financials.consume(claim, actor.getUsername());
+        financials.reserve(claim, BigDecimal.ZERO, "Released: payout settled", actor.getUsername());
         claim.setStatus(PAID);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Paid", previous, PAID,
-                "BWP " + claim.getPayoutAmount() + " to " + claim.getPayeeName() + " by "
-                        + claim.getPayeePayoutMethod() + " " + mask(claim.getPayeeAccountRef()) + " · " + reference,
+                "BWP " + Money.text(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
+                        + claim.getPayeePayoutMethod() + " " + mask(claim.getPayeeAccountRef()) + " · " + reference
+                        + " · settlement confirmed",
                 actor.getUsername());
         Map<String, Object> paid = new LinkedHashMap<>();
         paid.put("claimRef", ref);
         paid.put("policyRef", claim.getPolicyRef());
         paid.put("customerName", claim.getCustomerName());
         paid.put("product", claim.getProduct());
-        paid.put("amount", String.valueOf(claim.getPayoutAmount()));
+        paid.put("amount", claim.getPayoutAmount().toPlainString());
         paid.put("payoutRef", reference);
         outbox.publish(Events.CLAIM_PAID, ref, paid, actor.getUsername());
         if (claim.getPolicyRef() != null) {
@@ -470,6 +634,7 @@ public class ClaimWorkflow {
     /** The guard order of the demo server's state machine: known action, legal from here, then permission. */
     private String guard(InsuranceClaim claim, String action, AppUser actor) {
         Transition transition = TRANSITIONS.get(action);
+        com.nsure.common.ExpectedVersion.check("Claim " + claim.getRef(), claim.getRowVersion());
         String state = claim.getStatus();
         if (!transition.from().contains(state)) {
             List<String> allowed = allowedActions(state);
@@ -491,19 +656,22 @@ public class ClaimWorkflow {
             throw new IllegalArgumentException(claim.getRef() + " has no valid date of the event, so its checks cannot run.");
         }
         LocalDate start = policy.getCoverStartDate();
-        // 1. Policy Active: active, and its cover had started on the date of the event.
-        boolean active = PolicyWorkflow.ACTIVE.equals(policy.getStatus()) && start != null && !start.isAfter(event);
+        // 1. Policy Active: cover was in force on the date of the event (NS-SH05-002, AT-SH05-01). It is judged on
+        //    the event date, not on the policy's status today, so a claim reported after a lapse or cancellation is
+        //    assessed on the cover that applied when the event happened.
+        boolean active = coverInForceOn(policy, event);
         // 2. Waiting Period: the event is at least the product's waiting period after cover started.
         boolean waited = start != null
-                && ChronoUnit.DAYS.between(start, event) >= policies.product(policy).getWaitingPeriodDays();
+                && ChronoUnit.DAYS.between(start, event) >= policies.terms(policy).getWaitingPeriodDays();
         // 3. Premiums Paid: the event is on or after the cover start (premiums paid before then bought no cover
         //    for it), and the policy was paid up to it or the event fell within the grace period.
         boolean paid = start != null && !event.isBefore(start)
                 && ((policy.getNextPremiumDue() != null && !policy.getNextPremiumDue().isBefore(event))
                         || (policy.getGracePeriodEnd() != null && !policy.getGracePeriodEnd().isBefore(event)));
-        // 4. Beneficiary Match: the claimant is a beneficiary registered on the policy.
+        // 4. Beneficiary Match: the claimant was a beneficiary registered on the policy on the event date
+        //    (NS-SH05-002): someone added after the event does not match, someone removed after it still does.
         String claimant = normalise(claim.getClaimantName());
-        boolean beneficiary = policies.beneficiaries(policy).stream()
+        boolean beneficiary = policies.beneficiariesOn(policy, event).stream()
                 .anyMatch(row -> normalise(row.getFullName()).equals(claimant));
         // 5. No Duplicate: no earlier claim, not rejected, on this policy for the same event (same date and claim
         //    type). Two hospital stays on one policy are two events, so both pass; a later duplicate never makes
@@ -524,6 +692,40 @@ public class ClaimWorkflow {
         claim.setCheckNoDuplicate(result(unique));
         claim.setCheckRulesVersion(CHECK_RULES_VERSION);
         return active && waited && paid && beneficiary && unique;
+    }
+
+    /**
+     * Whether cover was in force on {@code event}: cover had started by then, and no change that ends cover
+     * (cancelled, lapsed, no cover, expired, claimed) is recorded before that day, unless a later change before the
+     * event restored it. Cover that ends on a day still covers events that day; cover restored on a day covers events
+     * from that day. Policies with no recorded changes fall back to having started cover.
+     */
+    private boolean coverInForceOn(InsurancePolicy policy, LocalDate event) {
+        LocalDate start = policy.getCoverStartDate();
+        if (start == null || start.isAfter(event)) {
+            return false;
+        }
+        // NS-DAT-002: the state in force on the event date is the last change *effective* on or before it, whenever
+        // it was recorded. A cover end recorded late (a returned premium noticed weeks after grace ran out) still
+        // applies from the day it took effect, and a reinstatement after the event does not reach back to it.
+        List<WorkflowLog> changes = new ArrayList<>(em.createQuery("select h from WorkflowLog h where h.entityType = :type"
+                        + " and h.entityRef = :ref", WorkflowLog.class)
+                .setParameter("type", WorkflowHistory.POLICY)
+                .setParameter("ref", policy.getRef())
+                .getResultList());
+        changes.sort(java.util.Comparator.comparing(WorkflowLog::getEffectiveDate)
+                .thenComparing(WorkflowLog::getPerformedAt).thenComparing(WorkflowLog::getId));
+        String last = null;
+        for (WorkflowLog change : changes) {
+            String to = change.getNewState();
+            if (to == null || to.equals(change.getPreviousState()) || change.getPerformedAt() == null) {
+                continue;
+            }
+            if (!change.getEffectiveDate().isAfter(event)) {
+                last = to;
+            }
+        }
+        return last == null || PolicyWorkflow.ACTIVE.equals(last);
     }
 
     /** Checks that decide whether there was valid cover for the event. A failure cannot be overridden. */
@@ -655,7 +857,8 @@ public class ClaimWorkflow {
 
     /** The beneficiary named as the claimant, else the primary one, else the first (demo server payee.py). */
     private void payeeFromBeneficiary(InsuranceClaim claim, InsurancePolicy policy) {
-        List<PolicyBeneficiary> rows = policies.beneficiaries(policy);
+        // The beneficiaries designated when the event happened, not any added since (NS-SH05-002).
+        List<PolicyBeneficiary> rows = policies.beneficiariesOn(policy, LocalDate.parse(claim.getEventDate()));
         String claimant = normalise(claim.getClaimantName());
         rows.stream().filter(row -> normalise(row.getFullName()).equals(claimant)).findFirst()
                 .or(() -> rows.stream().filter(PolicyBeneficiary::isPrimary).findFirst())

@@ -16,12 +16,16 @@ public final class IntegrationViews {
 
     public record EventView(String eventId, String eventType, String aggregateRef, String correlationId,
             String publishedBy, LocalDateTime occurredAt, String payload, String status,
-            List<DeliveryView> deliveries) {
+            List<DeliveryView> deliveries, int schemaVersion, Long aggregateVersion) {
     }
 
     public record InboundView(Long id, String provider, String providerRef, String messageType, String businessRef,
             BigDecimal amount, String status, String resultRef, String detail, String receivedBy,
             LocalDateTime receivedAt) {
+    }
+
+    public record ProviderReceiptView(Long id, String provider, String providerRef, BigDecimal amount,
+            String currency, String recordedBy, LocalDateTime recordedAt) {
     }
 
     public record DashboardView(long events, Map<String, Long> deliveriesByStatus, long failed,

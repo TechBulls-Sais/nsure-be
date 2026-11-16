@@ -90,6 +90,16 @@ public class EventDelivery {
         }
     }
 
+    /**
+     * Held back, not attempted: an earlier event of the same aggregate has not reached this handler yet (NS-API-004).
+     * The reason stays on the delivery as evidence; it is tried again once the earlier one is through.
+     */
+    void heldFor(String reason, int seconds) {
+        lastError = reason.length() <= 1000 ? reason : reason.substring(0, 1000);
+        updatedAt = LocalDateTime.now();
+        nextAttemptAt = dueNow().plusSeconds(seconds);
+    }
+
     void replay() {
         status = PENDING;
         attempts = 0;

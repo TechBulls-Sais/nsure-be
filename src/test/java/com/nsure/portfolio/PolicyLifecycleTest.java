@@ -76,7 +76,7 @@ class PolicyLifecycleTest {
                 .andExpect(jsonPath("$[?(@.action == 'Lapsed')]").isNotEmpty());
         // TC-21: a premium after lapse does not reinstate.
         mockMvc.perform(json(post("/portfolio/policies/" + policy + "/payments"), "admin", "{\"method\":\"Orange Money\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
     }
 
     @Test
@@ -122,15 +122,30 @@ class PolicyLifecycleTest {
         String body = mockMvc.perform(json(post("/portfolio/policies"), "admin",
                         "{\"name\":\"" + name + "\",\"product\":\"Term Life\",\"amount\":20000,\"premium\":50}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("Active"))
+                .andExpect(jsonPath("$.status").value("Pending Payment"))
                 .andReturn().getResponse().getContentAsString();
-        return JsonPath.read(body, "$.id");
+        String ref = JsonPath.read(body, "$.id");
+        // Staff issue makes an offer; cover starts on the first premium (NS-IL01-006).
+        mockMvc.perform(json(post("/portfolio/policies/" + ref + "/payments"), "admin", "{\"method\":\"Bank EFT\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Active"));
+        return ref;
     }
 
     private void dates(String ref, LocalDate start, LocalDate nextDue, LocalDate graceEnd) {
         tx.executeWithoutResult(s -> em.createQuery("update InsurancePolicy p set p.coverStartDate = :start,"
                         + " p.nextPremiumDue = :due, p.gracePeriodEnd = :grace where p.ref = :ref")
                 .setParameter("start", start).setParameter("due", nextDue).setParameter("grace", graceEnd)
+                .setParameter("ref", ref).executeUpdate());
+        // The first premium paid the month cover started, not today.
+        tx.executeWithoutResult(s -> em.createQuery("update PremiumPayment t set t.periodStart = :start,"
+                        + " t.periodEnd = :end where t.policyRef = :ref")
+                .setParameter("start", start).setParameter("end", start.plusMonths(1).minusDays(1))
+                .setParameter("ref", ref).executeUpdate());
+        // ...and so did the instalment it settled.
+        tx.executeWithoutResult(s -> em.createQuery("update Instalment i set i.periodStart = :start, i.dueDate = :start,"
+                        + " i.periodEnd = :end where i.policyRef = :ref")
+                .setParameter("start", start).setParameter("end", start.plusMonths(1).minusDays(1))
                 .setParameter("ref", ref).executeUpdate());
     }
 

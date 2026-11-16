@@ -16,10 +16,13 @@ public class IntegrationController {
 
     private final IntegrationService integration;
     private final PaymentNotifications payments;
+    private final ProviderStatusClient providerStatus;
 
-    public IntegrationController(IntegrationService integration, PaymentNotifications payments) {
+    public IntegrationController(IntegrationService integration, PaymentNotifications payments,
+            ProviderStatusClient providerStatus) {
         this.integration = integration;
         this.payments = payments;
+        this.providerStatus = providerStatus;
     }
 
     @GetMapping("/dashboard")
@@ -52,5 +55,18 @@ public class IntegrationController {
     @PostMapping("/payment-notifications")
     public IntegrationViews.InboundView paymentNotification(@RequestBody JsonNode body) {
         return payments.receive(body);
+    }
+
+    /** Simulator only: the provider's side receives money, {provider, providerReference, amount, currency?}. */
+    @PostMapping("/simulator/provider-receipts")
+    public IntegrationViews.ProviderReceiptView simulateProviderReceipt(@RequestBody JsonNode body) {
+        SimulatedProviderReceipt r = providerStatus.simulateReceipt(text(body, "provider"),
+                text(body, "providerReference"), text(body, "amount"), text(body, "currency"));
+        return new IntegrationViews.ProviderReceiptView(r.getId(), r.getProvider(), r.getProviderRef(),
+                r.getAmount(), r.getCurrency(), r.getRecordedBy(), r.getRecordedAt());
+    }
+
+    private static String text(JsonNode body, String field) {
+        return body != null && body.hasNonNull(field) ? body.get(field).asText() : null;
     }
 }

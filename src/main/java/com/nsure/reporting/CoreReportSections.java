@@ -33,7 +33,8 @@ public class CoreReportSections {
             long lapsed = countOf(policies, "Lapsed");
             BigDecimal inForce = amountOf(policies, "Active");
             long openClaims = claims.stream()
-                    .filter(r -> List.of("Initiated", "Under Review", "Recommended", "Approved").contains(r.label()))
+                    .filter(r -> List.of("Initiated", "Under Review", "Recommended", "Approved", "Payout Sent",
+                            "Payout Failed").contains(r.label()))
                     .mapToLong(BreakdownRow::count).sum();
             long applications = em.createQuery("select count(a) from InsuranceApplication a", Long.class)
                     .getSingleResult();

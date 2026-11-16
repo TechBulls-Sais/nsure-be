@@ -157,6 +157,14 @@ class RbacAndAuditIntegrationTest {
         JsonNode replay = send("admin", post("/roles").header("Idempotency-Key", key).content(roleBody(name)), 200);
         assertThat(replay.get("resourceId").asLong()).isEqualTo(first.get("resourceId").asLong());
         assertThat(replay.get("commandId").asLong()).isEqualTo(first.get("commandId").asLong());
+        // NS-API-002: the same key with a changed request is refused, never answered with the old result.
+        JsonNode changed = send("admin", post("/roles").header("Idempotency-Key", key)
+                .content(roleBody("Changed " + suffix())), 409);
+        assertThat(changed.get("message").asText()).contains("different request");
+        // A key belongs to its caller: another user's identical key is a separate command.
+        String other = "Idem other " + suffix();
+        JsonNode theirs = send("secadmin", post("/roles").header("Idempotency-Key", key).content(roleBody(other)), 201);
+        assertThat(theirs.get("commandId").asLong()).isNotEqualTo(first.get("commandId").asLong());
 
         String retryKey = "retry-" + suffix();
         JsonNode failed = send("admin", post("/roles").header("Idempotency-Key", retryKey).content(roleBody(name)), 409);
@@ -205,7 +213,7 @@ class RbacAndAuditIntegrationTest {
         long roleId = createRole("Read some " + suffix());
         // ALL_FUNCTIONS_READ is no longer a code (Nsure Life NS-SH11-002: explicit grants only).
         send("admin", put("/roles/" + roleId + "/permissions")
-                .content("{\"permissions\":{\"ALL_FUNCTIONS_READ\":true}}"), 400);
+                .content("{\"permissions\":{\"ALL_FUNCTIONS_READ\":true}}"), 422);
         grantRole(roleId, "{\"permissions\":{\"READ_AUDIT\":true,\"READ_ROLE\":true}}");
         String username = "readonly" + suffix();
         send("admin", post("/users").content(userBody(username, new long[] {roleId})), 201);
@@ -246,7 +254,7 @@ class RbacAndAuditIntegrationTest {
         send("admin", put("/permissions/" + permissionId).content("{\"grouping\":\"" + grouping + "\"}"), 200);
         send("admin", delete("/permissions/" + permissionId), 403);
         // The checker on identity changes cannot be switched off, or one administrator could act alone.
-        send("admin", put("/permissions/" + updateRoleId).content("{\"canMakerChecker\":false}"), 400);
+        send("admin", put("/permissions/" + updateRoleId).content("{\"canMakerChecker\":false}"), 422);
 
         String roleName = "Desk " + suffix();
         long roleId = createRole(roleName);
@@ -273,7 +281,7 @@ class RbacAndAuditIntegrationTest {
                 superRoleId = role.get("id").asLong();
             }
         }
-        send("admin", delete("/roles/" + superRoleId), 400);
+        send("admin", delete("/roles/" + superRoleId), 422);
     }
 
     private long createRole(String name) throws Exception {

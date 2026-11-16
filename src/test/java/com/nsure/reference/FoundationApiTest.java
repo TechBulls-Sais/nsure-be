@@ -46,7 +46,7 @@ class FoundationApiTest {
                 .andExpect(jsonPath("$[?(@.name == 'Omang')]").isNotEmpty());
 
         mockMvc.perform(get("/reference/relationships/not-a-screen"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.detail").value("Unknown screen not-a-screen"))
                 .andExpect(jsonPath("$.message").value("Unknown screen not-a-screen"));
     }

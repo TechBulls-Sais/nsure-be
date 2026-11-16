@@ -91,6 +91,10 @@ class EndpointCoverageTest {
         assertThat(ruleFor("POST", "/portfolio/claims/CLM-1/approve").access().permissions()).containsExactly("APPROVE_CLAIM");
         assertThat(ruleFor("POST", "/portfolio/claims/CLM-1/reject").access().permissions()).containsExactly("REJECT_CLAIM");
         assertThat(ruleFor("POST", "/portfolio/claims/CLM-1/pay").access().permissions()).containsExactly("SETTLE_CLAIM");
+        assertThat(ruleFor("POST", "/portfolio/claims/CLM-1/confirm-payout").access().permissions())
+                .containsExactly("SETTLE_CLAIM");
+        assertThat(ruleFor("POST", "/portfolio/claims/CLM-1/payout-failed").access().permissions())
+                .containsExactly("SETTLE_CLAIM");
     }
 
     /** The first rule that matches, as in the security filter chain. */

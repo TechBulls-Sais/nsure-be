@@ -1,0 +1,58 @@
+databaseChangeLog:
+  # Gap register §2, batch 3: individual quotation (IL01-001/004, AT-IL01-01, SH03-003/005).
+  - changeSet:
+      id: 063-quotes
+      author: nsure
+      comment: >-
+        A stored, versioned quote: the inputs, the rate version and the calculation trace it was priced with, its
+        validity, and its acceptance. A revised offer is a new version of the same quote; earlier versions stay.
+      changes:
+        - createTable:
+            tableName: nb_quote
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: version_no, type: int, constraints: {nullable: false}}
+              - column: {name: customer_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: customer_name, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: product, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: tier, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: sum_assured, type: "decimal(19,2)", constraints: {nullable: false}}
+              - column: {name: premium, type: "decimal(19,2)", constraints: {nullable: false}}
+              - column: {name: currency, type: varchar(3), constraints: {nullable: false}}
+              - column: {name: pricing_method, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: rate_version, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: priced_on, type: date, constraints: {nullable: false}}
+              - column: {name: valid_until, type: date, constraints: {nullable: false}}
+              - column: {name: inputs_json, type: varchar(4000), constraints: {nullable: false}}
+              - column: {name: trace_json, type: varchar(4000), constraints: {nullable: false}}
+              - column: {name: input_hash, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: service_version, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: differences, type: varchar(2000)}
+              - column: {name: accepted_by, type: varchar(100)}
+              - column: {name: accepted_at, type: datetime}
+              - column: {name: acceptance_note, type: varchar(300)}
+              - column: {name: application_ref, type: varchar(20)}
+              - column: {name: policy_ref, type: varchar(20)}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: nb_quote
+            columnNames: record_ref, version_no
+            constraintName: uk_nb_quote_version
+        - createIndex:
+            tableName: nb_quote
+            indexName: ix_nb_quote_customer
+            columns:
+              - column: {name: customer_ref}
+        - addColumn:
+            tableName: ins_application
+            columns:
+              - column: {name: quote_ref, type: varchar(20)}
+              - column: {name: quote_version, type: int}
+        - addColumn:
+            tableName: ins_policy
+            columns:
+              - column: {name: quote_ref, type: varchar(20)}
+              - column: {name: quote_version, type: int}

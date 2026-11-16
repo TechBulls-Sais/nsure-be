@@ -62,6 +62,7 @@ public class SchemeBillingService {
             throw new IllegalArgumentException("Period must be a month in the format yyyy-MM");
         }
         GroupScheme scheme = records.lockedScheme(schemeRef);
+        com.nsure.common.ExpectedVersion.check("Scheme " + schemeRef, scheme.getRowVersion());
         SchemeInvoice existing = em.createQuery("select i from SchemeInvoice i where i.scheme = :scheme"
                         + " and i.period = :period", SchemeInvoice.class)
                 .setParameter("scheme", scheme)

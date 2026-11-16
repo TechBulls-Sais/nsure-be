@@ -1,0 +1,96 @@
+databaseChangeLog:
+  # Fixes where existing behaviour contradicted the Nsure Life Detailed Product Specification v1.0
+  # (docs/NSURE_LIFE_GAP_REGISTER.md §1).
+  - changeSet:
+      id: 060-policy-issue-trace
+      author: nsure
+      comment: >-
+        NS-IL01-006: a staff-issued policy records the application it was issued from (so an application is issued
+        once) and the Idempotency-Key of the request that created it (so a resubmit returns the same policy).
+      changes:
+        - addColumn:
+            tableName: ins_policy
+            columns:
+              - column: {name: application_ref, type: varchar(20)}
+              - column: {name: issue_key, type: varchar(80)}
+        - addUniqueConstraint:
+            tableName: ins_policy
+            columnNames: application_ref
+            constraintName: uk_ins_policy_application
+        - addUniqueConstraint:
+            tableName: ins_policy
+            columnNames: issue_key
+            constraintName: uk_ins_policy_issue_key
+  - changeSet:
+      id: 060-provider-receipt-simulator
+      author: nsure
+      comment: >-
+        NS-SH04-004: a payment notification is applied only when the provider confirms it holds the money. Until real
+        provider status APIs exist (B2/B3/B4), this table is the simulated providers' own record of what they received.
+      changes:
+        - createTable:
+            tableName: sim_provider_receipt
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: provider, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: provider_ref, type: varchar(80), constraints: {nullable: false}}
+              - column: {name: amount, type: "decimal(15,2)", constraints: {nullable: false}}
+              - column: {name: currency, type: varchar(3), constraints: {nullable: false}}
+              - column: {name: recorded_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: recorded_at, type: datetime, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: sim_provider_receipt
+            columnNames: provider, provider_ref
+            constraintName: uk_sim_provider_receipt
+  - changeSet:
+      id: 060-command-idempotency-scope
+      author: nsure
+      comment: >-
+        NS-API-002: an Idempotency-Key belongs to the caller who sent it, and a reused key must carry the same request.
+        The key is unique per maker and operation, and the request's fingerprint (secrets redacted) is kept with it.
+      changes:
+        - addColumn:
+            tableName: command_source
+            columns:
+              - column: {name: request_hash, type: varchar(64)}
+        - dropUniqueConstraint:
+            tableName: command_source
+            constraintName: uk_command_idem
+        - addUniqueConstraint:
+            tableName: command_source
+            columnNames: maker_id, action_name, entity_name, idempotency_key
+            constraintName: uk_command_idem_maker
+  - changeSet:
+      id: 060-auth-session
+      author: nsure
+      comment: >-
+        NS-SH11-001: the browser keeps an opaque session token, never the password. Only the token's SHA-256 is stored;
+        a session ends after idle time, at an absolute expiry, on sign-out, or when the user's password changes.
+      changes:
+        - createTable:
+            tableName: auth_session
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: token_hash, type: varchar(64), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_auth_session_token}}
+              - column: {name: user_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_auth_session_user, references: app_user(id)}}
+              - column: {name: credential_stamp, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: last_seen_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: expires_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: revoked_at, type: datetime}
+  - changeSet:
+      id: 060-cover-amounts-decimal
+      author: nsure
+      comment: >-
+        NS-DAT-003: sums assured, claim amounts and payouts are fixed-precision money, not whole-number ints.
+        MySQL's MODIFY drops NOT NULL, so it is restored after each change.
+      changes:
+        - modifyDataType: {tableName: ins_application, columnName: amount, newDataType: "decimal(19,2)"}
+        - addNotNullConstraint: {tableName: ins_application, columnName: amount, columnDataType: "decimal(19,2)"}
+        - modifyDataType: {tableName: ins_policy, columnName: amount, newDataType: "decimal(19,2)"}
+        - addNotNullConstraint: {tableName: ins_policy, columnName: amount, columnDataType: "decimal(19,2)"}
+        - modifyDataType: {tableName: ins_claim, columnName: amount, newDataType: "decimal(19,2)"}
+        - addNotNullConstraint: {tableName: ins_claim, columnName: amount, columnDataType: "decimal(19,2)"}
+        - modifyDataType: {tableName: ins_receipt, columnName: amount, newDataType: "decimal(19,2)"}
+        - addNotNullConstraint: {tableName: ins_receipt, columnName: amount, columnDataType: "decimal(19,2)"}
+        - modifyDataType: {tableName: ins_claim, columnName: payout_amount, newDataType: "decimal(19,2)"}

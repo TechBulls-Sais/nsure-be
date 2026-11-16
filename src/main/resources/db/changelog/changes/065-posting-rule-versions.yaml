@@ -1,0 +1,62 @@
+databaseChangeLog:
+  # Versioning verification §3 defect 3: posting rules were overwritten in place (NS-SH08-001, Blueprint §7).
+  - changeSet:
+      id: 065-posting-rule-versions
+      author: nsure
+      comment: >-
+        A posting rule becomes a series of immutable versions per event type. A version is proposed, approved by a
+        different user, and applies to events dated on or after effective_from until the next approved version starts.
+        Existing rows become approved version history effective from 2000-01-01.
+      changes:
+        - dropUniqueConstraint:
+            tableName: fin_posting_rule
+            constraintName: uk_fin_rule_event
+        - addColumn:
+            tableName: fin_posting_rule
+            columns:
+              - column: {name: effective_from, type: date}
+              - column: {name: change_reason, type: varchar(500)}
+              - column: {name: approval_status, type: varchar(20)}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+              - column: {name: rejection_reason, type: varchar(500)}
+        - sql:
+            sql: >-
+              UPDATE fin_posting_rule SET effective_from = DATE '2000-01-01', approval_status = 'APPROVED',
+              approved_by = updated_by, approved_at = updated_at,
+              change_reason = 'Rule in force before versioned posting rules'
+        - addNotNullConstraint:
+            tableName: fin_posting_rule
+            columnName: effective_from
+            columnDataType: date
+        - addNotNullConstraint:
+            tableName: fin_posting_rule
+            columnName: approval_status
+            columnDataType: varchar(20)
+        - addUniqueConstraint:
+            tableName: fin_posting_rule
+            columnNames: event_type, version
+            constraintName: uk_fin_rule_event_version
+  - changeSet:
+      id: 065-journal-posting-rule
+      author: nsure
+      comment: >-
+        Each journal keeps the id of the exact rule version it posted with. Journals whose recorded version still
+        exists are linked; journals posted under a version that was overwritten before this change stay unlinked,
+        because that mapping no longer exists anywhere.
+      changes:
+        - addColumn:
+            tableName: fin_journal
+            columns:
+              - column: {name: posting_rule_id, type: bigint}
+        - sql:
+            sql: >-
+              UPDATE fin_journal SET posting_rule_id = (SELECT r.id FROM fin_posting_rule r
+              WHERE r.event_type = fin_journal.event_type AND r.version = fin_journal.rule_version)
+              WHERE rule_version IS NOT NULL AND rule_version > 0
+        - addForeignKeyConstraint:
+            baseTableName: fin_journal
+            baseColumnNames: posting_rule_id
+            referencedTableName: fin_posting_rule
+            referencedColumnNames: id
+            constraintName: fk_fin_journal_posting_rule

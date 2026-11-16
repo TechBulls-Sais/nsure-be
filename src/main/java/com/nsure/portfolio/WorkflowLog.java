@@ -44,7 +44,26 @@ public class WorkflowLog {
     @Column(name = "performed_at", nullable = false)
     private LocalDateTime performedAt;
 
+    /**
+     * NS-DAT-002: the first day the new state applies to the business (for a policy, to its cover), as distinct from
+     * {@code performedAt}, when the system recorded it. Null on entries recorded before effective dates were kept.
+     */
+    @Column(name = "effective_date")
+    private java.time.LocalDate effectiveDate;
+
     protected WorkflowLog() {
+    }
+
+    public WorkflowLog(String entityType, String entityRef, String entityLabel, String action,
+            String previousState, String newState, String details, String performedBy,
+            java.time.LocalDate effectiveDate) {
+        this(entityType, entityRef, entityLabel, action, previousState, newState, details, performedBy);
+        this.effectiveDate = effectiveDate;
+    }
+
+    /** The day the state took effect: its effective date, or the day it was recorded for older entries. */
+    public java.time.LocalDate getEffectiveDate() {
+        return effectiveDate != null ? effectiveDate : performedAt.toLocalDate();
     }
 
     public WorkflowLog(String entityType, String entityRef, String entityLabel, String action,

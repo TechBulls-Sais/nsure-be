@@ -11,8 +11,9 @@ import org.springframework.data.repository.query.Param;
 
 public interface CommandSourceRepository extends JpaRepository<CommandSource, Long> {
 
-    Optional<CommandSource> findByActionNameAndEntityNameAndIdempotencyKey(
-            String actionName, String entityName, String idempotencyKey);
+    /** An Idempotency-Key belongs to the caller who sent it: one user's key never returns another's result. */
+    Optional<CommandSource> findByMakerIdAndActionNameAndEntityNameAndIdempotencyKey(
+            Long makerId, String actionName, String entityName, String idempotencyKey);
 
     @Query("""
             select c from CommandSource c

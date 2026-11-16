@@ -105,7 +105,7 @@ final class ClaimSummaryPdf {
         pdf.section("5. Payment");
         if (paid) {
             pdf.row("Amount paid", c.getPayoutAmount() == null ? null : money(c.getPayoutAmount())
-                    + (c.getPayoutAmount() != null && c.getPayoutAmount() != c.getAmount()
+                    + (c.getPayoutAmount() != null && c.getPayoutAmount().compareTo(c.getAmount()) != 0
                             ? " (claimed " + money(c.getAmount()) + ")" : ""));
             pdf.row("Paid on", c.getPaidAt() == null ? null : c.getPaidAt().format(WHEN));
             pdf.row("Paid to", blank(c.getPayeeName()) ? null : c.getPayeeName()

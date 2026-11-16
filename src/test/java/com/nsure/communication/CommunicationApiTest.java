@@ -124,7 +124,7 @@ class CommunicationApiTest {
 
     @Test
     void anOptOutSuppressesTheChannelAndAnOptInSendsIt() throws Exception {
-        String ref = customer("Boitumelo Sebina", "boitumelo");
+        String ref = customer("Boitumelo Sebina", "boitumelo", "+267 71 555 127");
         mockMvc.perform(get("/communications/preferences/" + ref).with(httpBasic("ops", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.channels[0].channel").value("EMAIL"))
@@ -140,7 +140,7 @@ class CommunicationApiTest {
                 .andExpect(status().isForbidden());
         mockMvc.perform(json(put("/communications/preferences/" + ref), "service",
                         "{\"channel\":\"WHATSAPP\",\"status\":\"OPTED_IN\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(put("/communications/preferences/" + ref), "service",
                         "{\"channel\":\"EMAIL\",\"status\":\"OPTED_OUT\"}"))
                 .andExpect(status().isOk())
@@ -181,9 +181,17 @@ class CommunicationApiTest {
         // Blueprint §5: a free-form WhatsApp message only within 24 hours of the customer's last WhatsApp message.
         String whatsapp = "{\"customerRef\":\"" + ref + "\",\"channel\":\"WHATSAPP\",\"body\":\"Please see your portal.\"}";
         mockMvc.perform(json(post("/communications/messages"), "service", whatsapp))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(containsString("within 24 hours")));
-        callback("inbound", "{\"providerMessageId\":\"wa-in-1\",\"channel\":\"WHATSAPP\",\"from\":\"+26772123456\","
+        // NS-SH09B-006: the opted-in number was never verified, so a reply from it is not trusted to name the customer.
+        callback("inbound", "{\"providerMessageId\":\"wa-in-0\",\"channel\":\"WHATSAPP\",\"from\":\"+26772123456\","
+                + "\"text\":\"Hello, is my cover active?\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("TRIAGE"));
+        mockMvc.perform(json(post("/communications/messages"), "service", whatsapp))
+                .andExpect(status().isUnprocessableEntity());
+        // The phone registered at onboarding is verified, so a reply from it links to the customer.
+        callback("inbound", "{\"providerMessageId\":\"wa-in-1\",\"channel\":\"WHATSAPP\",\"from\":\"+26771555127\","
                 + "\"text\":\"Hello, is my cover active?\"}")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("LINKED"))
@@ -226,7 +234,7 @@ class CommunicationApiTest {
                 .andExpect(jsonPath("$.status").value("QUEUED"))
                 .andExpect(jsonPath("$.attempts").value(0));
         mockMvc.perform(post("/communications/messages/" + id + "/retry").with(httpBasic("service", "password")))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
     }
 
     @Test
@@ -279,7 +287,7 @@ class CommunicationApiTest {
                 .andReturn().getResponse().getContentAsString();
         Number badId = JsonPath.read(bad, "$.id");
         mockMvc.perform(post("/communications/templates/" + badId + "/approve").with(httpBasic("ops", "password")))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(containsString("{{nationalId}}")));
 
         mockMvc.perform(post("/communications/templates/" + draft + "/approve").with(httpBasic("ops", "password")))
@@ -290,19 +298,23 @@ class CommunicationApiTest {
                 .andExpect(jsonPath("$[?(@.code == 'POLICY_ISSUED_EMAIL' && @.version == 1)].status").value("RETIRED"))
                 .andExpect(jsonPath("$[?(@.code == 'POLICY_ISSUED_EMAIL' && @.version == 2)].status").value("APPROVED"));
         mockMvc.perform(post("/communications/templates/" + draft + "/approve").with(httpBasic("ops", "password")))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
 
         // A new version keeps its event and channel.
         mockMvc.perform(json(post("/communications/templates"), "service",
                         "{\"code\":\"POLICY_ISSUED_EMAIL\",\"channel\":\"WHATSAPP\",\"body\":\"x\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────────
 
     private String customer(String name, String username) throws Exception {
+        return customer(name, username, "+267 71 000 001");
+    }
+
+    private String customer(String name, String username, String phone) throws Exception {
         String body = mockMvc.perform(json(post("/portfolio/customers"), "admin",
-                        "{\"name\":\"" + name + "\",\"email\":\"" + username + "@example.com\",\"phone\":\"+267 71 000 001\","
+                        "{\"name\":\"" + name + "\",\"email\":\"" + username + "@example.com\",\"phone\":\"" + phone + "\","
                                 + "\"username\":\"" + username + "\",\"password\":\"password1\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();

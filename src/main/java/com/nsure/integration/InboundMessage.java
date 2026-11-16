@@ -81,6 +81,14 @@ public class InboundMessage {
     @Column(name = "cleared_at")
     private LocalDateTime clearedAt;
 
+    // Split and partial allocation (NS-SH04-003): how much of this receipt has been applied so far, and the
+    // lines a clearance request proposes ([{"policyRef":"POL-…","amount":"…"}]).
+    @Column(name = "allocated_amount", nullable = false, precision = 15, scale = 2)
+    private BigDecimal allocatedAmount = BigDecimal.ZERO;
+
+    @Column(name = "clearance_allocations", length = 2000)
+    private String clearanceAllocations;
+
     protected InboundMessage() {
     }
 
@@ -152,6 +160,12 @@ public class InboundMessage {
 
     /** Records a clearance request on a receipt in suspense; nothing moves until someone else approves it. */
     public void requestClearance(String action, String policyRef, String reason, String actor) {
+        requestClearance(action, policyRef, null, reason, actor);
+    }
+
+    /** A clearance request with the allocation lines it proposes (null for a refund or a whole-receipt allocation). */
+    public void requestClearance(String action, String policyRef, String allocations, String reason, String actor) {
+        this.clearanceAllocations = allocations;
         this.clearanceAction = action;
         this.clearancePolicyRef = policyRef;
         this.clearanceReason = reason;
@@ -168,6 +182,7 @@ public class InboundMessage {
 
     /** A rejected request: the receipt stays in suspense and a new request can be made. */
     public void clearanceRejected() {
+        this.clearanceAllocations = null;
         this.clearanceAction = null;
         this.clearancePolicyRef = null;
         this.clearanceReason = null;
@@ -201,5 +216,29 @@ public class InboundMessage {
 
     public LocalDateTime getClearedAt() {
         return clearedAt;
+    }
+
+    /** Part of the receipt applied: it stays in suspense with the rest unapplied, ready for another request. */
+    public void partlyApplied(BigDecimal applied, String detail) {
+        this.allocatedAmount = this.allocatedAmount.add(applied);
+        this.detail = detail == null || detail.length() <= 500 ? detail : detail.substring(0, 500);
+        clearanceRejected();
+    }
+
+    public void applied(BigDecimal applied) {
+        this.allocatedAmount = this.allocatedAmount.add(applied);
+    }
+
+    /** What is still unapplied in suspense. */
+    public BigDecimal getUnapplied() {
+        return amount == null ? BigDecimal.ZERO : amount.subtract(allocatedAmount);
+    }
+
+    public BigDecimal getAllocatedAmount() {
+        return allocatedAmount;
+    }
+
+    public String getClearanceAllocations() {
+        return clearanceAllocations;
     }
 }

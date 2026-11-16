@@ -59,6 +59,7 @@ public class CensusService {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("PROCESS_CENSUS");
         GroupScheme scheme = records.lockedScheme(schemeRef);
+        com.nsure.common.ExpectedVersion.check("Scheme " + schemeRef, scheme.getRowVersion());
         String externalId = GroupRecords.requiredText(body, "externalBatchId", "External batch id", 80);
         String mode = GroupRecords.text(body, "mode");
         mode = mode == null ? CensusBatch.PARTIAL : mode.toUpperCase(Locale.ROOT);

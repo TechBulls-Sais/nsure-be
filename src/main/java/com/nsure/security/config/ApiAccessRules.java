@@ -57,6 +57,8 @@ public final class ApiAccessRules {
             rule(POST, "/payment/simulator/*", publicAccess()),
 
             // ── every signed-in user ───────────────────────────────────────────────────────────────────
+            rule(POST, "/auth/session", authenticated()),
+            rule(DELETE, "/auth/session", authenticated()),
             rule(GET, "/me", authenticated()),
             // Staff alerts; each user sees only alerts whose permission they hold.
             rule(GET, "/me/alerts", authenticated()),
@@ -93,11 +95,22 @@ public final class ApiAccessRules {
             rule(GET, "/portfolio/applications", anyOf("READ_APPLICATION")),
             rule(POST, "/portfolio/applications", anyOf("CREATE_APPLICATION")),
             rule(PUT, "/portfolio/applications/*", anyOf("UPDATE_APPLICATION")),
+            rule(GET, "/portfolio/applications/*/checklist", anyOf("READ_APPLICATION")),
+            rule(GET, "/portfolio/application-questions", anyOf("READ_APPLICATION", "CREATE_APPLICATION")),
+            rule(PUT, "/portfolio/applications/*/details", anyOf("UPDATE_APPLICATION")),
+            rule(POST, "/portfolio/applications/*/submit", anyOf("CREATE_APPLICATION", "UPDATE_APPLICATION")),
+            rule(POST, "/portfolio/applications/*/evidence", anyOf("UPDATE_APPLICATION")),
 
             // ── policies, premiums and schemes ─────────────────────────────────────────────────────────
             rule(GET, "/portfolio/policies", anyOf("READ_POLICY")),
             rule(POST, "/portfolio/policies", anyOf("CREATE_POLICY")),
             rule(POST, "/portfolio/quote", anyOf("CREATE_POLICY", "CREATE_APPLICATION")),
+            rule(POST, "/portfolio/quotes", anyOf("CREATE_POLICY", "CREATE_APPLICATION")),
+            rule(GET, "/portfolio/quotes", anyOf("READ_APPLICATION", "READ_POLICY")),
+            rule(GET, "/portfolio/quotes/*", anyOf("READ_APPLICATION", "READ_POLICY")),
+            rule(GET, "/portfolio/quotes/*/replay", anyOf("READ_APPLICATION", "READ_POLICY")),
+            rule(POST, "/portfolio/quotes/*/accept", anyOf("CREATE_POLICY", "CREATE_APPLICATION")),
+            rule(POST, "/portfolio/quotes/*/requote", anyOf("CREATE_POLICY", "CREATE_APPLICATION")),
             rule(POST, "/portfolio/policies/sweep", anyOf("UPDATE_POLICY")),
             rule(POST, "/portfolio/policies/*/payments", anyOf("UPDATE_POLICY")),
             rule(POST, "/portfolio/policies/*/cancel", anyOf("UPDATE_POLICY")),
@@ -115,7 +128,6 @@ public final class ApiAccessRules {
             rule(GET, "/portfolio/receipts", anyOf("READ_PAYMENT")),
             rule(GET, "/payments/transactions", anyOf("READ_PAYMENT")),
             rule(GET, "/payments/transactions/*/log", anyOf("READ_PAYMENT")),
-            rule(PUT, "/portfolio/receipts/*", anyOf("UPDATE_POLICY")),
             rule(GET, "/portfolio/schemes", anyOf("READ_POLICY")),
 
             // ── claims (Claims Assessor) ───────────────────────────────────────────────────────────────
@@ -128,6 +140,10 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/claims/*/approve", anyOf("APPROVE_CLAIM")),
             rule(POST, "/portfolio/claims/*/reject", anyOf("REJECT_CLAIM")),
             rule(POST, "/portfolio/claims/*/pay", anyOf("SETTLE_CLAIM")),
+            rule(POST, "/portfolio/claims/*/confirm-payout", anyOf("SETTLE_CLAIM")),
+            rule(POST, "/portfolio/claims/*/payout-failed", anyOf("SETTLE_CLAIM")),
+            rule(POST, "/portfolio/claims/*/reopen", anyOf("APPROVE_CLAIM")),
+            rule(GET, "/portfolio/claims/*/financials", anyOf("READ_CLAIM")),
             rule(GET, "/portfolio/claims/*/documents", anyOf("READ_CLAIM")),
             rule(GET, "/portfolio/claims/*/documents/*", anyOf("READ_CLAIM")),
             rule(POST, "/portfolio/claims/*/documents", anyOf("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM")),
@@ -137,9 +153,15 @@ public final class ApiAccessRules {
             // ── product catalogue (Product Configurator, Actuary) ──────────────────────────────────────
             // The catalogue is already public on the landing page; staff forms need it to pick a product.
             rule(GET, "/portfolio/products", staff()),
+            rule(GET, "/portfolio/products/*/versions", anyOf("READ_PRODUCT")),
+            rule(POST, "/portfolio/products/*/versions", anyOf("UPDATE_PRODUCT")),
+            rule(POST, "/portfolio/products/*/versions/*/approve", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/products/*/versions/*/reject", anyOf("ACTIVATE_PRODUCT")),
+            rule(GET, "/portfolio/policies/*/terms", anyOf("READ_POLICY")),
             rule(GET, "/portfolio/product-configs", anyOf("READ_PRODUCT")),
             rule(POST, "/portfolio/product-configs", anyOf("CREATE_PRODUCT")),
             rule(PUT, "/portfolio/product-configs/*", anyOf("UPDATE_PRODUCT")),
+            rule(GET, "/portfolio/product-configs/*/versions", anyOf("READ_PRODUCT")),
 
             // ── rate tables (Actuary, Product Configurator): function code or capability ───────────────
             rule(GET, "/admin/rate-tables", anyOf("READ_RATE_TABLE")),
@@ -172,6 +194,7 @@ public final class ApiAccessRules {
             // ── audit log and maker-checker inbox ──────────────────────────────────────────────────────
             rule(GET, "/audits", anyOf("READ_AUDIT")),
             rule(GET, "/audits/*", anyOf("READ_AUDIT")),
+            rule(GET, "/audits/evidence/verify", anyOf("READ_AUDIT")),
             // The service then needs CHECKER_<code of the pending command>, and the checker is never the maker.
             rule(POST, "/audits/*/approve", anyOf(
                     "CHECKER_UPDATE_USER", "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
@@ -202,6 +225,8 @@ public final class ApiAccessRules {
             // ── insurance subledger SH08 (Finance Controller) ──────────────────────────────────────────
             rule(GET, "/finance/**", anyOf("READ_FINANCE")),
             rule(PUT, "/finance/posting-rules/*", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/finance/posting-rules/*/versions/*/approve", anyOf("APPROVE_JOURNAL")),
+            rule(POST, "/finance/posting-rules/*/versions/*/reject", anyOf("APPROVE_JOURNAL")),
             rule(POST, "/finance/journals/*/reverse", anyOf("MANAGE_FINANCE")),
             rule(POST, "/finance/exceptions/*/retry", anyOf("MANAGE_FINANCE")),
             rule(POST, "/finance/periods/*/*", anyOf("CLOSE_PERIOD")),
@@ -257,11 +282,24 @@ public final class ApiAccessRules {
             rule(GET, "/portfolio/shop/cases", customer()),
             rule(POST, "/portfolio/shop/cases", customer()),
 
+            // ── collections SH04: billing accounts for anyone who reads policies or finance; changes by Finance ──
+            rule(GET, "/collections/policies/*", anyOf("READ_POLICY", "READ_FINANCE")),
+            rule(POST, "/collections/receipts/*/reverse", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/instalments/*/adjustments", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/billing-run", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/statements", anyOf("MANAGE_FINANCE")),
+            rule(GET, "/collections/statements", anyOf("READ_FINANCE")),
+            rule(GET, "/collections/statements/*/items", anyOf("READ_FINANCE")),
+            rule(GET, "/collections/reconciliation", anyOf("READ_FINANCE")),
+            rule(POST, "/collections/reconciliation/*/assign", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/reconciliation/*/resolve", anyOf("MANAGE_FINANCE")),
+
             // ── integration and operational control SH12 (Operations Manager) ──────────────────────────
             rule(GET, "/integration/**", anyOf("READ_INTEGRATION")),
             rule(POST, "/integration/outbox/dispatch", anyOf("MANAGE_INTEGRATION")),
             rule(POST, "/integration/deliveries/*/replay", anyOf("MANAGE_INTEGRATION")),
             rule(POST, "/integration/payment-notifications", anyOf("MANAGE_INTEGRATION")),
+            rule(POST, "/integration/simulator/provider-receipts", anyOf("MANAGE_INTEGRATION")),
 
             // ── management reporting SH13 ──────────────────────────────────────────────────────────────
             rule(GET, "/reports/**", anyOf("READ_REPORT")),

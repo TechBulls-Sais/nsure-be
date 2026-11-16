@@ -1,0 +1,94 @@
+databaseChangeLog:
+  # Cross-cutting foundations from the Nsure Life Detailed Product Specification v1.0 (gap register §2):
+  # error contract and correlation, event envelope versions, tamper-evident audit, optimistic locking.
+  - changeSet:
+      id: 061-event-correlation-length
+      author: nsure
+      comment: >-
+        NS-API-001: a caller may send its own X-Correlation-Id (up to 64 characters); events carry it unchanged.
+      changes:
+        - modifyDataType: {tableName: int_outbox_event, columnName: correlation_id, newDataType: varchar(64)}
+        - addNotNullConstraint: {tableName: int_outbox_event, columnName: correlation_id, columnDataType: varchar(64)}
+  - changeSet:
+      id: 061-event-versions
+      author: nsure
+      comment: >-
+        NS-API-003/004: every event carries its schema version and its place in its aggregate's history; each
+        aggregate's events reach a handler in that order. Events published before this keep a null version.
+      changes:
+        - addColumn:
+            tableName: int_outbox_event
+            columns:
+              - column: {name: schema_version, type: int, defaultValueNumeric: 1, constraints: {nullable: false}}
+              - column: {name: aggregate_version, type: bigint}
+        - addUniqueConstraint:
+            tableName: int_outbox_event
+            columnNames: aggregate_ref, aggregate_version
+            constraintName: uk_outbox_aggregate_version
+        - createTable:
+            tableName: int_aggregate_sequence
+            columns:
+              - column: {name: aggregate_ref, type: varchar(60), constraints: {primaryKey: true, nullable: false}}
+              - column: {name: last_version, type: bigint, constraints: {nullable: false}}
+  - changeSet:
+      id: 061-audit-evidence-chain
+      author: nsure
+      comment: >-
+        NS-SH11-005 / AT-SH11-03: append-only audit evidence in a hash chain. Each record's hash covers its content
+        and the previous record's hash; the head row holds the last sequence and hash, so a removed tail is caught.
+      changes:
+        - createTable:
+            tableName: audit_evidence
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: sequence_no, type: bigint, constraints: {nullable: false, unique: true, uniqueConstraintName: uk_audit_evidence_sequence}}
+              - column: {name: occurred_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: actor, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: action, type: varchar(120), constraints: {nullable: false}}
+              - column: {name: entity_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: entity_ref, type: varchar(80)}
+              - column: {name: reason, type: varchar(1000)}
+              - column: {name: correlation_id, type: varchar(64)}
+              - column: {name: prev_hash, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: hash, type: varchar(64), constraints: {nullable: false}}
+        - createIndex:
+            tableName: audit_evidence
+            indexName: ix_audit_evidence_entity
+            columns:
+              - column: {name: entity_type}
+              - column: {name: entity_ref}
+        - createTable:
+            tableName: audit_chain_head
+            columns:
+              - column: {name: id, type: bigint, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: last_sequence, type: bigint, constraints: {nullable: false}}
+              - column: {name: last_hash, type: varchar(64), constraints: {nullable: false}}
+        - insert:
+            tableName: audit_chain_head
+            columns:
+              - column: {name: id, valueNumeric: 1}
+              - column: {name: last_sequence, valueNumeric: 0}
+              - column: {name: last_hash, value: "0000000000000000000000000000000000000000000000000000000000000000"}
+  - changeSet:
+      id: 061-optimistic-locking
+      author: nsure
+      comment: >-
+        NS-TXN-001 / NS-ARC-005: claims, schemes, members and journals carry a row version. A command on a stale copy
+        (If-Match) or a concurrent overwrite is refused with 409 instead of silently replacing another change.
+      changes:
+        - addColumn:
+            tableName: ins_claim
+            columns:
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - addColumn:
+            tableName: ins_scheme
+            columns:
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - addColumn:
+            tableName: grp_member
+            columns:
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - addColumn:
+            tableName: fin_journal
+            columns:
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}

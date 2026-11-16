@@ -1,0 +1,25 @@
+databaseChangeLog:
+  # Versioning verification §3 defect 4: a product configuration save overwrote the previous state (NS-SH02-003,
+  # NS-DAT-004). Each save now keeps an immutable snapshot. Configurations saved before this change start their
+  # history at their next save; their earlier states were not kept and cannot be recovered.
+  - changeSet:
+      id: 067-product-config-versions
+      author: nsure
+      changes:
+        - createTable:
+            tableName: ins_product_config_version
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ins_product_config_version}}
+              - column: {name: config_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: version_no, type: int, constraints: {nullable: false}}
+              - column: {name: snapshot, type: varchar(4000), constraints: {nullable: false}}
+              - column: {name: content_hash, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: saved_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: saved_at, type: datetime, constraints: {nullable: false}}
+        - createIndex:
+            tableName: ins_product_config_version
+            indexName: ix_product_config_version_ref
+            columns:
+              - column: {name: config_ref}
+              - column: {name: version_no}

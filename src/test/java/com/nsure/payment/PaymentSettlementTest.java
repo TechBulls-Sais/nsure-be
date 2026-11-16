@@ -196,6 +196,30 @@ class PaymentSettlementTest {
                 .andExpect(status().isForbidden());
     }
 
+    @Test
+    void theAgreedPremiumIsChargedAndNeverSilentlyRepriced() throws Exception {
+        // Nsure Life NS-IL01-004 / NS-SH02-004 / AT-SH02-02: the premium agreed with the customer is what is charged,
+        // even when today's rate table would price the policy differently; it is never rewritten behind their back.
+        String policy = pendingPolicy("Lorato Agreed", "loratoagreed");
+        tx.executeWithoutResult(s -> em.createQuery("update InsurancePolicy p set p.premium = :agreed, "
+                        + "p.rateTableVersion = 'RT-AGREED-v1' where p.ref = :ref")
+                .setParameter("agreed", new java.math.BigDecimal("123.45")).setParameter("ref", policy).executeUpdate());
+
+        String started = pay("loratoagreed", policy, "Card");
+        long id = ((Number) JsonPath.read(started, "$.transactionId")).longValue();
+        assertThat(settlement.transaction(id).getAmount()).isEqualByComparingTo("123.45");
+        java.math.BigDecimal premium = tx.execute(s -> em.createQuery(
+                "select p.premium from InsurancePolicy p where p.ref = :ref", java.math.BigDecimal.class)
+                .setParameter("ref", policy).getSingleResult());
+        String version = tx.execute(s -> em.createQuery(
+                "select p.rateTableVersion from InsurancePolicy p where p.ref = :ref", String.class)
+                .setParameter("ref", policy).getSingleResult());
+        assertThat(premium).isEqualByComparingTo("123.45");
+        assertThat(version).isEqualTo("RT-AGREED-v1");
+        assertThat(count("select count(h) from WorkflowLog h where h.entityRef = '" + policy + "' and h.action = 'Re-priced'"))
+                .isZero();
+    }
+
     private String pendingPolicy(String name, String username) throws Exception {
         String customer = mockMvc.perform(json(post("/portfolio/customers"), "admin",
                         "{\"name\":\"" + name + "\",\"email\":\"" + username + "@example.com\",\"phone\":\"+267 71 000 009\","

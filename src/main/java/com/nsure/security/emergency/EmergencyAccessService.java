@@ -1,5 +1,6 @@
 package com.nsure.security.emergency;
 
+import com.nsure.audit.evidence.EvidenceChain;
 import com.nsure.common.exception.ConflictException;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.controls.StaffAlertService;
@@ -40,9 +41,11 @@ public class EmergencyAccessService {
     private final AppUserRepository users;
     private final PlatformSecurityContext security;
     private final StaffAlertService alerts;
+    private final EvidenceChain evidence;
 
     public EmergencyAccessService(EmergencyAccessGrantRepository grants, AppUserRepository users,
-            PlatformSecurityContext security, StaffAlertService alerts) {
+            PlatformSecurityContext security, StaffAlertService alerts, EvidenceChain evidence) {
+        this.evidence = evidence;
         this.grants = grants;
         this.users = users;
         this.security = security;
@@ -89,6 +92,8 @@ public class EmergencyAccessService {
                 granter.getUsername() + " gave " + grantee.getUsername() + " " + code + " for " + hours
                         + " hour(s). Reason: " + why,
                 "EMERGENCY_ACCESS_GRANTED:" + grant.getId(), granter.getUsername());
+        evidence.record(granter.getUsername(), "Granted emergency " + code, "User", grantee.getUsername(),
+                hours + " hour(s): " + why);
         return GrantView.of(grant);
     }
 
@@ -107,6 +112,8 @@ public class EmergencyAccessService {
                 caller.getUsername() + " revoked " + grant.getUser().getUsername() + "'s "
                         + grant.getPermissionCode() + " before it expired.",
                 "EMERGENCY_ACCESS_REVOKED:" + grant.getId(), caller.getUsername());
+        evidence.record(caller.getUsername(), "Revoked emergency " + grant.getPermissionCode(), "User",
+                grant.getUser().getUsername(), "Grant " + grant.getId());
         return GrantView.of(grant);
     }
 
@@ -129,6 +136,8 @@ public class EmergencyAccessService {
                     + " or used the emergency access.");
         }
         grant.review(reviewer.getUsername(), required(note, "A review note", 5, 1000));
+        evidence.record(reviewer.getUsername(), "Reviewed emergency " + grant.getPermissionCode(), "User",
+                grant.getUser().getUsername(), grant.getReviewNote());
         return GrantView.of(grant);
     }
 

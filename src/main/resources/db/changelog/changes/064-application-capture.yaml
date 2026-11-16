@@ -1,0 +1,94 @@
+databaseChangeLog:
+  # Gap register §2, batch 4: individual application capture (IL01-002/003, AT-IL01-02).
+  - changeSet:
+      id: 064-application-parties
+      author: nsure
+      comment: >-
+        NS-IL01-002: who proposes, who pays and how (mandate), through which channel or intermediary, and who declared
+        what and when. Null proposer or payer means the policyholder.
+      changes:
+        - addColumn:
+            tableName: ins_application
+            columns:
+              - column: {name: proposer_name, type: varchar(100)}
+              - column: {name: proposer_relationship, type: varchar(60)}
+              - column: {name: payer_name, type: varchar(100)}
+              - column: {name: payer_relationship, type: varchar(60)}
+              - column: {name: payer_id_number, type: varchar(40)}
+              - column: {name: mandate_method, type: varchar(30)}
+              - column: {name: mandate_institution, type: varchar(60)}
+              - column: {name: mandate_account, type: varchar(60)}
+              - column: {name: mandate_debit_day, type: int}
+              - column: {name: channel, type: varchar(20)}
+              - column: {name: intermediary_code, type: varchar(30)}
+              - column: {name: declared_by, type: varchar(100)}
+              - column: {name: declared_at, type: datetime}
+              - column: {name: submitted_by, type: varchar(100)}
+              - column: {name: submitted_at, type: datetime}
+  - changeSet:
+      id: 064-disclosures-and-evidence
+      author: nsure
+      comment: >-
+        NS-IL01-003: product questions (all products when product is null) with the answers given, and the evidence an
+        application needs, by sum assured where it depends on it. Evidence satisfied by KYC counts once the customer is
+        verified.
+      changes:
+        - createTable:
+            tableName: app_disclosure_question
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: product, type: varchar(100)}
+              - column: {name: code, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: question, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: answer_type, type: varchar(10), constraints: {nullable: false}}
+              - column: {name: mandatory, type: int, constraints: {nullable: false}}
+              - column: {name: display_order, type: int, constraints: {nullable: false}}
+        - createTable:
+            tableName: app_disclosure_answer
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: application_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: code, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: question, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: answer, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: answered_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: answered_at, type: datetime, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: app_disclosure_answer
+            columnNames: application_ref, code
+            constraintName: uk_app_disclosure_answer
+        - createTable:
+            tableName: app_evidence_requirement
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: product, type: varchar(100)}
+              - column: {name: document_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: mandatory, type: int, constraints: {nullable: false}}
+              - column: {name: min_sum_assured, type: "decimal(19,2)"}
+              - column: {name: satisfied_by, type: varchar(20)}
+              - column: {name: display_order, type: int, constraints: {nullable: false}}
+        - createTable:
+            tableName: app_evidence
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: application_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: document_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: note, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: recorded_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: recorded_at, type: datetime, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: app_evidence
+            columnNames: application_ref, document_type
+            constraintName: uk_app_evidence
+        - sql:
+            sql: >-
+              INSERT INTO app_disclosure_question (product, code, question, answer_type, mandatory, display_order) VALUES
+              (NULL, 'TOBACCO', 'Has the life insured used tobacco or nicotine in the last 12 months?', 'YES_NO', 1, 1),
+              (NULL, 'TREATMENT', 'Is the life insured receiving treatment, or waiting for results, for a serious illness?', 'YES_NO', 1, 2),
+              (NULL, 'OTHER_COVER', 'Other life cover held with other insurers (insurer and amount), if any', 'TEXT', 0, 3)
+        - sql:
+            sql: >-
+              INSERT INTO app_evidence_requirement (product, document_type, mandatory, min_sum_assured, satisfied_by, display_order) VALUES
+              (NULL, 'Identity verification', 1, NULL, 'KYC', 1),
+              ('Term Life', 'Medical examination report', 1, 1000000, NULL, 2),
+              (NULL, 'Proof of address', 0, NULL, NULL, 3)

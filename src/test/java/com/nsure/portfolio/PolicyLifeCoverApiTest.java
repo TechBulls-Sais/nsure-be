@@ -36,7 +36,7 @@ class PolicyLifeCoverApiTest {
         mockMvc.perform(post("/portfolio/quote")
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Kagiso Sebina\",\"product\":\"Family Funeral\",\"tier\":\"Bronze\"," + family + "}"))
+                        .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Kagiso Sebina\",\"product\":\"Family Funeral\",\"tier\":\"Bronze\"," + family + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.rated").value(true))
                 .andExpect(jsonPath("$.rateTableVersion").value("RT-00001-v1"))
@@ -55,7 +55,7 @@ class PolicyLifeCoverApiTest {
         mockMvc.perform(post("/portfolio/policies")
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Kagiso Sebina\",\"product\":\"Family Funeral\",\"tier\":\"Bronze\","
+                        .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Kagiso Sebina\",\"product\":\"Family Funeral\",\"tier\":\"Bronze\","
                                 + "\"amount\":1,\"premium\":1," + family + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.premium").value(34.13))
@@ -86,8 +86,8 @@ class PolicyLifeCoverApiTest {
         mockMvc.perform(post("/portfolio/applications")
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Lesego Tau\",\"product\":\"Family Funeral\",\"tier\":\"Bronze\"," + lives + "}"))
-                .andExpect(status().isBadRequest())
+                        .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Lesego Tau\",\"product\":\"Family Funeral\",\"tier\":\"Bronze\"," + lives + "}"))
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(Matchers.containsString(
                         "'Sibling' is not covered on the Bronze plan. Allowed: Main Insured, Spouse, Child, Parents")))
                 .andExpect(jsonPath("$.message").value(Matchers.containsString(
@@ -108,26 +108,26 @@ class PolicyLifeCoverApiTest {
         mockMvc.perform(post("/portfolio/applications")
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Masego Pule\",\"product\":\"Family Funeral\",\"tier\":\"Silver\","
+                        .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Masego Pule\",\"product\":\"Family Funeral\",\"tier\":\"Silver\","
                                 + lives(life("Main Insured", "Someone Else", 20)) + "}"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("The customer is the Main Insured; add only the other lives to cover."));
 
         mockMvc.perform(post("/portfolio/applications")
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Masego Pule\",\"product\":\"Term Life\",\"tier\":\"Silver\","
+                        .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Masego Pule\",\"product\":\"Term Life\",\"tier\":\"Silver\","
                                 + lives(life("Spouse", "Kitso Pule", 44)) + "}"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(Matchers.containsString("has a flat premium")));
 
         // Credit life rates the borrower only: a spouse is not in the plan's life assured rules.
         mockMvc.perform(post("/portfolio/quote")
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Masego Pule\",\"product\":\"Individual Credit\",\"tier\":\"Bronze\","
+                        .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Masego Pule\",\"product\":\"Individual Credit\",\"tier\":\"Bronze\","
                                 + lives(life("Spouse", "Kitso Pule", 44)) + "}"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(
                         "'Spouse' is not covered on the Bronze plan. Allowed: Main Insured"));
 
@@ -135,7 +135,7 @@ class PolicyLifeCoverApiTest {
         mockMvc.perform(post("/portfolio/applications")
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Masego Pule\",\"product\":\"Family Funeral\",\"tier\":\"Silver\"}"))
+                        .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Masego Pule\",\"product\":\"Family Funeral\",\"tier\":\"Silver\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.premium").value(90.5))
                 .andExpect(jsonPath("$.lives.length()").value(1));
@@ -144,7 +144,7 @@ class PolicyLifeCoverApiTest {
         mockMvc.perform(post("/portfolio/quote")
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Masego Pule\",\"product\":\"Term Life\",\"tier\":\"Silver\"}"))
+                        .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Masego Pule\",\"product\":\"Term Life\",\"tier\":\"Silver\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.rated").value(false))
                 .andExpect(jsonPath("$.lives").isEmpty());
@@ -184,7 +184,7 @@ class PolicyLifeCoverApiTest {
         mockMvc.perform(post("/portfolio/quote")
                         .with(httpBasic("goitse", "password1"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Kagiso Sebina\",\"product\":\"Family Funeral\",\"tier\":\"Bronze\"}"))
+                        .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Kagiso Sebina\",\"product\":\"Family Funeral\",\"tier\":\"Bronze\"}"))
                 .andExpect(status().isForbidden());
     }
 
@@ -194,7 +194,7 @@ class PolicyLifeCoverApiTest {
         String body = mockMvc.perform(post("/portfolio/customers")
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"" + name + "\",\"email\":\"" + name.replace(' ', '.').toLowerCase()
+                        .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"" + name + "\",\"email\":\"" + name.replace(' ', '.').toLowerCase()
                                 + "@example.com\",\"phone\":\"+267 71 000 000\",\"dateOfBirth\":\"" + birthday(age) + "\""
                                 + login + "}"))
                 .andExpect(status().isOk())

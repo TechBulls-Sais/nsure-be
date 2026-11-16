@@ -32,6 +32,11 @@ public class OutboxDispatcher {
     private static final Logger log = LoggerFactory.getLogger(OutboxDispatcher.class);
     private static final int BATCH = 200;
     private static final int MAX_ROUNDS = 10;
+    /** How long a held delivery waits before checking again whether the earlier event got through. */
+    private static final int HOLD_SECONDS = 30;
+    private static final int DELIVERED = 1;
+    private static final int HELD = 0;
+    private static final int FAILED = -1;
 
     private final EntityManager em;
     private final ObjectMapper mapper;
@@ -78,9 +83,10 @@ public class OutboxDispatcher {
                 break;
             }
             for (Long id : due) {
-                if (deliver(id)) {
+                int outcome = deliver(id);
+                if (outcome == DELIVERED) {
                     delivered++;
-                } else {
+                } else if (outcome == FAILED) {
                     failed++;
                 }
             }
@@ -88,11 +94,19 @@ public class OutboxDispatcher {
         return new DispatchResult(delivered, failed);
     }
 
-    private boolean deliver(Long deliveryId) {
+    /** DELIVERED, HELD (an earlier event of the aggregate must go first) or FAILED. */
+    private int deliver(Long deliveryId) {
+        boolean[] held = {false};
         try {
             tx.executeWithoutResult(status -> {
                 EventDelivery delivery = em.find(EventDelivery.class, deliveryId);
                 if (delivery == null || !EventDelivery.PENDING.equals(delivery.getStatus())) {
+                    return;
+                }
+                String waiting = earlierUndelivered(delivery);
+                if (waiting != null) {
+                    delivery.heldFor(waiting, HOLD_SECONDS);
+                    held[0] = true;
                     return;
                 }
                 DomainEventHandler handler = handlers.get(delivery.getHandler());
@@ -102,7 +116,7 @@ public class OutboxDispatcher {
                 handler.handle(toDomainEvent(delivery.getEvent()));
                 delivery.delivered();
             });
-            return true;
+            return held[0] ? HELD : DELIVERED;
         } catch (RuntimeException ex) {
             String message = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
             log.warn("Delivery {} failed: {}", deliveryId, message);
@@ -112,8 +126,34 @@ public class OutboxDispatcher {
                     delivery.failed(message, maxAttempts);
                 }
             });
-            return false;
+            return FAILED;
         }
+    }
+
+    /**
+     * Why this delivery must wait, or null: each aggregate's events reach a handler in version order (NS-API-004),
+     * so a later event waits while an earlier one is pending or failed for the same handler. A failed earlier event
+     * keeps the later ones waiting until it is replayed, which shows the gap on the integration dashboard.
+     */
+    private String earlierUndelivered(EventDelivery delivery) {
+        OutboxEvent event = delivery.getEvent();
+        if (event.getAggregateVersion() == null) {
+            return null;
+        }
+        return em.createQuery("select d from EventDelivery d where d.handler = :handler"
+                        + " and d.event.aggregateRef = :ref and d.event.aggregateVersion < :version"
+                        + " and d.status <> :delivered order by d.event.aggregateVersion asc", EventDelivery.class)
+                .setParameter("handler", delivery.getHandler())
+                .setParameter("ref", event.getAggregateRef())
+                .setParameter("version", event.getAggregateVersion())
+                .setParameter("delivered", EventDelivery.DELIVERED)
+                .setMaxResults(1)
+                .getResultStream()
+                .findFirst()
+                .map(earlier -> "Waiting for " + earlier.getEvent().getEventType() + " (version "
+                        + earlier.getEvent().getAggregateVersion() + " of " + event.getAggregateRef() + ", "
+                        + earlier.getStatus().toLowerCase(java.util.Locale.ROOT) + ") to reach " + delivery.getHandler())
+                .orElse(null);
     }
 
     /** Puts a failed delivery back in the queue (NS-SH12-005). The event payload itself is never editable. */
@@ -134,7 +174,8 @@ public class OutboxDispatcher {
     DomainEvent toDomainEvent(OutboxEvent event) {
         try {
             return new DomainEvent(event.getEventId(), event.getEventType(), event.getAggregateRef(),
-                    event.getCorrelationId(), event.getOccurredAt(), mapper.readTree(event.getPayload()));
+                    event.getCorrelationId(), event.getOccurredAt(), mapper.readTree(event.getPayload()),
+                    event.getSchemaVersion(), event.getAggregateVersion());
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("Event " + event.getEventId() + " payload is not valid JSON", ex);
         }

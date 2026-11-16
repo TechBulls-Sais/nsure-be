@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -15,9 +16,14 @@ import org.springframework.stereotype.Component;
  * the old "generate as often as you like" buttons left. Each record is its own transaction, so one failure is
  * logged and skipped and never stops the application starting. Once every document is current this finds nothing
  * and does nothing. Not run by the one-shot migrate job (the schema change it relies on comes from 039 and 040).
+ *
+ * <p>Off unless {@code nsure.documents.layout-upgrade=true}: an issued schedule is a controlled record, so it is
+ * never superseded just because the application restarted (AT-SH09A-01). An operator turns this on for one
+ * deliberate, logged run.
  */
 @Component
 @Profile("!migrate")
+@ConditionalOnProperty(name = "nsure.documents.layout-upgrade", havingValue = "true")
 @org.springframework.core.annotation.Order(2)
 public class DocumentLayoutUpgrade implements ApplicationRunner {
 

@@ -33,11 +33,13 @@ public class Subledger {
         if (existing.isPresent()) {
             return existing;
         }
-        PostingRule rule = rule(event.eventType());
+        LocalDate eventDate = event.occurredAt().toLocalDate();
+        // The version in force on the day the business event happened, not today's (NS-SH08-001, NS-DAT-002).
+        PostingRule rule = ruleInForce(event.eventType(), eventDate).orElse(null);
         String problem = null;
         BigDecimal amount = BigDecimal.ZERO;
         if (rule == null || !rule.isActive()) {
-            problem = "No active posting rule for " + event.eventType();
+            problem = "No active posting rule for " + event.eventType() + " on " + eventDate;
             amount = safeAmount(event, "amount");
         } else {
             amount = safeAmount(event, rule.getAmountField());
@@ -60,7 +62,6 @@ public class Subledger {
             credit = rule.getDebitAccount();
             amount = amount.negate();
         }
-        LocalDate eventDate = event.occurredAt().toLocalDate();
         AccountingPeriod period = postingPeriod(eventDate, actor);
         LocalDate accountingDate = period.getCode().equals(YearMonth.from(eventDate).toString())
                 ? eventDate
@@ -70,7 +71,7 @@ public class Subledger {
                         + period.getCode());
         Journal journal = new Journal(nextRef("JNL-", Journal.class), event.eventId(), event.eventType(),
                 event.aggregateRef(), rule.getDomain(), eventDate, accountingDate, period.getCode(), amount,
-                description, rule.getVersion(), actor);
+                description, rule.getVersion(), rule.getId(), actor);
         journal.addLine(debit, amount, BigDecimal.ZERO);
         journal.addLine(credit, BigDecimal.ZERO, amount);
         if (!journal.isBalanced()) {
@@ -96,7 +97,7 @@ public class Subledger {
                 original.getEventType(), original.getSourceRef(), original.getDomain(), original.getEventDate(),
                 period.getCode().equals(YearMonth.from(today).toString()) ? today : YearMonth.parse(period.getCode()).atDay(1),
                 period.getCode(), original.getAmount(), "Reversal of " + original.getRef() + " · " + reason,
-                original.getRuleVersion(), actor);
+                original.getRuleVersion(), original.getPostingRuleId(), actor);
         for (JournalLine line : original.getLines()) {
             reversal.addLine(line.getAccountCode(), line.getCredit(), line.getDebit());
         }
@@ -121,7 +122,7 @@ public class Subledger {
                 ? accountingDate : YearMonth.parse(period.getCode()).atDay(1);
         Journal journal = new Journal(nextRef("JNL-", Journal.class), "MANUAL:" + manualRef, "ManualJournal",
                 manualRef, "SHARED", accountingDate, posted, period.getCode(), total,
-                "Manual journal " + manualRef + " · " + description, 0, actor);
+                "Manual journal " + manualRef + " · " + description, 0, null, actor);
         for (int i = 0; i < accounts.size(); i++) {
             journal.addLine(accounts.get(i), amounts.get(i)[0], amounts.get(i)[1]);
         }
@@ -158,12 +159,33 @@ public class Subledger {
         return created;
     }
 
-    PostingRule rule(String eventType) {
-        return em.createQuery("select r from PostingRule r where r.eventType = :type", PostingRule.class)
+    /**
+     * The approved version that applies on {@code date}: the latest effective on or before it. Versions never overlap,
+     * because each one ends where the next approved one starts; on a shared start date the higher version wins.
+     */
+    Optional<PostingRule> ruleInForce(String eventType, LocalDate date) {
+        return em.createQuery("select r from PostingRule r where r.eventType = :type and r.approvalStatus = :approved"
+                        + " and r.effectiveFrom <= :date order by r.effectiveFrom desc, r.version desc",
+                        PostingRule.class)
                 .setParameter("type", eventType)
+                .setParameter("approved", PostingRule.APPROVED)
+                .setParameter("date", date)
+                .setMaxResults(1)
                 .getResultStream()
-                .findFirst()
-                .orElse(null);
+                .findFirst();
+    }
+
+    /** Every version of every rule, newest first within each event type. */
+    List<PostingRule> ruleVersions() {
+        return em.createQuery("select r from PostingRule r order by r.eventType, r.version desc", PostingRule.class)
+                .getResultList();
+    }
+
+    List<PostingRule> ruleVersions(String eventType) {
+        return em.createQuery("select r from PostingRule r where r.eventType = :type order by r.version desc",
+                        PostingRule.class)
+                .setParameter("type", eventType)
+                .getResultList();
     }
 
     boolean accountExists(String code) {

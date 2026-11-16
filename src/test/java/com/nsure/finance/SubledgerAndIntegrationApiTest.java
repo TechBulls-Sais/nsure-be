@@ -50,6 +50,29 @@ class SubledgerAndIntegrationApiTest {
         String ref = policy[0];
         String premium = policy[1];
 
+        // NS-SH04-004: a notification the provider cannot confirm collects nothing; it waits in suspense.
+        mockMvc.perform(json(post("/integration/payment-notifications"), "ops", "{\"provider\":\"OrangeMoney\","
+                        + "\"providerReference\":\"OM-0999\",\"policyRef\":\"" + ref + "\",\"amount\":\"" + premium + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUSPENSE"))
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("no record of receiving OM-0999")));
+        mockMvc.perform(json(post("/integration/simulator/provider-receipts"), "ops",
+                        "{\"provider\":\"OrangeMoney\",\"providerReference\":\"OM-0998\",\"amount\":\"1.00\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/integration/payment-notifications"), "ops", "{\"provider\":\"OrangeMoney\","
+                        + "\"providerReference\":\"OM-0998\",\"policyRef\":\"" + ref + "\",\"amount\":\"" + premium + "\"}"))
+                .andExpect(jsonPath("$.status").value("SUSPENSE"))
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("confirmed BWP 1.00")));
+        mockMvc.perform(get("/portfolio/policies").with(httpBasic("admin", "password")))
+                .andExpect(jsonPath("$[?(@.id == '" + ref + "')].status").value("Pending Payment"));
+        mockMvc.perform(json(post("/integration/simulator/provider-receipts"), "finance",
+                        "{\"provider\":\"OrangeMoney\",\"providerReference\":\"OM-1001\",\"amount\":\"" + premium + "\"}"))
+                .andExpect(status().isForbidden());
+
+        // The provider confirms it holds the premium, so the confirmation collects it.
+        mockMvc.perform(json(post("/integration/simulator/provider-receipts"), "ops",
+                        "{\"provider\":\"OrangeMoney\",\"providerReference\":\"OM-1001\",\"amount\":\"" + premium + "\"}"))
+                .andExpect(status().isOk());
         String notification = "{\"provider\":\"OrangeMoney\",\"providerReference\":\"OM-1001\",\"policyRef\":\"" + ref
                 + "\",\"amount\":\"" + premium + "\",\"method\":\"Orange Money\"}";
         mockMvc.perform(json(post("/integration/payment-notifications"), "ops", notification))
@@ -112,9 +135,15 @@ class SubledgerAndIntegrationApiTest {
     void aMissingRuleRaisesAnExceptionThatPostsOnceTheRuleIsFixed() throws Exception {
         mockMvc.perform(json(put("/finance/posting-rules/PremiumReceived"), "finance",
                         "{\"debitAccount\":\"1000\",\"creditAccount\":\"4000\",\"domain\":\"INDIVIDUAL\","
-                                + "\"status\":\"INACTIVE\",\"description\":\"Individual premium collected\"}"))
+                                + "\"status\":\"INACTIVE\",\"description\":\"Individual premium collected\","
+                                + "\"reason\":\"Suspend premium postings\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.version").value(2));
+                .andExpect(jsonPath("$.version").value(2))
+                .andExpect(jsonPath("$.approvalStatus").value("PENDING_APPROVAL"));
+        mockMvc.perform(post("/finance/posting-rules/PremiumReceived/versions/2/approve")
+                        .with(httpBasic("admin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inForce").value(true));
         String[] policy = pendingPolicy("Boipelo Rre", "boipelo");
         mockMvc.perform(json(post("/portfolio/policies/" + policy[0] + "/payments"), "admin", "{\"method\":\"Card\"}"))
                 .andExpect(status().isOk());
@@ -124,14 +153,113 @@ class SubledgerAndIntegrationApiTest {
         Integer id = ((List<Integer>) JsonPath.read(exceptions, "$[?(@.sourceRef == '" + policy[0] + "')].id")).get(0);
         mockMvc.perform(json(put("/finance/posting-rules/PremiumReceived"), "finance",
                         "{\"debitAccount\":\"1000\",\"creditAccount\":\"4000\",\"domain\":\"INDIVIDUAL\","
-                                + "\"status\":\"ACTIVE\",\"description\":\"Individual premium collected\"}"))
+                                + "\"status\":\"ACTIVE\",\"description\":\"Individual premium collected\","
+                                + "\"reason\":\"Resume premium postings\"}"))
                 .andExpect(jsonPath("$.version").value(3));
+        // Proposed but not yet approved, the fix changes nothing: the retry still fails.
         mockMvc.perform(post("/finance/exceptions/" + id + "/retry").with(httpBasic("finance", "password")))
+                .andExpect(jsonPath("$.status").value("OPEN"));
+        mockMvc.perform(post("/finance/posting-rules/PremiumReceived/versions/3/approve")
+                        .with(httpBasic("admin", "password")))
+                .andExpect(status().isOk());
+        String resolved = mockMvc.perform(post("/finance/exceptions/" + id + "/retry").with(httpBasic("finance", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("RESOLVED"))
-                .andExpect(jsonPath("$.journalRef").isNotEmpty());
+                .andExpect(jsonPath("$.journalRef").isNotEmpty())
+                .andReturn().getResponse().getContentAsString();
+        mockMvc.perform(get("/finance/journals/" + JsonPath.read(resolved, "$.journalRef")).with(httpBasic("finance", "password")))
+                .andExpect(jsonPath("$.ruleVersion").value(3));
         mockMvc.perform(post("/finance/exceptions/" + id + "/retry").with(httpBasic("finance", "password")))
                 .andExpect(status().isConflict());
+    }
+
+    /**
+     * NS-SH08-001, Blueprint §7: a rule change is a new version that a second person approves and that applies from
+     * its own date. Journals already posted keep the version they used, and that version stays readable.
+     */
+    @Test
+    void aRuleChangeIsANewApprovedVersionAndPostedJournalsKeepTheirs() throws Exception {
+        String rules = mockMvc.perform(get("/finance/posting-rules").with(httpBasic("finance", "password")))
+                .andReturn().getResponse().getContentAsString();
+        String inForce = "$[?(@.eventType == 'UnmatchedReceipt' && @.inForce == true)]";
+        Integer before = ((List<Integer>) JsonPath.read(rules, inForce + ".version")).get(0);
+        Integer beforeId = ((List<Integer>) JsonPath.read(rules, inForce + ".id")).get(0);
+
+        String first = unmatchedReceipt("FNB-301");
+        mockMvc.perform(get("/finance/journals/" + first).with(httpBasic("finance", "password")))
+                .andExpect(jsonPath("$.postingRuleId").value(beforeId))
+                .andExpect(jsonPath("$.lines[1].accountCode").value("2000"));
+
+        // A backdated version may not reach a day already posted under an earlier one.
+        mockMvc.perform(json(put("/finance/posting-rules/UnmatchedReceipt"), "finance",
+                        "{\"debitAccount\":\"1000\",\"creditAccount\":\"2100\",\"reason\":\"Backdate\",\"effectiveFrom\":\""
+                                + java.time.LocalDate.now().minusDays(1) + "\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("already posted")));
+
+        String tomorrow = java.time.LocalDate.now().plusDays(1).toString();
+        String change = "{\"debitAccount\":\"1000\",\"creditAccount\":\"2100\",\"domain\":\"SHARED\",\"reason\":\"Test move\","
+                + "\"description\":\"Cash received that could not be applied\",\"effectiveFrom\":\"" + tomorrow + "\","
+                + "\"baseVersion\":" + before + "}";
+        // A reason is required, and a stale base version is a conflict rather than an overwrite.
+        mockMvc.perform(json(put("/finance/posting-rules/UnmatchedReceipt"), "finance", change.replace("\"reason\":\"Test move\",", "")))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(put("/finance/posting-rules/UnmatchedReceipt"), "finance",
+                        change.replace("\"baseVersion\":" + before, "\"baseVersion\":" + (before - 1))))
+                .andExpect(status().isConflict());
+        mockMvc.perform(json(put("/finance/posting-rules/UnmatchedReceipt"), "finance", change))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(before + 1))
+                .andExpect(jsonPath("$.approvalStatus").value("PENDING_APPROVAL"))
+                .andExpect(jsonPath("$.inForce").value(false));
+        // One change in flight at a time; the proposer cannot approve it.
+        mockMvc.perform(json(put("/finance/posting-rules/UnmatchedReceipt"), "finance", change))
+                .andExpect(status().isConflict());
+        mockMvc.perform(post("/finance/posting-rules/UnmatchedReceipt/versions/" + (before + 1) + "/approve")
+                        .with(httpBasic("finance", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/finance/posting-rules/UnmatchedReceipt/versions/" + (before + 1) + "/approve")
+                        .with(httpBasic("admin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.approvalStatus").value("APPROVED"))
+                .andExpect(jsonPath("$.effectiveFrom").value(tomorrow))
+                .andExpect(jsonPath("$.inForce").value(false));
+
+        // Today's events still post under the version in force today; the old version is kept, ending today.
+        String second = unmatchedReceipt("FNB-302");
+        mockMvc.perform(get("/finance/journals/" + second).with(httpBasic("finance", "password")))
+                .andExpect(jsonPath("$.ruleVersion").value(before))
+                .andExpect(jsonPath("$.postingRuleId").value(beforeId))
+                .andExpect(jsonPath("$.lines[1].accountCode").value("2000"));
+        rules = mockMvc.perform(get("/finance/posting-rules").with(httpBasic("finance", "password")))
+                .andReturn().getResponse().getContentAsString();
+        String old = "$[?(@.eventType == 'UnmatchedReceipt' && @.version == " + before + ")]";
+        assertThat((List<String>) JsonPath.read(rules, old + ".creditAccount")).containsExactly("2000");
+        assertThat((List<String>) JsonPath.read(rules, old + ".effectiveTo")).containsExactly(java.time.LocalDate.now().toString());
+        assertThat((List<Boolean>) JsonPath.read(rules, old + ".inForce")).containsExactly(true);
+
+        // The proposal and approval are in the tamper-evident evidence, with the before and after mapping.
+        String evidence = mockMvc.perform(get("/audits/evidence").param("entityType", "PostingRule")
+                        .param("entityRef", "UnmatchedReceipt v" + (before + 1)).with(httpBasic("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        assertThat((List<String>) JsonPath.read(evidence, "$[*].action"))
+                .contains("Proposed posting rule", "Approved posting rule");
+        assertThat((List<String>) JsonPath.read(evidence, "$[?(@.action == 'Proposed posting rule')].reason"))
+                .anySatisfy(reason -> assertThat(reason).contains("Cr 2000").contains("Cr 2100"));
+    }
+
+    /** A payment the provider has no record of: suspense, and an UnmatchedReceipt journal. Returns its ref. */
+    private String unmatchedReceipt(String reference) throws Exception {
+        String ref = pendingPolicy("Unmatched " + reference, reference.toLowerCase().replace("-", ""))[0];
+        mockMvc.perform(json(post("/integration/payment-notifications"), "ops",
+                        "{\"provider\":\"Bank\",\"providerReference\":\"" + reference + "\",\"policyRef\":\"" + ref
+                                + "\",\"amount\":\"3.00\"}"))
+                .andExpect(jsonPath("$.status").value("SUSPENSE"));
+        dispatch();
+        String journals = mockMvc.perform(get("/finance/journals?eventType=UnmatchedReceipt")
+                        .with(httpBasic("finance", "password")))
+                .andReturn().getResponse().getContentAsString();
+        return ((List<String>) JsonPath.read(journals, "$[?(@.sourceRef == '" + reference + "')].ref")).get(0);
     }
 
     @Test
@@ -146,7 +274,7 @@ class SubledgerAndIntegrationApiTest {
         String journal = ((List<String>) JsonPath.read(journals, "$[?(@.sourceRef == '" + policy[0] + "')].ref")).get(0);
 
         mockMvc.perform(json(post("/finance/journals/" + journal + "/reverse"), "finance", "{}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/finance/journals/" + journal + "/reverse"), "finance",
                         "{\"reason\":\"Payment recalled by bank\"}"))
                 .andExpect(status().isOk())
@@ -154,7 +282,7 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(jsonPath("$.lines[0].accountCode").value("1000"))
                 .andExpect(jsonPath("$.lines[0].credit").value(new BigDecimal(policy[1]).doubleValue()));
         mockMvc.perform(json(post("/finance/journals/" + journal + "/reverse"), "finance", "{\"reason\":\"again\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
 
         String period = YearMonth.now().toString();
         mockMvc.perform(json(post("/finance/periods/" + period + "/soft-close"), "finance", "{}"))
@@ -220,7 +348,7 @@ class SubledgerAndIntegrationApiTest {
                 .containsExactly(YearMonth.now().plusMonths(1).toString());
 
         mockMvc.perform(json(post("/finance/periods/" + period + "/reopen"), "finance", "{}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/finance/periods/" + period + "/reopen"), "finance", "{\"reason\":\"Audit fix\"}"))
                 .andExpect(jsonPath("$.status").value("OPEN"));
         mockMvc.perform(json(post("/finance/periods/" + period + "/close"), "grpadmin", "{}"))
@@ -233,7 +361,7 @@ class SubledgerAndIntegrationApiTest {
         mockMvc.perform(json(post("/finance/manual-journals"), "admin", "{\"description\":\"Bank charges\","
                         + "\"reason\":\"October bank charges not yet posted\",\"lines\":[{\"account\":\"5000\","
                         + "\"debit\":\"12.50\"},{\"account\":\"1000\",\"credit\":\"10.00\"}]}"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("does not balance")));
         String manual = mockMvc.perform(json(post("/finance/manual-journals"), "admin", "{\"description\":\"Bank charges\","
                         + "\"reason\":\"October bank charges not yet posted\",\"lines\":[{\"account\":\"5000\","
@@ -265,8 +393,8 @@ class SubledgerAndIntegrationApiTest {
         Integer wrongAmount = suspenseId("BF-77");
         mockMvc.perform(json(post("/finance/suspense/" + wrongAmount + "/clearance"), "admin",
                         "{\"action\":\"ALLOCATE\",\"policyRef\":\"" + policy[0] + "\",\"reason\":\"Customer says it is theirs\"}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Refund it instead")));
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("refund it instead")));
         mockMvc.perform(json(post("/finance/suspense/" + wrongAmount + "/clearance"), "admin",
                         "{\"action\":\"REFUND\",\"reason\":\"Short payment returned to the payer\"}"))
                 .andExpect(jsonPath("$.clearanceAction").value("REFUND"))

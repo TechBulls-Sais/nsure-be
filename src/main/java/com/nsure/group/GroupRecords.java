@@ -192,7 +192,8 @@ public class GroupRecords {
         return new GroupViews.SchemeView(scheme.getRef(), scheme.getName(), scheme.getSector(), scheme.getInitials(),
                 scheme.getColor(), scheme.getStatus(), scheme.getInceptionDate(), scheme.getRenewalDate(),
                 scheme.getRenewal(), scheme.getBillingFrequency(), activeMembers, pending,
-                premium.setScale(2, RoundingMode.HALF_UP), outstanding.setScale(2, RoundingMode.HALF_UP), categories);
+                premium.setScale(2, RoundingMode.HALF_UP), outstanding.setScale(2, RoundingMode.HALF_UP), categories,
+                scheme.getRowVersion());
     }
 
     static GroupViews.CategoryView categoryView(BenefitCategory c, int activeMembers) {
@@ -208,7 +209,7 @@ public class GroupRecords {
                 m.fullName(), m.getDateOfBirth(), c.getCode(), c.getName(), m.getSalary(), m.getStatus(),
                 m.getJoinDate(), m.getExitDate(), m.getRequestedCover(), m.getAcceptedCover(), m.getPendingCover(),
                 premium, m.getUnderwritingDecision(), m.getUnderwritingReason(), m.getUnderwrittenBy(),
-                m.getUnderwrittenAt(), m.getSourceBatchRef());
+                m.getUnderwrittenAt(), m.getSourceBatchRef(), m.getRowVersion());
     }
 
     static GroupViews.CensusBatchSummaryView batchSummary(CensusBatch b) {

@@ -1,5 +1,6 @@
 package com.nsure.audit.service;
 
+import com.nsure.audit.evidence.EvidenceChain;
 import com.nsure.audit.domain.CommandSource;
 import com.nsure.audit.domain.CommandStatus;
 import com.nsure.audit.repository.CommandSourceRepository;
@@ -23,13 +24,16 @@ public class MakerCheckerService {
     private final PlatformSecurityContext security;
     private final MakerCheckerPolicy policy;
     private final EntityManager entityManager;
+    private final EvidenceChain evidence;
 
     public MakerCheckerService(
             CommandSourceRepository commands,
             CommandHandlerRegistry handlers,
             PlatformSecurityContext security,
             MakerCheckerPolicy policy,
-            EntityManager entityManager) {
+            EntityManager entityManager,
+            EvidenceChain evidence) {
+        this.evidence = evidence;
         this.commands = commands;
         this.handlers = handlers;
         this.security = security;
@@ -52,6 +56,9 @@ public class MakerCheckerService {
                         false));
         entityManager.flush();
         pending.markChecked(checker.getId());
+        evidence.record(checker.getUsername(), "Approved " + pending.getPermissionCode(), pending.getEntityName(),
+                result.resourceId() == null ? null : String.valueOf(result.resourceId()),
+                "Command " + pending.getId() + ", made by user " + pending.getMakerId());
         pending.setResourceId(result.resourceId());
         pending.setResultJson(result.json());
         return new CommandOutcome(pending.getId(), result.resourceId(), pending.getStatus(), result.json(), false);
@@ -63,6 +70,9 @@ public class MakerCheckerService {
         AppUser checker = security.authenticatedUser();
         policy.validateChecker(checker, pending);
         pending.markRejected(checker.getId());
+        evidence.record(checker.getUsername(), "Rejected " + pending.getPermissionCode(), pending.getEntityName(),
+                pending.getResourceId() == null ? null : String.valueOf(pending.getResourceId()),
+                "Command " + pending.getId() + ", made by user " + pending.getMakerId());
         pending.setResultJson("{\"rejected\":true}");
         return new CommandOutcome(
                 pending.getId(), pending.getResourceId(), pending.getStatus(), pending.getResultJson(), false);

@@ -239,10 +239,9 @@ public class PolicyDocumentService {
 
     /** Renders the schedule from the policy as it stands now, files it, and records it in the policy history. */
     private PolicyDocument issue(InsurancePolicy policy, String generatedBy, String note) {
-        CustomerAccount customer = em.createQuery(
-                        "select c from CustomerAccount c where c.name = :name order by c.displayOrder, c.id",
-                        CustomerAccount.class)
-                .setParameter("name", policy.getCustomerName())
+        CustomerAccount customer = policy.getCustomerRef() == null ? null : em.createQuery(
+                        "select c from CustomerAccount c where c.ref = :ref", CustomerAccount.class)
+                .setParameter("ref", policy.getCustomerRef())
                 .setMaxResults(1)
                 .getResultStream()
                 .findFirst()
@@ -254,7 +253,7 @@ public class PolicyDocumentService {
                 .getResultStream()
                 .findFirst()
                 .orElse(null);
-        byte[] pdf = PolicySchedulePdf.render(portfolio.policyView(policy), customer, product,
+        byte[] pdf = PolicySchedulePdf.render(portfolio.policyView(policy), customer, product, policies.terms(policy),
                 policies.months(policy), generatedBy);
 
         String fileName = policy.getRef() + "-schedule-" + LocalDateTime.now().format(FILE_STAMP) + ".pdf";

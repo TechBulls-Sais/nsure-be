@@ -14,7 +14,7 @@ public class SubledgerEventHandler implements DomainEventHandler {
             Events.PREMIUM_RECEIVED, Events.UNMATCHED_RECEIPT, Events.CLAIM_PAID,
             Events.SCHEME_INVOICE_ISSUED, Events.SPONSOR_RECEIPT_ALLOCATED,
             Events.COMMISSION_ACCRUED, Events.COMMISSION_REVERSED, Events.COMMISSION_PAID,
-            Events.RISK_CEDED, Events.RECOVERY_RECOGNISED, Events.SUSPENSE_CLEARED);
+            Events.RISK_CEDED, Events.RECOVERY_RECOGNISED, Events.SUSPENSE_CLEARED, Events.PAYMENT_RETURNED);
 
     private final Subledger subledger;
 

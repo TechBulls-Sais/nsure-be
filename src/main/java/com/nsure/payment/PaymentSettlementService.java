@@ -5,7 +5,6 @@ import com.nsure.controls.ControlKey;
 import com.nsure.controls.ControlService;
 import com.nsure.controls.StaffAlertService;
 import com.nsure.portfolio.InsurancePolicy;
-import com.nsure.portfolio.PolicyRepricer;
 import com.nsure.portfolio.PolicyWorkflow;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
@@ -47,18 +46,16 @@ public class PaymentSettlementService {
     private final PaymentTransactionRepository transactions;
     private final PaymentGateways gateways;
     private final PolicyWorkflow policies;
-    private final PolicyRepricer repricer;
     private final ControlService controls;
     private final StaffAlertService alerts;
     private final EntityManager em;
 
     public PaymentSettlementService(PaymentTransactionRepository transactions, PaymentGateways gateways,
-            PolicyWorkflow policies, PolicyRepricer repricer, ControlService controls, StaffAlertService alerts,
+            PolicyWorkflow policies, ControlService controls, StaffAlertService alerts,
             EntityManager em) {
         this.transactions = transactions;
         this.gateways = gateways;
         this.policies = policies;
-        this.repricer = repricer;
         this.controls = controls;
         this.alerts = alerts;
         this.em = em;
@@ -85,7 +82,7 @@ public class PaymentSettlementService {
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Choose a payment method: " + String.join(", ", PolicyWorkflow.PAYMENT_METHODS) + "."));
-        BigDecimal amount = repricer.reprice(policy, actor).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal amount = agreedPremium(policy);
 
         List<PaymentTransaction> attempts = transactions.findByPolicyRefAndPeriodStartAndPurposeOrderByIdDesc(
                 policy.getRef(), period.start(), period.purpose());
@@ -161,6 +158,20 @@ public class PaymentSettlementService {
             }
         }
         return tx;
+    }
+
+    /**
+     * The premium to charge: the one agreed when the offer was made (first premium, valid for the payment window) or
+     * when cover was issued (renewals). It always comes from the server, never from the client (spec 01 BR-9), and it
+     * is never silently re-priced to a later rate version or attained age (Nsure Life NS-IL01-004, NS-SH02-004,
+     * AT-SH02-02): a new price needs a new offer the customer accepts.
+     */
+    private static BigDecimal agreedPremium(InsurancePolicy policy) {
+        BigDecimal agreed = policy.getPremium();
+        if (agreed == null || agreed.signum() <= 0) {
+            throw new IllegalArgumentException("Policy " + policy.getRef() + " has no agreed premium to collect.");
+        }
+        return agreed.setScale(2, RoundingMode.HALF_UP);
     }
 
     private void applySuccess(PaymentTransaction tx, String via) {

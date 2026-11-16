@@ -27,7 +27,9 @@ public final class GroupViews {
             int pendingUnderwriting,
             BigDecimal monthlyPremium,
             BigDecimal outstandingBalance,
-            int categories) {
+            int categories,
+            // Send back in If-Match when changing the scheme (NS-TXN-001).
+            long version) {
     }
 
     public record SchemeDetailView(
@@ -74,7 +76,8 @@ public final class GroupViews {
             String underwritingReason,
             String underwrittenBy,
             LocalDateTime underwrittenAt,
-            String sourceBatchRef) {
+            String sourceBatchRef,
+            long version) {
     }
 
     public record CensusBatchSummaryView(

@@ -23,3 +23,6 @@ nsure:
     card-gateway: ${NSURE_CARD_GATEWAY:SIMULATOR}
     public-base-url: ${NSURE_PUBLIC_BASE_URL}
     ui-base-url: ${NSURE_UI_BASE_URL}
+  integration:
+    # No simulated bank or wallet confirms money in a shared environment: unconfirmed receipts wait in suspense.
+    provider-simulator: false

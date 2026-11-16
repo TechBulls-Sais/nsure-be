@@ -75,6 +75,42 @@ public class CommandPayloadSanitizer {
         }
     }
 
+    /**
+     * SHA-256 of the request with secrets redacted and object keys sorted, so the same request gives the same value
+     * however its JSON is laid out, and no secret can be guessed back from it (NS-API-002).
+     */
+    public String fingerprint(String action, String entity, Long resourceId, String json) {
+        String source = json == null || json.isBlank() ? "{}" : json;
+        String body;
+        try {
+            JsonNode tree = mapper.readTree(source);
+            redact(tree);
+            body = mapper.writeValueAsString(sorted(tree));
+        } catch (Exception ex) {
+            body = "unparsed:" + source.length();
+        }
+        return sha256(action + "\n" + entity + "\n" + (resourceId == null ? "" : resourceId) + "\n" + body);
+    }
+
+    private JsonNode sorted(JsonNode node) {
+        if (node instanceof ObjectNode object) {
+            List<String> names = new ArrayList<>();
+            object.fieldNames().forEachRemaining(names::add);
+            names.sort(null);
+            ObjectNode out = mapper.createObjectNode();
+            for (String name : names) {
+                out.set(name, sorted(object.get(name)));
+            }
+            return out;
+        }
+        if (node instanceof ArrayNode array) {
+            ArrayNode out = mapper.createArrayNode();
+            array.forEach(child -> out.add(sorted(child)));
+            return out;
+        }
+        return node;
+    }
+
     private boolean redact(JsonNode node) {
         boolean redacted = false;
         if (node instanceof ObjectNode object) {
