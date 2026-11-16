@@ -291,6 +291,17 @@ public final class ApiAccessRules {
             rule(POST, "/care-cash/events/*/decision", anyOf("APPROVE_CLAIM")),
             rule(POST, "/care-cash/events/*/payment", anyOf("SETTLE_CLAIM")),
 
+            // ── group lifecycle GL01/GL02/GL05/GL06 ────────────────────────────────────────────────────
+            rule(GET, "/group-life/**", anyOf("READ_SCHEME")),
+            rule(POST, "/group-life/quotes/*/progress", anyOf("MANAGE_SCHEME", "UNDERWRITE_MEMBER")),
+            rule(POST, "/group-life/quotes/**", anyOf("MANAGE_SCHEME")),
+            rule(POST, "/group-life/quotes", anyOf("MANAGE_SCHEME")),
+            rule(PUT, "/group-life/schemes/*/benefits", anyOf("MANAGE_SCHEME")),
+            rule(POST, "/group-life/schemes/*/events", anyOf("MANAGE_SCHEME")),
+            rule(POST, "/group-life/events/*/decision", anyOf("UNDERWRITE_MEMBER")),
+            rule(POST, "/group-life/schemes/*/credit-loans", anyOf("PROCESS_CENSUS")),
+            rule(POST, "/group-life/credit-loans/*/settlement", anyOf("BILL_SCHEME")),
+
             // ── reinsurance SH07 (Reinsurance Officer) ─────────────────────────────────────────────────
             rule(GET, "/reinsurance/**", anyOf("READ_REINSURANCE")),
             rule(POST, "/reinsurance/treaties", anyOf("MANAGE_REINSURANCE")),

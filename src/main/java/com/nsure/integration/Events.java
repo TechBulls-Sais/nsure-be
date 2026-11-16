@@ -72,6 +72,15 @@ public final class Events {
     public static final String LOAN_BALANCE_UPDATED = "LoanBalanceUpdated";
     public static final String LOAN_SETTLED = "LoanSettled";
     public static final String CREDIT_COVER_TERMINATED = "CreditCoverTerminated";
+    // Group lifecycle.
+    public static final String SCHEME_QUOTED = "SchemeQuoted";
+    public static final String SCHEME_ACTIVATED = "SchemeActivated";
+    public static final String SCHEME_RENEWED = "SchemeRenewed";
+    public static final String SCHEME_CLOSED = "SchemeClosed";
+    public static final String SCHEME_PLAN_APPROVED = "SchemePlanApproved";
+    public static final String BORROWER_COVER_ACTIVATED = "BorrowerCoverActivated";
+    public static final String CREDIT_BORDEREAU_PROCESSED = "CreditBordereauProcessed";
+    public static final String GROUP_PREMIUM_REFUNDED = "GroupPremiumRefunded";
     public static final String OFFER_ACCEPTED = "OfferAccepted";
 
     // Collections and claims (spec SH04, SH05).

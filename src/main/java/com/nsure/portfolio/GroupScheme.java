@@ -148,4 +148,35 @@ public class GroupScheme {
     public long getRowVersion() {
         return rowVersion;
     }
+
+    /** The contract year: 1 at inception, one more at each renewal (NS-GL05-005). */
+    @Column(name = "policy_year", nullable = false)
+    private int policyYear = 1;
+
+    @Column(name = "quote_ref", length = 20)
+    private String quoteRef;
+
+    public int getPolicyYear() {
+        return policyYear;
+    }
+
+    public String getQuoteRef() {
+        return quoteRef;
+    }
+
+    public void setQuoteRef(String quoteRef) {
+        this.quoteRef = quoteRef;
+    }
+
+    /** ACTIVE, SUSPENDED or CLOSED. A scheme is never deleted once it has members or money (NS-GL01-006). */
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    /** Moves the scheme into its next policy year, with no gap or overlap (NS-GL05-006). */
+    public void renewTo(LocalDate nextRenewal, String label) {
+        this.renewalDate = nextRenewal;
+        this.renewal = label;
+        this.policyYear = this.policyYear + 1;
+    }
 }

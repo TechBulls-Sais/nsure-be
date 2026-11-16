@@ -218,3 +218,6 @@ databaseChangeLog:
   - include:
       file: changes/074-care-cash.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/075-group-lifecycle.yaml
+      relativeToChangelogFile: true
