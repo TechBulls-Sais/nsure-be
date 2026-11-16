@@ -215,3 +215,6 @@ databaseChangeLog:
   - include:
       file: changes/073-individual-credit-life.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/074-care-cash.yaml
+      relativeToChangelogFile: true

@@ -284,6 +284,13 @@ public final class ApiAccessRules {
             rule(POST, "/credit/refunds/*/payment", anyOf("PAY_CREDIT_REFUND")),
             rule(POST, "/credit/**", anyOf("MANAGE_CREDIT")),
 
+            // ── Care Cash benefit engine (specification section 07) ────────────────────────────────────
+            rule(GET, "/care-cash/**", anyOf("READ_CLAIM")),
+            rule(POST, "/care-cash/policies/*/assessment", anyOf("CREATE_CLAIM")),
+            rule(POST, "/care-cash/policies/*/events", anyOf("CREATE_CLAIM")),
+            rule(POST, "/care-cash/events/*/decision", anyOf("APPROVE_CLAIM")),
+            rule(POST, "/care-cash/events/*/payment", anyOf("SETTLE_CLAIM")),
+
             // ── reinsurance SH07 (Reinsurance Officer) ─────────────────────────────────────────────────
             rule(GET, "/reinsurance/**", anyOf("READ_REINSURANCE")),
             rule(POST, "/reinsurance/treaties", anyOf("MANAGE_REINSURANCE")),

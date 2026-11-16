@@ -1,0 +1,40 @@
+databaseChangeLog:
+  # Care Cash benefit engine (Nsure Life specification section 07): hospital events assessed benefit by benefit with
+  # per-event, per-life and per-policy day limits, waiting periods, maternity, premium waiver and accidental death.
+  - changeSet:
+      id: 074-care-cash
+      author: nsure
+      changes:
+        - createTable:
+            tableName: cc_event
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_cc_event_ref}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: customer_name, type: varchar(150)}
+              - column: {name: life_name, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: event_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: cause, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: admit_date, type: date, constraints: {nullable: false}}
+              - column: {name: discharge_date, type: date}
+              - column: {name: icu_days, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: surgery, type: boolean, defaultValueBoolean: false, constraints: {nullable: false}}
+              - column: {name: daily_benefit, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: stay_days, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: paid_days, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: waiver_months, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: trace, type: varchar(3000), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: timestamp(6)}
+              - column: {name: decision_note, type: varchar(500)}
+              - column: {name: payment_reference, type: varchar(60)}
+              - column: {name: paid_at, type: timestamp(6)}
+        - createIndex:
+            tableName: cc_event
+            indexName: ix_cc_event_policy
+            columns:
+              - column: {name: policy_ref}
