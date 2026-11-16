@@ -125,3 +125,28 @@ databaseChangeLog:
               INSERT INTO portal_account (username, portal_type, scope_ref)
               SELECT 'lender', 'LENDER', 'LND-0001'
               WHERE NOT EXISTS (SELECT 1 FROM portal_account x WHERE x.username = 'lender');
+  - changeSet:
+      id: 077-mysql-booleans
+      author: nsure
+      dbms: mysql
+      comment: Liquibase maps boolean to tinyint on MySQL; Hibernate validates booleans as bit (migrations 071 to 077).
+      changes:
+        - sql:
+            sql: |
+              ALTER TABLE uw_rule_set MODIFY refer_tobacco BIT(1) NOT NULL DEFAULT 1;
+              ALTER TABLE uw_rule_set MODIFY refer_treatment BIT(1) NOT NULL DEFAULT 1;
+              ALTER TABLE uw_evidence MODIFY restricted BIT(1) NOT NULL DEFAULT 0;
+              ALTER TABLE pol_endorsement MODIFY backdated BIT(1) NOT NULL DEFAULT 0;
+              ALTER TABLE prod_benefit_rule MODIFY active BIT(1) NOT NULL DEFAULT 1;
+              ALTER TABLE prod_servicing_rule MODIFY reinstatement_needs_approval BIT(1) NOT NULL DEFAULT 0;
+              ALTER TABLE crd_lender MODIFY active BIT(1) NOT NULL DEFAULT 1;
+              ALTER TABLE crd_product_rule MODIFY temporary_disability_offered BIT(1) NOT NULL;
+              ALTER TABLE crd_product_rule MODIFY critical_illness_offered BIT(1) NOT NULL;
+              ALTER TABLE crd_loan MODIFY secured BIT(1) NOT NULL DEFAULT 0;
+              ALTER TABLE crd_loan MODIFY pensioner BIT(1) NOT NULL DEFAULT 0;
+              ALTER TABLE crd_loan MODIFY permanent_disability BIT(1) NOT NULL;
+              ALTER TABLE crd_loan MODIFY temporary_disability BIT(1) NOT NULL;
+              ALTER TABLE crd_loan MODIFY critical_illness BIT(1) NOT NULL;
+              ALTER TABLE cc_event MODIFY surgery BIT(1) NOT NULL DEFAULT 0;
+              ALTER TABLE ai_use_case MODIFY enabled BIT(1) NOT NULL;
+              ALTER TABLE doc_control MODIFY legal_hold BIT(1) NOT NULL;

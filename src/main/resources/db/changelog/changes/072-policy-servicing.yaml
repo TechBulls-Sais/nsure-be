@@ -151,17 +151,20 @@ databaseChangeLog:
         - sql:
             sql: |
               INSERT INTO prod_benefit_rule (product, benefit_type, interval_months, premium_multiple, percent, min_months, term_years, description, active, updated_by, updated_at)
-              SELECT seed.p, seed.b, seed.i, seed.m, seed.pc, seed.mm, seed.t, seed.d, TRUE, 'system', CURRENT_TIMESTAMP FROM (
-                SELECT 'Term Life' p, 'CASHBACK' b, 36 i, 10 m, CAST(NULL AS DECIMAL(7,2)) pc, CAST(NULL AS INT) mm, CAST(NULL AS INT) t,
-                       'Cashback of 10 monthly premiums after every 36 months in force' d UNION ALL
-                SELECT 'Term Life', 'RETURN_OF_PREMIUM', NULL, NULL, 100, NULL, 15,
-                       'Return of the premiums paid on survival to the end of the 15-year term' UNION ALL
-                SELECT 'Whole of Life', 'CASHBACK', 36, 10, NULL, NULL, NULL,
-                       'Cashback of 10 monthly premiums after every 36 months in force' UNION ALL
-                SELECT 'Care Cash', 'CASHBACK', 36, 3, NULL, NULL, NULL,
-                       'Cashback of 3 monthly premiums after every 36 months in force'
-              ) seed
-              WHERE NOT EXISTS (SELECT 1 FROM prod_benefit_rule x WHERE x.product = seed.p AND x.benefit_type = seed.b);
+              SELECT 'Term Life', 'CASHBACK', 36, 10, NULL, NULL, NULL, 'Cashback of 10 monthly premiums after every 36 months in force', TRUE, 'system', CURRENT_TIMESTAMP FROM DUAL
+              WHERE NOT EXISTS (SELECT 1 FROM prod_benefit_rule x WHERE x.product = 'Term Life' AND x.benefit_type = 'CASHBACK');
+
+              INSERT INTO prod_benefit_rule (product, benefit_type, interval_months, premium_multiple, percent, min_months, term_years, description, active, updated_by, updated_at)
+              SELECT 'Term Life', 'RETURN_OF_PREMIUM', NULL, NULL, 100, NULL, 15, 'Return of the premiums paid on survival to the end of the 15-year term', TRUE, 'system', CURRENT_TIMESTAMP FROM DUAL
+              WHERE NOT EXISTS (SELECT 1 FROM prod_benefit_rule x WHERE x.product = 'Term Life' AND x.benefit_type = 'RETURN_OF_PREMIUM');
+
+              INSERT INTO prod_benefit_rule (product, benefit_type, interval_months, premium_multiple, percent, min_months, term_years, description, active, updated_by, updated_at)
+              SELECT 'Whole of Life', 'CASHBACK', 36, 10, NULL, NULL, NULL, 'Cashback of 10 monthly premiums after every 36 months in force', TRUE, 'system', CURRENT_TIMESTAMP FROM DUAL
+              WHERE NOT EXISTS (SELECT 1 FROM prod_benefit_rule x WHERE x.product = 'Whole of Life' AND x.benefit_type = 'CASHBACK');
+
+              INSERT INTO prod_benefit_rule (product, benefit_type, interval_months, premium_multiple, percent, min_months, term_years, description, active, updated_by, updated_at)
+              SELECT 'Care Cash', 'CASHBACK', 36, 3, NULL, NULL, NULL, 'Cashback of 3 monthly premiums after every 36 months in force', TRUE, 'system', CURRENT_TIMESTAMP FROM DUAL
+              WHERE NOT EXISTS (SELECT 1 FROM prod_benefit_rule x WHERE x.product = 'Care Cash' AND x.benefit_type = 'CASHBACK');
 
               INSERT INTO prod_servicing_rule (product, reinstatement_needs_approval, max_backdate_days, child_review_age, max_cover_age, updated_by, updated_at)
               SELECT p.name, FALSE, 90, 21, 70, 'system', CURRENT_TIMESTAMP FROM ins_product p
