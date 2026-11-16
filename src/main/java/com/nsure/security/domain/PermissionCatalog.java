@@ -41,6 +41,11 @@ public enum PermissionCatalog {
     GRANT_EMERGENCY_ACCESS(null),
     REVIEW_EMERGENCY_ACCESS(null),
 
+    // IL02 underwriting (Nsure Life NS-IL02-001..006).
+    READ_UNDERWRITING(null),
+    UNDERWRITE_APPLICATION(null),
+    MANAGE_UNDERWRITING(null),
+
     // ── spec 04 capabilities ────────────────────────────────────────────────────────────────────────────
     READ_DASHBOARD("dashboard.read"),
     READ_CLAIM("claim.read"),

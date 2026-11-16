@@ -32,6 +32,18 @@ public class InsurancePolicy extends CoverRecord implements TieredCover {
 
     // NS-IL01-006: the application this policy was issued from (issued once), and the key that makes staff issue
     // idempotent.
+    /** Terms underwriting attached at issue: loading and exclusions (NS-IL02-005). */
+    @Column(name = "uw_terms", length = 1000)
+    private String uwTerms;
+
+    public String getUwTerms() {
+        return uwTerms;
+    }
+
+    public void setUwTerms(String uwTerms) {
+        this.uwTerms = uwTerms;
+    }
+
     @Column(name = "application_ref", length = 20, unique = true)
     private String applicationRef;
 

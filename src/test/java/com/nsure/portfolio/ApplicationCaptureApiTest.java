@@ -76,7 +76,8 @@ class ApplicationCaptureApiTest {
 
         mockMvc.perform(post("/portfolio/applications/" + app + "/submit").with(httpBasic("admin", "password")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("Under review"))
+                // NS-IL01-005: inside every underwriting limit, the rules accept it and it is ready to issue.
+                .andExpect(jsonPath("$.status").value("Ready to issue"))
                 .andExpect(jsonPath("$.submittedBy").value("admin"));
         mockMvc.perform(json(put("/portfolio/applications/" + app + "/details"), "admin", "{\"disclosures\":{\"TOBACCO\":\"YES\"}}"))
                 .andExpect(status().isUnprocessableEntity());
@@ -133,7 +134,7 @@ class ApplicationCaptureApiTest {
         mockMvc.perform(json(post("/portfolio/applications/" + app + "/evidence"), "admin",
                         "{\"documentType\":\"Signed debit order form\",\"note\":\"Original form checked and filed\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("Under review"))
+                .andExpect(jsonPath("$.status").value("Ready to issue"))
                 .andExpect(jsonPath("$.missingEvidence").isEmpty());
         mockMvc.perform(json(post("/portfolio/policies"), "admin", issue))
                 .andExpect(status().isOk())

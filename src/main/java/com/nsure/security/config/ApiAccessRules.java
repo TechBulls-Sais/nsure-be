@@ -254,6 +254,13 @@ public final class ApiAccessRules {
             rule(POST, "/distribution/statements", anyOf("PAY_COMMISSION")),
             rule(POST, "/distribution/statements/*/pay", anyOf("PAY_COMMISSION")),
 
+            // ── individual underwriting IL02 (Underwriter) ─────────────────────────────────────────────
+            rule(GET, "/underwriting/**", anyOf("READ_UNDERWRITING")),
+            rule(POST, "/underwriting/cases/*/offer", anyOf("UNDERWRITE_APPLICATION", "UPDATE_APPLICATION")),
+            rule(POST, "/underwriting/cases/**", anyOf("UNDERWRITE_APPLICATION")),
+            rule(PUT, "/underwriting/rules/*", anyOf("MANAGE_UNDERWRITING")),
+            rule(PUT, "/underwriting/authorities/*", anyOf("MANAGE_UNDERWRITING")),
+
             // ── reinsurance SH07 (Reinsurance Officer) ─────────────────────────────────────────────────
             rule(GET, "/reinsurance/**", anyOf("READ_REINSURANCE")),
             rule(POST, "/reinsurance/treaties", anyOf("MANAGE_REINSURANCE")),

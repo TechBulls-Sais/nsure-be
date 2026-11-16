@@ -206,3 +206,6 @@ databaseChangeLog:
   - include:
       file: changes/069-claim-decisions.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/071-individual-underwriting.yaml
+      relativeToChangelogFile: true

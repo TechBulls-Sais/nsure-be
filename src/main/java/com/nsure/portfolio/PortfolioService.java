@@ -58,6 +58,8 @@ public class PortfolioService {
     private final ProductConfigHistory configHistory;
     /** Lazily resolved: the payment module depends on the portfolio, not the other way round. */
     private final org.springframework.beans.factory.ObjectProvider<com.nsure.payment.PaymentSettlementService> settlement;
+    /** IL02: every submitted application is underwritten before it can be issued. */
+    private final org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting;
 
     public PortfolioService(
             EntityManager em,
@@ -74,7 +76,9 @@ public class PortfolioService {
             org.springframework.beans.factory.ObjectProvider<com.nsure.payment.PaymentSettlementService> settlement,
             DeclarationService declarations, ClaimFinancials claimFinancials, QuoteService quotes,
             com.fasterxml.jackson.databind.ObjectMapper mapper, com.nsure.integration.Outbox outbox,
-            ApplicationCapture capture, ProductConfigHistory configHistory) {
+            ApplicationCapture capture, ProductConfigHistory configHistory,
+            org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting) {
+        this.underwriting = underwriting;
         this.configHistory = configHistory;
         this.capture = capture;
         this.mapper = mapper;
@@ -374,6 +378,8 @@ public class PortfolioService {
         if (!draft) {
             // NS-IL01-003: submission needs every mandatory answer, the declaration, a payer and a usable mandate.
             capture.submit(row, customer, actor.getUsername());
+            // NS-IL01-005: the rules accept an eligible case; anything else is referred to an underwriter.
+            underwriting.getObject().assess(row, customer, actor.getUsername());
         }
         return cover(row);
     }
@@ -432,6 +438,7 @@ public class PortfolioService {
         }
         CustomerAccount customer = customerOf(app);
         capture.submit(app, customer, actor.getUsername());
+        underwriting.getObject().assess(app, customer, actor.getUsername());
         return capture.checklist(app, customer);
     }
 
@@ -443,6 +450,10 @@ public class PortfolioService {
         InsuranceApplication app = one(InsuranceApplication.class, ref, "Application");
         CustomerAccount customer = customerOf(app);
         capture.recordEvidence(app, customer, text(body, "documentType"), optional(body, "note"), actor.getUsername());
+        // The last piece of evidence on an application underwriting has already cleared makes it ready to issue.
+        if (ApplicationCapture.UNDER_REVIEW.equals(app.getStatus()) && underwriting.getObject().isCleared(app.getRef())) {
+            app.setStatus("Ready to issue");
+        }
         return capture.checklist(app, customer);
     }
 
@@ -558,11 +569,25 @@ public class PortfolioService {
     @Transactional
     public PortfolioViews.CoverView updateApplication(String ref, JsonNode body) {
         InsuranceApplication row = one(InsuranceApplication.class, ref, "Application");
-        if (body.hasNonNull("status") && "Ready to issue".equals(body.get("status").asText())) {
-            capture.requireIssuable(row, customerOf(row));
+        if (!body.hasNonNull("status")) {
+            return cover(row);
         }
-        if (body.hasNonNull("status")) {
-            row.setStatus(body.get("status").asText());
+        // The application's state follows its workflow; only these two moves are made by hand.
+        String status = body.get("status").asText().trim();
+        if ("Issued".equalsIgnoreCase(row.getStatus())) {
+            throw new com.nsure.common.exception.ConflictException(ref + " is already issued.");
+        }
+        if ("Ready to issue".equals(status)) {
+            CustomerAccount customer = customerOf(row);
+            capture.requireIssuable(row, customer);
+            // NS-IL02-006: only an application underwriting has cleared can be made ready to issue.
+            underwriting.getObject().clearedTerms(row, customer, security.authenticatedUser().getUsername());
+            row.setStatus("Ready to issue");
+        } else if ("Withdrawn".equals(status)) {
+            row.setStatus("Withdrawn");
+        } else {
+            throw new IllegalArgumentException("An application can only be moved to Ready to issue or Withdrawn here;"
+                    + " its other states come from submission, underwriting and issue.");
         }
         return cover(row);
     }
@@ -617,8 +642,11 @@ public class PortfolioService {
         }
         InsurancePolicy row = new InsurancePolicy();
         fillCover(row, body, account, "POL-", 5, PolicyWorkflow.PENDING_PAYMENT);
+        com.nsure.underwriting.UnderwritingService.Terms underwritten = null;
         if (application != null) {
             capture.requireIssuable(application, account);
+            // NS-IL02-006: no issue while underwriting, its evidence or an unaccepted offer is still open.
+            underwritten = underwriting.getObject().clearedTerms(application, account, staff.getUsername());
         }
         // NS-SH03-003, AT-IL01-01: an application issues at its accepted, still-valid quote, never re-priced.
         Quote quote = application != null && application.getQuoteRef() != null
@@ -629,6 +657,13 @@ public class PortfolioService {
             lives = quotes.pricedLives(quote);
         } else {
             lives = applyTier(row, body);
+        }
+        if (underwritten != null && underwritten.description() != null) {
+            // NS-IL02-005: the accepted offer's loading and exclusions travel onto the contract.
+            if (underwritten.premium() != null) {
+                row.setPremium(underwritten.premium());
+            }
+            row.setUwTerms(underwritten.description());
         }
         // Staff issue: every required insurer-configured field must be present (guide §15).
         policyAttributes.pinNewPolicy(row, body, true);

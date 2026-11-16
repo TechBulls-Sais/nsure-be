@@ -51,6 +51,11 @@ public final class Events {
 
     // Individual new business (spec IL01).
     public static final String APPLICATION_SUBMITTED = "ApplicationSubmitted";
+    // IL02 underwriting.
+    public static final String EVIDENCE_REQUESTED = "EvidenceRequested";
+    public static final String UNDERWRITING_DECIDED = "UnderwritingDecided";
+    public static final String OFFER_REVISED = "OfferRevised";
+    public static final String OFFER_ANSWERED = "OfferAnswered";
     public static final String OFFER_ACCEPTED = "OfferAccepted";
 
     // Collections and claims (spec SH04, SH05).

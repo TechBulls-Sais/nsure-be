@@ -1,0 +1,190 @@
+databaseChangeLog:
+  # IL02 Individual underwriting (Nsure Life NS-IL02-001..006): a case per submitted application, assessed against a
+  # versioned rule set per product, evidence requested per life, decisions within the underwriter's authority, and an
+  # offer the applicant accepts before issue when the terms differ from what was applied for.
+  - changeSet:
+      id: 071-uw-tables
+      author: nsure
+      changes:
+        - createTable:
+            tableName: uw_rule_set
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              # NULL: the default for products without their own rules.
+              - column: {name: product, type: varchar(60), constraints: {unique: true, uniqueConstraintName: uk_uw_rule_product}}
+              - column: {name: version_label, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: min_entry_age, type: int, constraints: {nullable: false}}
+              - column: {name: max_entry_age, type: int, constraints: {nullable: false}}
+              # Above this sum assured a case is referred to an underwriter instead of accepted automatically.
+              - column: {name: auto_max_sum_assured, type: 'decimal(19,2)', constraints: {nullable: false}}
+              # Above this sum assured, medical evidence is requested for the life.
+              - column: {name: medical_evidence_above, type: 'decimal(19,2)', constraints: {nullable: false}}
+              # Above this total cover held by the customer (all in-force policies plus this one), financial evidence.
+              - column: {name: aggregate_exposure_limit, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: refer_tobacco, type: boolean, defaultValueBoolean: true, constraints: {nullable: false}}
+              - column: {name: refer_treatment, type: boolean, defaultValueBoolean: true, constraints: {nullable: false}}
+              - column: {name: updated_by, type: varchar(100)}
+              - column: {name: updated_at, type: timestamp(6)}
+        - createTable:
+            tableName: uw_authority
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: role_id, type: bigint, constraints: {nullable: false, unique: true, uniqueConstraintName: uk_uw_authority_role}}
+              # The largest sum assured this role may decide; a role without a row is not limited.
+              - column: {name: max_sum_assured, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: updated_by, type: varchar(100)}
+              - column: {name: updated_at, type: timestamp(6)}
+        - addForeignKeyConstraint:
+            baseTableName: uw_authority
+            baseColumnNames: role_id
+            referencedTableName: app_role
+            referencedColumnNames: id
+            constraintName: fk_uw_authority_role
+            onDelete: CASCADE
+        - createTable:
+            tableName: uw_case
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_uw_case_ref}}
+              - column: {name: application_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_uw_case_application}}
+              - column: {name: customer_ref, type: varchar(40)}
+              - column: {name: customer_name, type: varchar(150)}
+              - column: {name: product, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: sum_assured, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: applied_premium, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: aggregate_exposure, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: entry_age, type: int}
+              - column: {name: rule_set_version, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: referral_reasons, type: varchar(2000)}
+              - column: {name: decision, type: varchar(30)}
+              - column: {name: loading_percent, type: 'decimal(7,2)'}
+              - column: {name: exclusion, type: varchar(1000)}
+              - column: {name: postpone_until, type: date}
+              - column: {name: decision_reason, type: varchar(1000)}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: timestamp(6)}
+              - column: {name: offer_version, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: offer_premium, type: 'decimal(19,2)'}
+              - column: {name: offer_status, type: varchar(20), defaultValue: NONE, constraints: {nullable: false}}
+              - column: {name: offer_accepted_by, type: varchar(100)}
+              - column: {name: offer_accepted_at, type: timestamp(6)}
+              - column: {name: assigned_to, type: varchar(100)}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: updated_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - createIndex:
+            tableName: uw_case
+            indexName: ix_uw_case_status
+            columns:
+              - column: {name: status}
+        - createTable:
+            tableName: uw_evidence
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: case_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: life_name, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: requirement, type: varchar(150), constraints: {nullable: false}}
+              # Clinical material: shown to underwriters, never to intermediaries or the employer.
+              - column: {name: restricted, type: boolean, defaultValueBoolean: false, constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: due_date, type: date, constraints: {nullable: false}}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: resolved_by, type: varchar(100)}
+              - column: {name: resolved_at, type: timestamp(6)}
+              - column: {name: note, type: varchar(500)}
+        - createIndex:
+            tableName: uw_evidence
+            indexName: ix_uw_evidence_case
+            columns:
+              - column: {name: case_ref}
+        - createTable:
+            tableName: uw_decision
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: case_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: sequence_no, type: int, constraints: {nullable: false}}
+              - column: {name: decision, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: loading_percent, type: 'decimal(7,2)'}
+              - column: {name: exclusion, type: varchar(1000)}
+              - column: {name: postpone_until, type: date}
+              - column: {name: reason, type: varchar(1000)}
+              - column: {name: offer_version, type: int, constraints: {nullable: false}}
+              - column: {name: offer_premium, type: 'decimal(19,2)'}
+              - column: {name: decided_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: decided_at, type: timestamp(6), constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: uw_decision
+            columnNames: case_ref, sequence_no
+            constraintName: uk_uw_decision_seq
+        - addColumn:
+            tableName: ins_policy
+            columns:
+              # Terms underwriting attached to the policy (loading, exclusions), shown on the schedule.
+              - column: {name: uw_terms, type: varchar(1000)}
+  - changeSet:
+      id: 071-uw-rules-seed
+      author: nsure
+      comment: >-
+        Starting rule sets per product. These are configuration, editable under Underwriting -> Rules; the insurer's
+        approved underwriting limits replace them (decision register D02/D03).
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO uw_rule_set (product, version_label, min_entry_age, max_entry_age, auto_max_sum_assured,
+                                       medical_evidence_above, aggregate_exposure_limit, refer_tobacco, refer_treatment)
+              SELECT seed.p, seed.v, seed.mn, seed.mx, seed.a, seed.m, seed.g, TRUE, TRUE FROM (
+                SELECT NULL p, 'UW-2026.1' v, 18 mn, 65 mx, 500000 a, 1000000 m, 2000000 g UNION ALL
+                SELECT 'Term Life', 'UW-2026.1', 18, 65, 1000000, 1000000, 3000000 UNION ALL
+                SELECT 'Whole of Life', 'UW-2026.1', 18, 65, 500000, 750000, 2000000 UNION ALL
+                SELECT 'Family Funeral', 'UW-2026.1', 18, 65, 100000, 250000, 300000 UNION ALL
+                SELECT 'Individual Credit', 'UW-2026.1', 18, 65, 750000, 750000, 1500000 UNION ALL
+                SELECT 'Care Cash', 'UW-2026.1', 18, 65, 3000, 3000, 6000
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM uw_rule_set x WHERE (x.product = seed.p) OR (x.product IS NULL AND seed.p IS NULL));
+  - changeSet:
+      id: 071-uw-permissions
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT seed.g, seed.c, seed.e, seed.a, FALSE, seed.f FROM (
+                SELECT 'underwriting' g, 'READ_UNDERWRITING' c, 'UNDERWRITING' e, 'READ' a, 'View underwriting cases and evidence' f UNION ALL
+                SELECT 'underwriting', 'UNDERWRITE_APPLICATION', 'APPLICATION', 'UNDERWRITE', 'Request evidence and decide underwriting cases within authority' UNION ALL
+                SELECT 'underwriting', 'MANAGE_UNDERWRITING', 'UNDERWRITING', 'MANAGE', 'Maintain underwriting rules and authority limits'
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = seed.c);
+
+              INSERT INTO app_role (name, description, disabled)
+              SELECT 'Underwriter', 'Assesses referred applications: requests evidence and records underwriting decisions up to the role''s authority limit.', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_role WHERE name = 'Underwriter');
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON (
+                   (r.name = 'Super Admin' AND p.code IN ('READ_UNDERWRITING', 'UNDERWRITE_APPLICATION', 'MANAGE_UNDERWRITING'))
+                OR (r.name = 'Underwriter' AND p.code IN ('READ_DASHBOARD', 'READ_CUSTOMER', 'READ_APPLICATION',
+                                                         'READ_UNDERWRITING', 'UNDERWRITE_APPLICATION'))
+                OR (r.name = 'Customer Support Representative' AND p.code IN ('READ_UNDERWRITING')))
+              WHERE NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+
+              INSERT INTO uw_authority (role_id, max_sum_assured)
+              SELECT r.id, 1000000 FROM app_role r WHERE r.name = 'Underwriter'
+                AND NOT EXISTS (SELECT 1 FROM uw_authority x WHERE x.role_id = r.id);
+  - changeSet:
+      id: 071-uw-demo-user
+      author: nsure
+      context: demo
+      comment: Demo login for the Underwriter role, password "password" (same hash as admin).
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_user (username, password, enabled)
+              SELECT 'underwriter', '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG', TRUE
+              WHERE NOT EXISTS (SELECT 1 FROM app_user x WHERE x.username = 'underwriter');
+
+              INSERT INTO app_user_role (user_id, role_id)
+              SELECT u.id, r.id FROM app_user u JOIN app_role r ON r.name = 'Underwriter'
+              WHERE u.username = 'underwriter'
+                AND NOT EXISTS (SELECT 1 FROM app_user_role x WHERE x.user_id = u.id AND x.role_id = r.id);

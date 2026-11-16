@@ -79,8 +79,14 @@ class PortfolioApiTest {
                         .with(httpBasic("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"status\":\"Accepted\"}"))
+                // An application's state comes from its workflow: an arbitrary status is refused.
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(put("/portfolio/applications/APP-2049")
+                        .with(httpBasic("admin", "password"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"Withdrawn\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("Accepted"));
+                .andExpect(jsonPath("$.status").value("Withdrawn"));
 
         mockMvc.perform(post("/portfolio/policies")
                         .with(httpBasic("admin", "password"))
