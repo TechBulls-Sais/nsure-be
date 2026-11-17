@@ -19,8 +19,14 @@ nsure:
   declaration:
     expose-otp: false
   payments:
-    # Card payments go to the configured provider; the hosted-checkout simulator is for development only.
-    card-gateway: ${NSURE_CARD_GATEWAY:SIMULATOR}
+    # Demonstration installations only. true lets the mock and the hosted-checkout simulator confirm payments, and
+    # activate cover, exactly as in development; start-up logs a warning. Never on a live installation: no money is
+    # received. Off (the default): Orange Money, MyZaka, Bank EFT and Card have no real provider yet and are refused.
+    # Staff-recorded receipts work either way.
+    demo: ${NSURE_DEMO_PAYMENTS:false}
+    # Card payments go to the configured provider. Unset: NONE (refused), or SIMULATOR with demo payments on.
+    # SIMULATOR and MOCK confirm money nobody paid, so they stop start-up unless demo payments are on.
+    card-gateway: ${NSURE_CARD_GATEWAY:}
     public-base-url: ${NSURE_PUBLIC_BASE_URL}
     ui-base-url: ${NSURE_UI_BASE_URL}
   integration:

@@ -35,6 +35,7 @@ import org.springframework.web.util.HtmlUtils;
 public class CheckoutController {
 
     private final PaymentSettlementService settlement;
+    private final PaymentGateways gateways;
     private final PaymentTransactionRepository transactions;
     private final PortfolioService portfolio;
     private final PlatformSecurityContext security;
@@ -43,12 +44,14 @@ public class CheckoutController {
     private final String publicBaseUrl;
     private final org.springframework.transaction.support.TransactionTemplate rawLog;
 
-    public CheckoutController(PaymentSettlementService settlement, PaymentTransactionRepository transactions,
+    public CheckoutController(PaymentSettlementService settlement, PaymentGateways gateways,
+            PaymentTransactionRepository transactions,
             PortfolioService portfolio, PlatformSecurityContext security, EntityManager em,
             org.springframework.transaction.PlatformTransactionManager transactionManager,
             @Value("${nsure.payments.ui-base-url:http://127.0.0.1:5180/#}") String uiBaseUrl,
             @Value("${nsure.payments.public-base-url:http://127.0.0.1:5180/api}") String publicBaseUrl) {
         this.settlement = settlement;
+        this.gateways = gateways;
         this.transactions = transactions;
         this.portfolio = portfolio;
         this.security = security;
@@ -147,11 +150,12 @@ public class CheckoutController {
     }
 
     // ── hosted checkout simulator: stands in for the provider's own page until DPO credentials exist ────────
+    // Absent under the prod profile (unless demo payments are on): no simulated page may mark a checkout paid there.
 
     @GetMapping(value = "/payment/simulator/{token}", produces = MediaType.TEXT_HTML_VALUE)
     @Transactional(readOnly = true)
     public ResponseEntity<String> simulatorPage(@PathVariable String token) {
-        SimulatedCheckout checkout = em.find(SimulatedCheckout.class, token);
+        SimulatedCheckout checkout = gateways.simulatorsEnabled() ? em.find(SimulatedCheckout.class, token) : null;
         if (checkout == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).contentType(MediaType.TEXT_HTML)
                     .body("<p>This payment session does not exist.</p>");
@@ -186,6 +190,9 @@ public class CheckoutController {
     @Transactional
     public ResponseEntity<Void> simulatorDecide(@PathVariable String token,
             @RequestParam MultiValueMap<String, String> form) {
+        if (!gateways.simulatorsEnabled()) {
+            return ResponseEntity.notFound().build();
+        }
         SimulatedCheckout checkout = em.find(SimulatedCheckout.class, token);
         if (checkout != null && SimulatedCheckout.PENDING.equals(checkout.getOutcome())) {
             boolean pay = !"decline".equalsIgnoreCase(first(form, "decision"));
