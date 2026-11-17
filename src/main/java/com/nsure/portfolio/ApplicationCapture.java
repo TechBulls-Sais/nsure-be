@@ -61,8 +61,15 @@ public class ApplicationCapture {
                 throw new IllegalArgumentException("Payment mandate must be one of " + String.join(", ", MANDATES) + ".");
             }
             app.setMandateMethod(method);
-            app.setMandateInstitution(clip(text(body, "mandateInstitution"), 60));
-            app.setMandateAccount(clip(text(body, "mandateAccount"), 60));
+            // A resumed draft is shown the account only masked, so a debit order whose bank details are not sent
+            // again keeps the ones on record; any other method drops them.
+            boolean keepBank = "DEBIT_ORDER".equals(method);
+            if (body.has("mandateInstitution") || !keepBank) {
+                app.setMandateInstitution(clip(text(body, "mandateInstitution"), 60));
+            }
+            if (body.has("mandateAccount") || !keepBank) {
+                app.setMandateAccount(clip(text(body, "mandateAccount"), 60));
+            }
             String day = text(body, "mandateDebitDay");
             if (day != null) {
                 try {
@@ -234,7 +241,7 @@ public class ApplicationCapture {
                 app.getMandateDebitDay(), app.getChannel() == null ? "DIRECT" : app.getChannel(),
                 app.getIntermediaryCode(), app.getDeclaredBy(), app.getDeclaredAt(), app.getSubmittedBy(),
                 app.getSubmittedAt(), disclosures, items, draft ? submissionProblems(app) : List.of(),
-                missingEvidence(app, customer), preCapture);
+                missingEvidence(app, customer), preCapture, app.getPayerName(), app.getPayerRelationship());
     }
 
     public List<PortfolioViews.DisclosureItem> questionsFor(String product) {

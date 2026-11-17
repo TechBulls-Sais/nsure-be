@@ -115,7 +115,9 @@ public final class PortfolioViews {
             java.time.LocalDateTime submittedAt, List<DisclosureItem> disclosures, List<ApplicationEvidenceItem> evidence,
             List<String> submissionProblems, List<String> missingEvidence,
             // Submitted before disclosures and the declaration were captured: they were never recorded for it.
-            boolean preCapture) {
+            boolean preCapture,
+            // The payer as captured, so a draft can be reopened in the application form (NS-UX-001).
+            String payerName, String payerRelationship) {
     }
 
     /** A stored quote priced again under its own rate version: whether it reproduces the booked amount. */

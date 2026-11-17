@@ -394,11 +394,14 @@ public class PortfolioService {
             lives = offer == null ? List.of() : offer.lines();
             if (offer != null) {
                 quote = quotes.record(customer, row.getProduct(), offer, actor.getUsername());
-                quotes.accept(quote.getRef(), quote.getVersionNo(), actor.getUsername(),
-                        "Accepted with the application, recorded by " + actor.getUsername());
+                // A draft's quote is only priced: the applicant accepts it when the application is submitted with
+                // the declaration, not before (A-16).
+                if (!draftRequested(body)) {
+                    acceptWithApplication(quote, actor);
+                }
             }
         }
-        boolean draft = ApplicationCapture.DRAFT.equalsIgnoreCase(blank(optional(body, "status")));
+        boolean draft = draftRequested(body);
         capture.capture(row, body, actor.getUsername());
         capture.answer(row, body, actor.getUsername());
         if (draft) {
@@ -417,6 +420,25 @@ public class PortfolioService {
             underwriting.getObject().assess(row, customer, actor.getUsername());
         }
         return cover(row);
+    }
+
+    private static boolean draftRequested(JsonNode body) {
+        return ApplicationCapture.DRAFT.equalsIgnoreCase(blank(optional(body, "status")));
+    }
+
+    /** The quote priced with an application is accepted when the application is submitted (NS-IL01-001). */
+    private void acceptWithApplication(Quote quote, AppUser actor) {
+        quotes.accept(quote.getRef(), quote.getVersionNo(), actor.getUsername(),
+                "Accepted with the application, recorded by " + actor.getUsername());
+    }
+
+    /** An application not yet issued takes the accepted version's price and lives. */
+    private void takeQuote(InsuranceApplication application, Quote quote) {
+        applyQuote(application, quote);
+        em.createQuery("delete from PolicyLifeCover l where l.application = :app")
+                .setParameter("app", application).executeUpdate();
+        saveLives(application, quotes.pricedLives(quote));
+        application.setQuote(quote.getRef(), quote.getVersionNo());
     }
 
     /** Prices a record exactly as the quote did: its tier, cover, premium and rate version. */
@@ -473,6 +495,16 @@ public class PortfolioService {
         }
         CustomerAccount customer = customerOf(app);
         capture.submit(app, customer, actor.getUsername());
+        // The draft's priced quote is accepted now, with the declaration; one accepted meanwhile stays as it is.
+        if (app.getQuoteRef() != null) {
+            Quote quote = quotes.latest(app.getQuoteRef());
+            if (Quote.QUOTED.equals(quote.getStatus())) {
+                acceptWithApplication(quote, actor);
+                if (app.getQuoteVersion() == null || quote.getVersionNo() != app.getQuoteVersion()) {
+                    takeQuote(app, quote);
+                }
+            }
+        }
         underwriting.getObject().assess(app, customer, actor.getUsername());
         return capture.checklist(app, customer);
     }
@@ -531,11 +563,7 @@ public class PortfolioService {
         if (quote.getApplicationRef() != null) {
             InsuranceApplication application = one(InsuranceApplication.class, quote.getApplicationRef(), "Application");
             if (!"Issued".equals(application.getStatus())) {
-                applyQuote(application, quote);
-                em.createQuery("delete from PolicyLifeCover l where l.application = :app")
-                        .setParameter("app", application).executeUpdate();
-                saveLives(application, quotes.pricedLives(quote));
-                application.setQuote(quote.getRef(), quote.getVersionNo());
+                takeQuote(application, quote);
             }
         }
         return quotes.view(quote);
