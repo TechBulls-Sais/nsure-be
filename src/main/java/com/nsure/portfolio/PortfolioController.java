@@ -158,7 +158,7 @@ public class PortfolioController {
     }
 
     // The type is in the path pattern so ApiAccessRules can gate each history on its own read permission.
-    @GetMapping("/history/{type:policy|claim|kyc|edd}/{ref}")
+    @GetMapping("/history/{type:policy|claim|kyc|edd|application}/{ref}")
     public List<PortfolioViews.HistoryView> history(@PathVariable String type, @PathVariable String ref) {
         return portfolio.history(type, ref);
     }

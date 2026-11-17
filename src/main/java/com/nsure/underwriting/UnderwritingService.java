@@ -88,11 +88,14 @@ public class UnderwritingService {
     private final RoleRepository roles;
     /** The application's quote takes each accepted offer's premium as a new version (AT-IL02-02). */
     private final com.nsure.portfolio.QuoteService quotes;
+    /** The application's timeline records each underwriting step that moves it (IL01 workspace). */
+    private final com.nsure.portfolio.WorkflowHistory history;
 
     public UnderwritingService(EntityManager em, PlatformSecurityContext security, Outbox outbox,
             ReferenceNumbers numbers, EvidenceChain audit, RoleRepository roles,
-            com.nsure.portfolio.QuoteService quotes) {
+            com.nsure.portfolio.QuoteService quotes, com.nsure.portfolio.WorkflowHistory history) {
         this.quotes = quotes;
+        this.history = history;
         this.em = em;
         this.security = security;
         this.outbox = outbox;
@@ -430,6 +433,7 @@ public class UnderwritingService {
         c.decidedBy = user.getUsername();
         c.decidedAt = now;
         c.updatedAt = now;
+        String before = app.getStatus();
         // NS-IL02-005, AT-IL02-02: any earlier acceptance belonged to earlier terms, and so did its price.
         c.offerAcceptedBy = null;
         c.offerAcceptedAt = null;
@@ -461,6 +465,10 @@ public class UnderwritingService {
             }
         }
         addDecision(c, now);
+        // The timeline names the decision, not its clinical reasons (those stay on the underwriting case).
+        logApplication(app, "Underwriting decision", before, decision.replace('_', ' ').toLowerCase(Locale.ROOT)
+                + (ACCEPT_WITH_TERMS.equals(decision) ? ", offer v" + c.offerVersion : "") + " (" + c.ref + ")",
+                user.getUsername());
         publishDecided(c, user.getUsername());
         if (ACCEPT_WITH_TERMS.equals(decision)) {
             Map<String, Object> data = new LinkedHashMap<>();
@@ -492,6 +500,7 @@ public class UnderwritingService {
             throw new IllegalArgumentException("Say how the applicant gave their answer.");
         }
         InsuranceApplication app = application(c);
+        String before = app.getStatus();
         LocalDateTime now = LocalDateTime.now();
         boolean accept = body.path("accept").asBoolean(false);
         c.offerAcceptedBy = user.getUsername();
@@ -532,9 +541,16 @@ public class UnderwritingService {
         data.put("offerVersion", c.offerVersion);
         data.put("accepted", accept);
         outbox.publish(Events.OFFER_ANSWERED, c.ref, data, user.getUsername());
+        logApplication(app, accept ? "Offer accepted" : "Offer refused", before, "Offer v" + c.offerVersion + " ("
+                + c.ref + ")", user.getUsername());
         audit.record(user.getUsername(), accept ? "Offer accepted" : "Offer refused", "UnderwritingCase", c.ref,
                 "Offer v" + c.offerVersion + ": " + note);
         return detail(c, user);
+    }
+
+    private void logApplication(InsuranceApplication app, String action, String previous, String details, String actor) {
+        history.record(com.nsure.portfolio.ApplicationCapture.HISTORY, app.getRef(), app.getCustomerName(), action,
+                previous, app.getStatus(), details, actor);
     }
 
     /**
@@ -584,8 +600,10 @@ public class UnderwritingService {
         c.status = outstanding(c.ref) > 0 ? EVIDENCE_PENDING : REFERRED;
         c.referralReasons = (c.referralReasons == null ? "" : c.referralReasons + "\n") + "Reopened: " + reason;
         c.updatedAt = now;
+        String before = app.getStatus();
         app.setStatus("Under review");
         restorePrice(c, app, user.getUsername(), reason);
+        logApplication(app, "Underwriting reopened", before, c.ref, user.getUsername());
         audit.record(user.getUsername(), "Underwriting reopened", "UnderwritingCase", c.ref, reason);
         return detail(c, user);
     }

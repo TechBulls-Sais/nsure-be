@@ -426,6 +426,8 @@ public class PortfolioService {
             // NS-IL01-005: the rules accept an eligible case; anything else is referred to an underwriter.
             underwriting.getObject().assess(row, customer, actor.getUsername());
         }
+        logApplication(row, draft ? "Saved as draft" : "Submitted", null,
+                quote == null ? null : "Priced on " + quote.getRef() + " v" + quote.getVersionNo(), actor.getUsername());
         em.flush(); // the returned row version is the stored one (If-Match on the next change)
         return cover(row);
     }
@@ -438,6 +440,12 @@ public class PortfolioService {
     private void acceptWithApplication(Quote quote, AppUser actor) {
         quotes.accept(quote.getRef(), quote.getVersionNo(), actor.getUsername(),
                 "Accepted with the application, recorded by " + actor.getUsername());
+    }
+
+    /** One step on the application's timeline (IL01 workspace): what happened and the status it moved between. */
+    private void logApplication(InsuranceApplication app, String action, String previous, String details, String actor) {
+        history.record(ApplicationCapture.HISTORY, app.getRef(), app.getCustomerName(), action, previous,
+                app.getStatus(), details, actor);
     }
 
     /** An application not yet issued takes the accepted version's price and lives. */
@@ -488,6 +496,8 @@ public class PortfolioService {
         }
         capture.capture(app, body, actor.getUsername());
         capture.answer(app, body, actor.getUsername());
+        logApplication(app, "Details updated", app.getStatus(),
+                app.getDeclaredAt() == null ? null : "Declaration accepted", actor.getUsername());
         em.flush();
         return capture.checklist(app, customerOf(app));
     }
@@ -516,6 +526,7 @@ public class PortfolioService {
             }
         }
         underwriting.getObject().assess(app, customer, actor.getUsername());
+        logApplication(app, "Submitted", ApplicationCapture.DRAFT, null, actor.getUsername());
         em.flush();
         return capture.checklist(app, customer);
     }
@@ -527,12 +538,14 @@ public class PortfolioService {
         actor.validateHasPermissionTo("UPDATE_APPLICATION");
         InsuranceApplication app = one(InsuranceApplication.class, ref, "Application");
         com.nsure.common.ExpectedVersion.check("Application " + ref, app.getRowVersion());
+        String before = app.getStatus();
         CustomerAccount customer = customerOf(app);
         capture.recordEvidence(app, customer, text(body, "documentType"), optional(body, "note"), actor.getUsername());
         // The last piece of evidence on an application underwriting has already cleared makes it ready to issue.
         if (ApplicationCapture.UNDER_REVIEW.equals(app.getStatus()) && underwriting.getObject().isCleared(app.getRef())) {
             app.setStatus("Ready to issue");
         }
+        logApplication(app, "Evidence received", before, text(body, "documentType"), actor.getUsername());
         em.flush();
         return capture.checklist(app, customer);
     }
@@ -577,6 +590,8 @@ public class PortfolioService {
             InsuranceApplication application = one(InsuranceApplication.class, quote.getApplicationRef(), "Application");
             if (!"Issued".equals(application.getStatus())) {
                 takeQuote(application, quote);
+                logApplication(application, "Quote accepted", application.getStatus(),
+                        quote.getRef() + " v" + quote.getVersionNo(), actor.getUsername());
             }
         }
         return quotes.view(quote);
@@ -649,6 +664,7 @@ public class PortfolioService {
             return cover(row);
         }
         com.nsure.common.ExpectedVersion.check("Application " + ref, row.getRowVersion());
+        String before = row.getStatus();
         // The application's state follows its workflow; only these two moves are made by hand.
         String status = body.get("status").asText().trim();
         if ("Issued".equalsIgnoreCase(row.getStatus())) {
@@ -666,6 +682,7 @@ public class PortfolioService {
             throw new IllegalArgumentException("An application can only be moved to Ready to issue or Withdrawn here;"
                     + " its other states come from submission, underwriting and issue.");
         }
+        logApplication(row, "Status changed", before, null, security.authenticatedUser().getUsername());
         em.flush();
         return cover(row);
     }
@@ -762,7 +779,10 @@ public class PortfolioService {
         }
         policyWorkflow.logOpened(row, staff.getUsername());
         if (application != null) {
+            String before = application.getStatus();
             application.setStatus("Issued");
+            logApplication(application, "Issued", before, "Policy offer " + row.getRef() + " awaits its first premium",
+                    staff.getUsername());
             // IL01: the issue of an application is requested; cover itself follows the first premium (PolicyIssued).
             Map<String, Object> requested = new java.util.LinkedHashMap<>();
             requested.put("applicationRef", application.getRef());
@@ -1320,7 +1340,8 @@ public class PortfolioService {
             case "claim" -> WorkflowHistory.CLAIM;
             case "kyc" -> WorkflowHistory.KYC_REVIEW;
             case "edd" -> WorkflowHistory.EDD_REVIEW;
-            default -> throw new IllegalArgumentException("History type must be policy, claim, kyc or edd.");
+            case "application" -> ApplicationCapture.HISTORY;
+            default -> throw new IllegalArgumentException("History type must be policy, claim, kyc, edd or application.");
         };
         return history.of(entity, ref);
     }

@@ -133,6 +133,12 @@ class UnderwritingApiTest {
                 .andReturn().getResponse().getContentAsString(), "$.id");
         assertThat(jdbc.queryForObject("select uw_terms from ins_policy where record_ref = ?", String.class, policy))
                 .contains("50%").contains("Respiratory conditions").contains("Offer v2");
+        // The application's timeline shows each underwriting step that moved it, without clinical reasons.
+        String timeline = mockMvc.perform(get("/portfolio/history/application/" + app).with(signedIn("admin", "password")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(JsonPath.<java.util.List<String>>read(timeline, "$[*].action")).containsSubsequence(
+                "Submitted", "Underwriting decision", "Offer accepted", "Underwriting decision", "Offer accepted", "Issued");
+        assertThat(timeline).doesNotContain("Smoker rates").doesNotContain("doctor's report");
         mockMvc.perform(json(post("/underwriting/cases/" + ref + "/decision"), "underwriter",
                         "{\"decision\":\"DECLINE\",\"reason\":\"Trying to change an issued contract.\"}"))
                 .andExpect(status().isConflict());

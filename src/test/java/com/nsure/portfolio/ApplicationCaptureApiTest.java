@@ -121,6 +121,15 @@ class ApplicationCaptureApiTest {
         mockMvc.perform(get("/portfolio/quotes/" + quote).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[0].status").value("ACCEPTED"))
                 .andExpect(jsonPath("$[0].acceptedBy").value("admin"));
+        // IL01 workspace: the application's own timeline, not a sample one.
+        mockMvc.perform(get("/portfolio/history/application/" + app).with(signedIn("support", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].action").value("Saved as draft"))
+                .andExpect(jsonPath("$[0].newState").value("Draft"))
+                .andExpect(jsonPath("$[1].action").value("Details updated"))
+                .andExpect(jsonPath("$[2].action").value("Submitted"))
+                .andExpect(jsonPath("$[2].previousState").value("Draft"))
+                .andExpect(jsonPath("$[2].newState").value("Ready to issue"));
     }
 
     @Test

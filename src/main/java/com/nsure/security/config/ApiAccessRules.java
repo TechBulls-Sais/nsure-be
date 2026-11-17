@@ -103,6 +103,7 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/applications", anyOf("CREATE_APPLICATION")),
             rule(PUT, "/portfolio/applications/*", anyOf("UPDATE_APPLICATION")),
             rule(GET, "/portfolio/applications/*/checklist", anyOf("READ_APPLICATION")),
+            rule(GET, "/portfolio/history/application/*", anyOf("READ_APPLICATION")),
             rule(GET, "/portfolio/application-questions", anyOf("READ_APPLICATION", "CREATE_APPLICATION")),
             rule(PUT, "/portfolio/applications/*/details", anyOf("UPDATE_APPLICATION")),
             rule(POST, "/portfolio/applications/*/submit", anyOf("CREATE_APPLICATION", "UPDATE_APPLICATION")),

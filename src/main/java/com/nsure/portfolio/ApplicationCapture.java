@@ -29,6 +29,8 @@ public class ApplicationCapture {
     public static final String DRAFT = "Draft";
     public static final String UNDER_REVIEW = "Under review";
     public static final String EVIDENCE_NEEDED = "Evidence needed";
+    /** The workflow-log type of an application's timeline (IL01 workspace). */
+    public static final String HISTORY = "Application";
     static final Set<String> CHANNELS = Set.of("DIRECT", "BRANCH", "AGENT", "BROKER", "CALL_CENTRE");
     static final Set<String> MANDATES = Set.of("DEBIT_ORDER", "MOBILE_WALLET", "CARD", "BANK_EFT");
 
