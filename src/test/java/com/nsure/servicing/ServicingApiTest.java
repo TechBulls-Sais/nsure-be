@@ -45,6 +45,9 @@ class ServicingApiTest {
     @Autowired
     private PolicyWorkflow policies;
 
+    @Autowired
+    private com.nsure.integration.OutboxDispatcher dispatcher;
+
     @Test
     void anEndorsementIsPreviewedThenAppliedOrHeldForTheRightReview() throws Exception {
         String policy = activePolicy("Onalenna Payer", "Term Life", "Bronze", "");
@@ -208,6 +211,39 @@ class ServicingApiTest {
                 .andExpect(jsonPath("$.status").value("CEASED"));
         mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.lives[?(@.fullName == 'Tumo Family')].status").value("CEASED"));
+        // IL04 events: raising the review and closing it both change the dependant's eligibility.
+        assertThat(events("DependantEligibilityChanged", policy)).isEqualTo(2);
+        assertThat(jdbc.queryForList("select payload from int_outbox_event where event_type = 'DependantEligibilityChanged'"
+                + " and aggregate_ref = ? order by id", String.class, policy).get(1)).contains("\"outcome\":\"CEASED\"");
+    }
+
+    @Test
+    void livesCapturedAtApplicationAreAnnouncedAtIssueAndCeaseWithThePolicy() throws Exception {
+        String policy = activePolicy("Goitse Roster", "Family Funeral", "Bronze",
+                ",\"lives\":[{\"relationship\":\"Spouse\",\"fullName\":\"Mpho Roster\",\"dateOfBirth\":\""
+                        + LocalDate.now().minusYears(31) + "\"}]");
+        assertThat(events("InsuredLifeAdded", policy)).isZero();
+        // PolicyIssued announces both lives captured at application, once however often it is delivered.
+        dispatcher.dispatch();
+        assertThat(events("InsuredLifeAdded", policy)).isEqualTo(2);
+        tx.executeWithoutResult(s -> em.createQuery("update EventDelivery d set d.status = 'PENDING', d.attempts = 0,"
+                        + " d.nextAttemptAt = :now where d.handler = 'servicing.insured-lives' and d.event.id in"
+                        + " (select e.id from OutboxEvent e where e.aggregateRef = :ref)")
+                .setParameter("now", java.time.LocalDateTime.now().minusSeconds(1)).setParameter("ref", policy)
+                .executeUpdate());
+        dispatcher.dispatch();
+        assertThat(events("InsuredLifeAdded", policy)).isEqualTo(2);
+
+        // Ending the policy ends the lives it covers, each with InsuredLifeCeased.
+        mockMvc.perform(json(post("/servicing/policies/" + policy + "/termination"), "admin",
+                        "{\"reason\":\"DEATH\",\"note\":\"Death certificate received\"}"))
+                .andExpect(status().isOk());
+        dispatcher.dispatch();
+        dispatcher.dispatch();
+        assertThat(events("InsuredLifeCeased", policy)).isEqualTo(2);
+        mockMvc.perform(get("/servicing/policies/" + policy).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.lives[?(@.status == 'ACTIVE')]").isEmpty())
+                .andExpect(jsonPath("$.lives[?(@.fullName == 'Mpho Roster')].effectiveTo").value(LocalDate.now().toString()));
     }
 
     @Test

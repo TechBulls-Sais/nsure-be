@@ -563,6 +563,11 @@ public class ServicingService {
     }
 
     private void ceaseLife(InsurancePolicy policy, PolicyLifeCover life, LocalDate on, String reason, String actor) {
+        ceaseLife(policy, life, on, reason, actor, null);
+    }
+
+    private void ceaseLife(InsurancePolicy policy, PolicyLifeCover life, LocalDate on, String reason, String actor,
+            String correlationId) {
         life.cease(on, clip(reason, 300));
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("policyRef", policy.getRef());
@@ -570,7 +575,69 @@ public class ServicingService {
         data.put("fullName", life.getFullName());
         data.put("ceasedOn", on.toString());
         data.put("reason", reason);
-        outbox.publish(Events.INSURED_LIFE_CEASED, policy.getRef(), data, actor);
+        outbox.publish(Events.INSURED_LIFE_CEASED, policy.getRef(), data, actor, correlationId);
+    }
+
+    // ── insured lives following the policy (IL04 events) ──────────────────────────────────────────
+
+    /**
+     * On PolicyIssued: the lives captured at application are insured from issue, so each is announced with
+     * InsuredLifeAdded (source ISSUE). A life already announced is skipped, so a replayed event adds nothing.
+     */
+    @Transactional
+    public void announceLivesAtIssue(String policyRef, String correlationId) {
+        InsurancePolicy policy = em.createQuery("select p from InsurancePolicy p where p.ref = :ref", InsurancePolicy.class)
+                .setParameter("ref", policyRef).getResultStream().findFirst().orElse(null);
+        if (policy == null) {
+            return;
+        }
+        for (PolicyLifeCover life : lives(policy)) {
+            if (!life.isActiveLife() || announced(policyRef, life.getId())) {
+                continue;
+            }
+            LocalDate from = life.getEffectiveFrom() != null ? life.getEffectiveFrom() : policy.getCoverStartDate();
+            LocalDate waiting = life.getWaitingPeriodStart() != null ? life.getWaitingPeriodStart() : from;
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("policyRef", policyRef);
+            data.put("lifeId", life.getId());
+            data.put("fullName", life.getFullName());
+            data.put("relationship", life.getLifeType());
+            data.put("effectiveFrom", from == null ? null : from.toString());
+            data.put("waitingPeriodStart", waiting == null ? null : waiting.toString());
+            data.put("coverAmount", life.getCoverAmount());
+            data.put("source", "ISSUE");
+            outbox.publish(Events.INSURED_LIFE_ADDED, policyRef, data, WorkflowHistory.SYSTEM, correlationId);
+        }
+    }
+
+    private boolean announced(String policyRef, Long lifeId) {
+        return em.createQuery("select count(e) from OutboxEvent e where e.eventType = :type and e.aggregateRef = :ref"
+                        + " and e.payload like :life", Long.class)
+                .setParameter("type", Events.INSURED_LIFE_ADDED).setParameter("ref", policyRef)
+                .setParameter("life", "%\"lifeId\":" + lifeId + ",%").getSingleResult() > 0;
+    }
+
+    /**
+     * On PolicyTerminated (termination, cancellation, lapse or a claim that ends the policy): the lives still covered
+     * cease with it, each with InsuredLifeCeased. Lives already ceased are left alone, so a replay changes nothing.
+     */
+    @Transactional
+    public void ceaseLivesWithPolicy(String policyRef, String cause, String endedOn, String correlationId) {
+        InsurancePolicy policy = em.createQuery("select p from InsurancePolicy p where p.ref = :ref", InsurancePolicy.class)
+                .setParameter("ref", policyRef).getResultStream().findFirst().orElse(null);
+        if (policy == null || IN_FORCE.contains(policy.getStatus())
+                || PolicyWorkflow.PENDING_PAYMENT.equals(policy.getStatus())) {
+            return;
+        }
+        LocalDate on = policy.getTerminatedOn() != null ? policy.getTerminatedOn()
+                : endedOn != null && !"null".equals(endedOn) ? LocalDate.parse(endedOn) : LocalDate.now();
+        String reason = "Policy ended: " + (cause == null ? policy.getStatus()
+                : cause.charAt(0) + cause.substring(1).toLowerCase(Locale.ROOT).replace('_', ' '));
+        for (PolicyLifeCover life : lives(policy)) {
+            if (life.isActiveLife()) {
+                ceaseLife(policy, life, on, reason, WorkflowHistory.SYSTEM, correlationId);
+            }
+        }
     }
 
     /** Raises a review task for every active life that reaches an age limit within the next 90 days. */
@@ -645,7 +712,7 @@ public class ServicingService {
         String outcome = required(body, "outcome", 20).toUpperCase(Locale.ROOT);
         String note = required(body, "note", 400);
         if (!Set.of("CONTINUE", "CEASE").contains(outcome)) {
-            throw new IllegalArgumentException("outcome must be CONTINUE or CEASE.");
+            throw new IllegalArgumentException("Choose the outcome: continue cover or cease it.");
         }
         if ("CEASE".equals(outcome)) {
             InsurancePolicy policy = workflow.policy(r.policyRef);
@@ -666,6 +733,15 @@ public class ServicingService {
         r.note = clip(r.note + " Outcome: " + note, 500);
         r.closedBy = user.getUsername();
         r.closedAt = LocalDateTime.now();
+        // IL04: the review's outcome changes (or confirms) the dependant's eligibility.
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("policyRef", r.policyRef);
+        data.put("lifeId", r.lifeId);
+        data.put("fullName", r.lifeName);
+        data.put("reviewType", r.reviewType);
+        data.put("dueDate", r.dueDate.toString());
+        data.put("outcome", r.status);
+        outbox.publish(Events.DEPENDANT_ELIGIBILITY_CHANGED, r.policyRef, data, user.getUsername());
         return reviewView(r);
     }
 
