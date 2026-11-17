@@ -299,3 +299,6 @@ databaseChangeLog:
   - include:
       file: changes/109-group-invoice-policy-year.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/110-queue-group-and-sender-work.yaml
+      relativeToChangelogFile: true

@@ -109,6 +109,18 @@ public class WorkQueueService {
                     + " detail, requested_at as opened, status, scheme_ref as contract_ref, requested_by as maker from"
                     + " grp_scheme_event where status = 'PENDING'", List.of("UNDERWRITE_MEMBER"),
                     Map.of("PENDING", "Review the impact and decide")),
+            // GL03 workspace: a group member whose cover above the free-cover limit waits for an underwriting decision.
+            source("GROUP_MEMBER_UW", "schemes", "select concat('MEM-', m.id) as ref,"
+                    + " concat(m.first_name, concat(' ', m.last_name)) as subject, m.member_key as detail,"
+                    + " m.updated_at as opened, m.member_status as status, s.record_ref as contract_ref from grp_member m"
+                    + " join ins_scheme s on s.id = m.scheme_id where m.member_status = 'UNDERWRITING_PENDING'",
+                    List.of("UNDERWRITE_MEMBER"),
+                    Map.of("UNDERWRITING_PENDING", "Decide the cover above the free-cover limit")),
+            // AT-SH09B-03: a reply from an unverified sender is an identity-verification task before anyone answers it.
+            source("SENDER_VERIFICATION", "communications", "select concat('INB-', id) as ref,"
+                    + " sender as subject, channel as detail, received_at as opened, verification_status as status"
+                    + " from com_inbound where verification_status = 'REQUIRED'", List.of("MANAGE_COMMUNICATION"),
+                    Map.of("REQUIRED", "Verify the sender, then link the reply to the customer")),
             source("GROUP_QUOTE", "scheme-lifecycle", "select record_ref as ref, sponsor_name as subject, benefits as"
                     + " detail, created_at as opened, status, scheme_ref as contract_ref from grp_quote where status ="
                     + " 'SUBMITTED'", List.of("MANAGE_SCHEME", "UNDERWRITE_MEMBER"),

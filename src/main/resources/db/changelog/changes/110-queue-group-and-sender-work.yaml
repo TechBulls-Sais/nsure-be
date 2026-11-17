@@ -1,0 +1,16 @@
+databaseChangeLog:
+  - changeSet:
+      id: 110-queue-group-and-sender-work
+      author: nsure
+      comment: >-
+        The work queue lists group members waiting for an underwriting decision (GL03 workspace) and replies from
+        unverified senders waiting for identity verification (AT-SH09B-03). SLA hours copy the closest existing work
+        (individual underwriting referrals; communications approvals) and stay editable in Operations > Workflow.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO wf_definition (code, name, team, sla_hours, steps, version_no, priority)
+              SELECT seed.c, seed.n, seed.t, seed.h, seed.s, 1, 'NORMAL' FROM (
+                SELECT 'GROUP_MEMBER_UW' c, 'Group member underwriting' n, 'Underwriting' t, 16 h, 'Compare requested cover with the free-cover limit > Request or record evidence > Decide each benefit within authority' s UNION ALL
+                SELECT 'SENDER_VERIFICATION', 'Sender verification', 'Communications', 16, 'Verify who sent the reply > Record how they were verified > Link it to the customer or close it'
+              ) seed WHERE NOT EXISTS (SELECT 1 FROM wf_definition x WHERE x.code = seed.c);

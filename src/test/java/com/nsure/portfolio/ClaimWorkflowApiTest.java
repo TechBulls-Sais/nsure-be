@@ -320,8 +320,8 @@ class ClaimWorkflowApiTest {
             // Spec 04 §5.3: over the limit needs a more senior approver.
             mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":45000}"))
                     .andExpect(status().isForbidden())
-                    .andExpect(jsonPath("$.message").value("This payout of P 45,000.00 exceeds your approval limit of "
-                            + "P 10,000.00. It needs a more senior approver."));
+                    .andExpect(jsonPath("$.message").value("This payout of BWP 45,000 exceeds your approval limit of "
+                            + "BWP 10,000. It needs a more senior approver."));
             // NS-API-001: a malformed field is a 400 schema error naming the field, not a business rule refusal.
             mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":\"ten\"}"))
                     .andExpect(status().isBadRequest())
@@ -592,11 +592,20 @@ class ClaimWorkflowApiTest {
         // With every mandatory document on file, approval asks for no such reason.
         String complete = staffLodge(policy, "Onalenna Evidence");
         for (String type : List.of("Death certificate", "Identity document")) {
+            String fileName = type.replace(' ', '-').toLowerCase(java.util.Locale.ROOT) + ".pdf";
             mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                             .multipart("/portfolio/claims/" + complete + "/documents")
-                            .file(new org.springframework.mock.web.MockMultipartFile("file", "evidence.pdf",
+                            .file(new org.springframework.mock.web.MockMultipartFile("file", fileName,
                                     "application/octet-stream", "%PDF-1.4\n% evidence\n%%EOF".getBytes()))
                             .param("type", type).with(signedIn("assessor", "password")))
+                    .andExpect(status().isOk());
+            // AT-SH09A-02: an upload is evidence only once someone other than the uploader releases it.
+            String held = mockMvc.perform(get("/portfolio/document-quarantine").with(signedIn("admin", "password")))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            Integer upload = ((List<Integer>) JsonPath.read(held, "$[?(@.ownerRef == '" + complete
+                    + "' && @.fileName == '" + fileName + "')].id")).get(0);
+            mockMvc.perform(json(post("/portfolio/document-quarantine/" + upload + "/release"), "admin",
+                            "{\"note\":\"Opened and checked\"}"))
                     .andExpect(status().isOk());
         }
         mockMvc.perform(post("/portfolio/claims/" + complete + "/assess").with(signedIn("assessor", "password")))
@@ -868,6 +877,11 @@ class ClaimWorkflowApiTest {
                         "{\"fullName\":\"Neo Bene\",\"relationship\":\"Spouse\",\"mobile\":\"+267 72 000 001\","
                                 + "\"payoutMethod\":\"Bank Account\",\"accountRef\":\"62004568\"}"))
                 .andExpect(status().isOk());
+        // IL03-EVENTS: each beneficiary change (Pako added, Pako removed, Neo added) is a PolicyChanged event.
+        Long policyChanges = tx.execute(s -> em.createQuery("select count(e) from OutboxEvent e where e.eventType ="
+                + " 'PolicyChanged' and e.aggregateRef = :ref", Long.class).setParameter("ref", policy)
+                .getSingleResult());
+        assertThat(policyChanges).isEqualTo(3L);
         mockMvc.perform(json(post("/portfolio/claims"), "assessor", lodgement(policy, "Pako Bene", 5)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.checks[?(@.name == 'Beneficiary Match')].result")

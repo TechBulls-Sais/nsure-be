@@ -48,6 +48,34 @@ class WorkQueueApiTest {
         ModuleTestUsers.provision(jdbc);
     }
 
+    /**
+     * GL03 workspace and AT-SH09B-03: group members waiting for an underwriting decision and replies from unverified
+     * senders are queue work for the people who may act on them, and nobody else.
+     */
+    @Test
+    void groupUnderwritingAndSenderVerificationAreQueueWork() throws Exception {
+        jdbc.update("INSERT INTO com_inbound (provider_message_id, channel, sender, body, received_at, status,"
+                + " verification_status) VALUES ('QA-INB-QUEUE-1', 'WHATSAPP', '+267 71 999 001', 'Is my claim paid?',"
+                + " CURRENT_TIMESTAMP, 'TRIAGE', 'REQUIRED')");
+        Long inbound = jdbc.queryForObject("select id from com_inbound where provider_message_id = 'QA-INB-QUEUE-1'",
+                Long.class);
+        Long pending = jdbc.queryForObject("select count(*) from grp_member where member_status ="
+                + " 'UNDERWRITING_PENDING'", Long.class);
+
+        String grp = ok(get("/ops/queue"), "grpadmin", null);
+        assertThat(JsonPath.<List<String>>read(grp, "$[?(@.workflow == 'GROUP_MEMBER_UW')].key")).hasSize(
+                pending.intValue());
+        assertThat(JsonPath.<List<String>>read(grp, "$[*].workflow")).doesNotContain("SENDER_VERIFICATION");
+
+        String service = ok(get("/ops/queue"), "service", null);
+        assertThat(JsonPath.<List<String>>read(service, "$[*].key")).contains("SENDER_VERIFICATION:INB-" + inbound)
+                .noneMatch(k -> k.startsWith("GROUP_MEMBER_UW:"));
+        Map<String, Object> item = JsonPath.<List<Map<String, Object>>>read(service,
+                "$[?(@.key == 'SENDER_VERIFICATION:INB-" + inbound + "')]").get(0);
+        assertThat(item).containsEntry("canAct", true).containsEntry("team", "Communications")
+                .containsEntry("page", "communications");
+    }
+
     @Test
     void eachRoleSeesAndTakesOnlyWorkItMayActOn() throws Exception {
         String request = partnerRequest("lender");

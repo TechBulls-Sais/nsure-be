@@ -1,5 +1,6 @@
 package com.nsure.security.approval;
 
+import com.nsure.common.Money;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.domain.Role;
@@ -69,8 +70,8 @@ public class ApprovalAuthorityService {
     public void assertWithinLimit(AppUser approver, BigDecimal payout) {
         limitFor(approver).ifPresent(limit -> {
             if (payout.compareTo(limit) > 0) {
-                throw new NoAuthorizationException("This payout of P " + money(payout)
-                        + " exceeds your approval limit of P " + money(limit) + ". It needs a more senior approver.");
+                throw new NoAuthorizationException("This payout of " + Money.display(payout)
+                        + " exceeds your approval limit of " + Money.display(limit) + ". It needs a more senior approver.");
             }
         });
     }
@@ -122,10 +123,6 @@ public class ApprovalAuthorityService {
 
     private static boolean approves(Role role) {
         return role.hasPermissionTo("APPROVE_CLAIM");
-    }
-
-    private static String money(BigDecimal amount) {
-        return String.format("%,.2f", amount);
     }
 
     /** {@code maxPayoutAmount} null means unlimited. */

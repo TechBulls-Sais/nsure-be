@@ -521,7 +521,22 @@ public class PolicyWorkflow {
         em.persist(row);
         history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Beneficiary Added",
                 policy.getStatus(), policy.getStatus(), row.getFullName() + " (" + row.getRelationship() + ")", actor);
+        publishBeneficiaryChange(policy, "BENEFICIARY_ADDED", row, LocalDate.now(), actor);
         return row;
+    }
+
+    /** IL03-EVENTS: a beneficiary change is a policy change. References and the relationship only (NS-API-003). */
+    private void publishBeneficiaryChange(InsurancePolicy policy, String change, PolicyBeneficiary row,
+            LocalDate effective, String actor) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("policyRef", policy.getRef());
+        data.put("customerName", policy.getCustomerName());
+        data.put("product", policy.getProduct());
+        data.put("change", change);
+        data.put("beneficiaryId", row.getId());
+        data.put("relationship", row.getRelationship());
+        data.put("effectiveDate", effective.toString());
+        outbox.publish(Events.POLICY_CHANGED, policy.getRef(), data, actor);
     }
 
     @Transactional
@@ -543,6 +558,7 @@ public class PolicyWorkflow {
         history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Beneficiary Removed",
                 policy.getStatus(), policy.getStatus(), row.getFullName() + " (" + row.getRelationship()
                         + "), no longer a beneficiary from " + from, actor, from);
+        publishBeneficiaryChange(policy, "BENEFICIARY_REMOVED", row, from, actor);
     }
 
     /** The beneficiaries designated now. */
@@ -653,14 +669,26 @@ public class PolicyWorkflow {
         policy.setGracePeriodEnd(graceEnd);
         String detail = reason + " · paid to " + unpaidFrom.minusDays(1) + "; grace ends " + graceEnd;
         LocalDate effective = LocalDate.now();
+        boolean coverEnded = false;
         if (ACTIVE.equals(previous) && graceEnd.isBefore(LocalDate.now())) {
             policy.setStatus(ACTIVE_NO_COVER);
             // The cover ended when that grace ran out, in the past; recorded now, effective then (NS-DAT-002).
             effective = graceEnd.plusDays(1);
             detail += " · grace was already over, so cover ended on " + graceEnd;
+            coverEnded = true;
         }
         history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Cover Review", previous,
                 policy.getStatus(), detail, actor, effective);
+        if (coverEnded) {
+            // IL03-EVENTS: the same CoverLapsed the daily sweep publishes, when a reversal is what ends the cover.
+            Map<String, Object> lapsed = new LinkedHashMap<>();
+            lapsed.put("policyRef", policy.getRef());
+            lapsed.put("customerName", policy.getCustomerName());
+            lapsed.put("product", policy.getProduct());
+            lapsed.put("coverEndedOn", effective.toString());
+            lapsed.put("cause", "RECEIPT_REVERSED");
+            outbox.publish(Events.COVER_LAPSED, policy.getRef(), lapsed, actor);
+        }
     }
 
     /** Months one premium pays for, from the tier's premium frequency; monthly when the policy has no tier. */
