@@ -1663,8 +1663,21 @@ public class PortfolioService {
                 .getResultStream()
                 .map(this::claim)
                 .toList();
+        // NS-UX-001: the customer sees when each record last changed, from its own workflow log.
+        Map<String, java.time.LocalDateTime> updated = new HashMap<>();
+        List<String> refs = new ArrayList<>();
+        policies.forEach(p -> refs.add(p.id()));
+        claims.forEach(c -> refs.add(c.id()));
+        if (!refs.isEmpty()) {
+            for (Object[] row : em.createQuery("select l.entityRef, max(l.performedAt) from WorkflowLog l"
+                            + " where l.entityType in (:types) and l.entityRef in (:refs) group by l.entityRef", Object[].class)
+                    .setParameter("types", List.of(WorkflowHistory.POLICY, WorkflowHistory.CLAIM))
+                    .setParameter("refs", refs).getResultList()) {
+                updated.put((String) row[0], (java.time.LocalDateTime) row[1]);
+            }
+        }
         return new PortfolioViews.ShopView(customer(account), products(),
-                policies.stream().filter(p -> !isRequest(p.status())).toList(), requests, claims);
+                policies.stream().filter(p -> !isRequest(p.status())).toList(), requests, claims, updated);
     }
 
     private static boolean isRequest(String status) {

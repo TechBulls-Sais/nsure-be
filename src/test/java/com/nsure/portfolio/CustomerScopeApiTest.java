@@ -38,8 +38,10 @@ class CustomerScopeApiTest {
                         .content("{\"customerRef\":\"" + owner + "\",\"product\":\"Term Life\",\"tier\":\"Bronze\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
 
-        // The owner sees it; the stranger's own portal has no trace of it.
+        // The owner sees it, with when it last changed (NS-UX-001); the stranger's own portal has no trace of it.
         assertThat(body(get("/portfolio/shop"), "boipelo.owner")).contains(policy);
+        assertThat(JsonPath.<String>read(body(get("/portfolio/shop"), "boipelo.owner"), "$.lastUpdated['" + policy + "']"))
+                .isNotBlank();
         String stranger = body(get("/portfolio/shop"), "tiro.stranger");
         assertThat(stranger).doesNotContain(policy).doesNotContain("Boipelo Owner").doesNotContain(owner);
 

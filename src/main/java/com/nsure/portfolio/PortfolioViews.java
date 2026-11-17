@@ -51,7 +51,9 @@ public final class PortfolioViews {
             // Cover the customer asked for that staff have not accepted: awaiting review, or rejected with a reason.
             List<CoverView> requests,
             // Claims on the customer's policies, newest first.
-            List<ClaimView> claims
+            List<ClaimView> claims,
+            // When each of those policies, requests and claims last changed, by reference (NS-UX-001).
+            java.util.Map<String, java.time.LocalDateTime> lastUpdated
     ) {
     }
 
