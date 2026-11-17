@@ -284,7 +284,8 @@ public class GroupRecords {
                 .stream()
                 .map(r -> new GroupViews.CensusRowView(r.getLineNo(), r.getMemberKey(), r.getFirstName(),
                         r.getLastName(), r.getDateOfBirth(), r.getCategoryCode(), r.getSalary(), r.getAction(),
-                        r.getEffectiveDate(), r.getStatus(), r.getError(), r.getMemberId()))
+                        r.getEffectiveDate(), r.getStatus(), r.getError(), r.getMemberId(), r.getChangeId(),
+                        r.getRowKey()))
                 .toList();
         return new GroupViews.CensusBatchView(b.getRef(), b.getScheme().getRef(), b.getScheme().getName(),
                 b.getExternalBatchId(), b.getMode(), b.getStatus(), b.getFileHash(), b.getTotalRows(),

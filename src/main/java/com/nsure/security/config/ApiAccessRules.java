@@ -219,6 +219,7 @@ public final class ApiAccessRules {
             rule(PUT, "/group/schemes/*/categories/*", anyOf("MANAGE_SCHEME")),
             rule(POST, "/group/schemes/*/census-batches", anyOf("PROCESS_CENSUS")),
             rule(GET, "/group/census-batches/*", anyOf("READ_SCHEME")),
+            rule(GET, "/group/census-batches/*/reconciliation", anyOf("READ_SCHEME")),
             rule(POST, "/group/census-batches/*/commit", anyOf("PROCESS_CENSUS")),
             rule(POST, "/group/members/*/underwriting", anyOf("UNDERWRITE_MEMBER")),
             rule(POST, "/group/schemes/*/invoices", anyOf("BILL_SCHEME")),

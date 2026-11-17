@@ -39,7 +39,7 @@ public class CensusService {
      * Optional columns after the mandatory ones, in any order: the actively-at-work declaration (Y/N) at the entry or
      * increase date, and the date the member first became eligible (for the category's late-entry window).
      */
-    static final List<String> OPTIONAL = List.of("activelyAtWork", "eligibleDate");
+    static final List<String> OPTIONAL = List.of("activelyAtWork", "eligibleDate", "rowKey");
     private static final int CELLS = HEADER.size() + OPTIONAL.size();
     static final String JOIN = "JOIN";
     static final String LEAVE = "LEAVE";
@@ -137,6 +137,72 @@ public class CensusService {
         return records.batchView(batch);
     }
 
+    /**
+     * Batch reconciliation (GL04 workspace, NS-GL04-005): each applied row against the member change it created, the
+     * member's certificate and the invoice lines billed since, with totals that must agree.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> reconciliation(String ref) {
+        security.authenticatedUser().validateHasPermissionTo("READ_SCHEME");
+        CensusBatch batch = findBatch(ref);
+        List<CensusRow> rows = em.createQuery("select r from CensusRow r where r.batch = :batch order by r.lineNo",
+                CensusRow.class).setParameter("batch", batch).getResultList();
+        Map<Long, MemberChange> changes = new HashMap<>();
+        em.createQuery("select c from MemberChange c join fetch c.member where c.batchRef = :ref", MemberChange.class)
+                .setParameter("ref", batch.getRef()).getResultList().forEach(c -> changes.put(c.getId(), c));
+        List<Map<String, Object>> out = new ArrayList<>();
+        int applied = 0;
+        int traced = 0;
+        int certified = 0;
+        int billed = 0;
+        for (CensusRow row : rows) {
+            if (!CensusRow.APPLIED.equals(row.getStatus())) {
+                continue;
+            }
+            applied++;
+            Map<String, Object> v = new java.util.LinkedHashMap<>();
+            v.put("lineNo", row.getLineNo());
+            v.put("memberKey", row.getMemberKey());
+            v.put("action", row.getAction());
+            v.put("memberId", row.getMemberId());
+            v.put("changeId", row.getChangeId());
+            MemberChange change = row.getChangeId() == null ? null : changes.get(row.getChangeId());
+            if (change != null) {
+                traced++;
+                SchemeMember m = change.getMember();
+                v.put("changeType", change.getChangeType());
+                v.put("effectiveDate", change.getEffectiveDate());
+                v.put("coverAfter", change.getCoverAfter());
+                v.put("pendingAfter", change.getPendingAfter());
+                boolean certificate = m.onCover() && m.getAcceptedCover().signum() > 0;
+                v.put("certificateNo", certificate ? batch.getScheme().getRef() + "-" + m.getMemberKey() : null);
+                certified += certificate ? 1 : 0;
+                List<String> invoices = em.createQuery("select l.invoice.ref from InvoiceLine l where l.memberId = :m"
+                                + " and l.invoice.periodEnd >= :from order by l.invoice.period", String.class)
+                        .setParameter("m", m.getId()).setParameter("from", change.getEffectiveDate()).getResultList();
+                v.put("invoices", invoices);
+                billed += invoices.size();
+            }
+            out.add(v);
+        }
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("batchRef", batch.getRef());
+        result.put("schemeRef", batch.getScheme().getRef());
+        result.put("status", batch.getStatus());
+        result.put("totalRows", batch.getTotalRows());
+        result.put("acceptedRows", batch.getAcceptedRows());
+        result.put("rejectedRows", batch.getRejectedRows());
+        result.put("appliedRows", applied);
+        result.put("memberChanges", changes.values().stream()
+                .filter(c -> Set.of(JOIN, LEAVE, SALARY).contains(c.getChangeType())).count());
+        result.put("rowsTracedToChanges", traced);
+        result.put("certificates", certified);
+        result.put("invoiceLines", billed);
+        result.put("reconciled", applied == batch.getAcceptedRows() && traced == applied);
+        result.put("rows", out);
+        return result;
+    }
+
     @Transactional(readOnly = true)
     public GroupViews.CensusBatchView batch(String ref) {
         security.authenticatedUser().validateHasPermissionTo("READ_SCHEME");
@@ -193,7 +259,8 @@ public class CensusService {
                 row.outcome(CensusRow.REJECTED, String.join("; ", stale.get(row)));
                 rejected++;
             } else {
-                row.applied(apply(validator, batch, row, user.getUsername()));
+                MemberChange change = apply(validator, batch, row, user.getUsername());
+                row.applied(change.getMember().getId(), change.getId());
                 accepted++;
             }
         }
@@ -209,7 +276,7 @@ public class CensusService {
         return records.batchView(batch);
     }
 
-    private Long apply(Validator validator, CensusBatch batch, CensusRow row, String actor) {
+    private MemberChange apply(Validator validator, CensusBatch batch, CensusRow row, String actor) {
         String action = row.getAction().trim().toUpperCase(Locale.ROOT);
         LocalDate effective = GroupRecords.parseDate(row.getEffectiveDate().trim());
         Boolean activelyAtWork = yesNo(row.getActivelyAtWork());
@@ -223,13 +290,14 @@ public class CensusService {
                     GroupRecords.parseDate(row.getDateOfBirth().trim()), amount(row.getSalary()), effective,
                     batch.getRef(), activelyAtWork, notAtWork || lateEntrant);
             em.persist(member);
-            String note = notAtWork ? "Not actively at work on the entry date: all cover is referred to underwriting"
+            String joinNote = notAtWork ? "Not actively at work on the entry date: all cover is referred to underwriting"
                     : lateEntrant ? "Late entrant (eligible " + eligible + ", outside the " + category.getLateEntryDays()
                             + "-day window): all cover is referred to underwriting"
                     : SchemeMember.UNDERWRITING_PENDING.equals(member.getStatus())
                             ? "Cover above the free-cover limit is pending underwriting" : null;
-            records.memberChanged(new MemberChange(member, JOIN, effective, null, null, batch.getRef(), note, actor));
-            return member.getId();
+            MemberChange change = new MemberChange(member, JOIN, effective, null, null, batch.getRef(), joinNote, actor);
+            records.memberChanged(change);
+            return change;
         }
         SchemeMember member = validator.members.get(row.getMemberKey().trim());
         BigDecimal salaryBefore = member.getSalary();
@@ -243,8 +311,10 @@ public class CensusService {
                 note = "Not actively at work on the increase date: the increase is referred to underwriting";
             }
         }
-        records.memberChanged(new MemberChange(member, action, effective, salaryBefore, coverBefore, batch.getRef(), note, actor));
-        return member.getId();
+        MemberChange change = new MemberChange(member, action, effective, salaryBefore, coverBefore, batch.getRef(), note,
+                actor);
+        records.memberChanged(change);
+        return change;
     }
 
     private CensusBatch findBatch(String ref) {
@@ -258,7 +328,7 @@ public class CensusService {
     private static String[] cells(CensusRow row) {
         return new String[] {row.getMemberKey(), row.getFirstName(), row.getLastName(), row.getDateOfBirth(),
                 row.getCategoryCode(), row.getSalary(), row.getAction(), row.getEffectiveDate(),
-                row.getActivelyAtWork(), row.getEligibleDate()};
+                row.getActivelyAtWork(), row.getEligibleDate(), row.getRowKey()};
     }
 
     /** Y/YES/TRUE or N/NO/FALSE; null when blank, and when not a yes or no (validation reports that). */
@@ -289,6 +359,7 @@ public class CensusService {
         private final Map<String, BenefitCategory> categories = new HashMap<>();
         private final Map<String, SchemeMember> members;
         private final Map<String, Integer> seen = new HashMap<>();
+        private final Map<String, Integer> seenRowKeys = new HashMap<>();
 
         Validator(GroupScheme scheme) {
             this.scheme = scheme;
@@ -310,6 +381,24 @@ public class CensusService {
             String effectiveText = value(cells[7]);
             String atWorkText = cells.length > 8 ? value(cells[8]) : null;
             String eligibleText = cells.length > 9 ? value(cells[9]) : null;
+            String rowKey = cells.length > 10 ? value(cells[10]) : null;
+            if (rowKey != null) {
+                // NS-GL04-003: the sponsor's row key is applied once per scheme, whichever batch repeats it.
+                if (rowKey.length() > 80) {
+                    errors.add("rowKey must be at most 80 characters");
+                } else if (seenRowKeys.containsKey(rowKey)) {
+                    errors.add("duplicate rowKey " + rowKey + " in this file (first on line " + seenRowKeys.get(rowKey)
+                            + ")");
+                } else {
+                    seenRowKeys.put(rowKey, lineNo);
+                    em.createQuery("select r from CensusRow r join fetch r.batch b where b.scheme = :s"
+                                    + " and r.rowKey = :k and r.status = :applied", CensusRow.class)
+                            .setParameter("s", scheme).setParameter("k", rowKey)
+                            .setParameter("applied", CensusRow.APPLIED).setMaxResults(1).getResultStream().findFirst()
+                            .ifPresent(r -> errors.add("rowKey " + rowKey + " was already applied in "
+                                    + r.getBatch().getRef() + " line " + r.getLineNo() + "; it is not applied again"));
+                }
+            }
             if (atWorkText != null && yesNo(atWorkText) == null) {
                 errors.add("activelyAtWork must be Y or N");
             }

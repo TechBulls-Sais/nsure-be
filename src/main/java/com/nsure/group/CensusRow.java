@@ -75,6 +75,14 @@ public class CensusRow {
     @Column(name = "eligible_date", length = 20)
     private String eligibleDate;
 
+    /** The member change this row created when applied: the transaction id batch reconciliation traces. */
+    @Column(name = "change_id")
+    private Long changeId;
+
+    /** Optional template column: the sponsor's own key for this row, applied at most once per scheme. */
+    @Column(name = "row_key", length = 80)
+    private String rowKey;
+
     protected CensusRow() {
     }
 
@@ -91,6 +99,7 @@ public class CensusRow {
         this.effectiveDate = clip(cells[7], 20);
         this.activelyAtWork = cells.length > 8 ? clip(cells[8], 5) : null;
         this.eligibleDate = cells.length > 9 ? clip(cells[9], 20) : null;
+        this.rowKey = cells.length > 10 ? clip(cells[10] == null ? null : cells[10].trim(), 80) : null;
     }
 
     void outcome(String status, String error) {
@@ -98,9 +107,10 @@ public class CensusRow {
         this.error = error == null || error.length() <= 1000 ? error : error.substring(0, 997) + "...";
     }
 
-    void applied(Long memberId) {
+    void applied(Long memberId, Long changeId) {
         this.status = APPLIED;
         this.memberId = memberId;
+        this.changeId = changeId;
     }
 
     static String clip(String value, int max) {
@@ -172,5 +182,13 @@ public class CensusRow {
 
     public String getEligibleDate() {
         return eligibleDate;
+    }
+
+    public Long getChangeId() {
+        return changeId;
+    }
+
+    public String getRowKey() {
+        return rowKey;
     }
 }

@@ -242,3 +242,6 @@ databaseChangeLog:
   - include:
       file: changes/107-group-plan-approval.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/108-group-census-reconciliation.yaml
+      relativeToChangelogFile: true

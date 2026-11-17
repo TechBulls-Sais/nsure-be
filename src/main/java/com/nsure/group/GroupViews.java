@@ -132,7 +132,9 @@ public final class GroupViews {
             String effectiveDate,
             String status,
             String error,
-            Long memberId) {
+            Long memberId,
+            Long changeId,
+            String rowKey) {
     }
 
     public record InvoiceView(

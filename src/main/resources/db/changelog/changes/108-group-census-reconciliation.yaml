@@ -1,0 +1,18 @@
+databaseChangeLog:
+  # Census rows keep the member change they created (the transaction id for batch reconciliation, GL04 workspace),
+  # and may carry the sponsor's own row key so a row already applied in an earlier batch is never applied again
+  # (NS-GL04-003).
+  - changeSet:
+      id: 108-group-census-reconciliation
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: grp_census_row
+            columns:
+              - column: {name: change_id, type: bigint}
+              - column: {name: row_key, type: varchar(80)}
+        - createIndex:
+            tableName: grp_census_row
+            indexName: ix_grp_census_row_key
+            columns:
+              - column: {name: row_key}

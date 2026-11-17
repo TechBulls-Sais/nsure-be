@@ -71,6 +71,11 @@ public class GroupController {
         return census.batch(ref);
     }
 
+    @GetMapping("/census-batches/{ref}/reconciliation")
+    public java.util.Map<String, Object> censusReconciliation(@PathVariable String ref) {
+        return census.reconciliation(ref);
+    }
+
     @PostMapping("/census-batches/{ref}/commit")
     public GroupViews.CensusBatchView commitCensus(@PathVariable String ref) {
         return census.commit(ref);
