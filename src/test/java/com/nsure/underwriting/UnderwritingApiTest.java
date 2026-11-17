@@ -95,20 +95,55 @@ class UnderwritingApiTest {
                 .andExpect(jsonPath("$.underwritingCase.offerVersion").value(2))
                 .andExpect(jsonPath("$.underwritingCase.offerStatus").value("PENDING"))
                 .andExpect(jsonPath("$.underwritingCase.offerPremium").value(345.0))
-                .andExpect(jsonPath("$.decisions.length()").value(2));
+                .andExpect(jsonPath("$.decisions.length()").value(2))
+                // IL02: each decision names the life, the benefit and the evidence it rested on.
+                .andExpect(jsonPath("$.decisions[1].lifeRef").value(customer))
+                .andExpect(jsonPath("$.decisions[1].benefit").value("Term Life · Bronze"))
+                .andExpect(jsonPath("$.decisions[1].sumAssured").value(250000.0))
+                .andExpect(jsonPath("$.decisions[1].evidenceBasis").isNotEmpty());
         mockMvc.perform(json(post("/portfolio/policies"), "admin", issue))
                 .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/underwriting/cases/" + ref + "/offer"), "admin",
                         "{\"accept\":true,\"note\":\"Signed revised offer received\"}"))
                 .andExpect(status().isOk());
 
+        // IL01: each accepted underwriting offer raises OfferAccepted (alongside OfferAnswered).
+        assertThat(events("OfferAccepted", ref)).isEqualTo(2);
+        // A-19: each accepted offer is a new version of the price trace, and the application shows that price.
+        String application = mockMvc.perform(get("/portfolio/applications").with(signedIn("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        String quote = JsonPath.<java.util.List<String>>read(application, "$[?(@.id == '" + app + "')].quoteRef").get(0);
+        assertThat(JsonPath.<java.util.List<Object>>read(application, "$[?(@.id == '" + app + "')].premium").get(0)
+                .toString()).isEqualTo("345.0");
+        // v1 priced 230; v2 the accepted offer v1 (287.50); v3 back to 230 when the terms changed; v4 offer v2.
+        mockMvc.perform(get("/portfolio/quotes/" + quote).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$[0].version").value(4))
+                .andExpect(jsonPath("$[0].premium").value(345.0))
+                .andExpect(jsonPath("$[0].status").value("ACCEPTED"))
+                .andExpect(jsonPath("$[0].trace.underwriting.caseRef").value(ref))
+                .andExpect(jsonPath("$[0].trace.underwriting.loadingPercent").value("50"))
+                .andExpect(jsonPath("$[0].differences").value(containsString("underwriting offer v2")))
+                .andExpect(jsonPath("$[1].premium").value(230.0))
+                .andExpect(jsonPath("$[2].premium").value(287.5))
+                .andExpect(jsonPath("$[3].premium").value(230.0));
+        mockMvc.perform(get("/portfolio/quotes/" + quote + "/replay").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.reproduced").value(true));
+
         // NS-IL02-005: the accepted offer's loaded premium and exclusion are what the contract carries.
         String policy = JsonPath.read(mockMvc.perform(json(post("/portfolio/policies"), "admin", issue))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.premium").value(345))
+                .andExpect(jsonPath("$.quoteVersion").value(4))
                 .andReturn().getResponse().getContentAsString(), "$.id");
         assertThat(jdbc.queryForObject("select uw_terms from ins_policy where record_ref = ?", String.class, policy))
                 .contains("50%").contains("Respiratory conditions").contains("Offer v2");
+        // The application's timeline shows each underwriting step that moved it, without clinical reasons.
+        String timeline = mockMvc.perform(get("/portfolio/history/application/" + app).with(signedIn("admin", "password")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(JsonPath.<java.util.List<String>>read(timeline, "$[*].action")).containsSubsequence(
+                "Submitted", "Underwriting decision", "Offer accepted", "Underwriting decision", "Offer accepted", "Issued");
+        assertThat(timeline).doesNotContain("Smoker rates").doesNotContain("doctor's report");
         mockMvc.perform(json(post("/underwriting/cases/" + ref + "/decision"), "underwriter",
                         "{\"decision\":\"DECLINE\",\"reason\":\"Trying to change an issued contract.\"}"))
                 .andExpect(status().isConflict());

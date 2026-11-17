@@ -71,6 +71,8 @@ public final class Events {
 
     // Individual new business (spec IL01).
     public static final String APPLICATION_SUBMITTED = "ApplicationSubmitted";
+    /** applicationRef, policyRef, customerRef, product, quoteRef, quoteVersion. Staff issued an application's offer. */
+    public static final String ISSUE_REQUESTED = "IssueRequested";
     // IL02 underwriting.
     public static final String EVIDENCE_REQUESTED = "EvidenceRequested";
     public static final String UNDERWRITING_DECIDED = "UnderwritingDecided";
@@ -117,6 +119,14 @@ public final class Events {
     public static final String CENSUS_BATCH_COMPLETED = "CensusBatchCompleted";
     /** schemeRef, certificateNo, settlementDate, amount. Raised with GroupPremiumRefunded when a settlement is made. */
     public static final String UNEARNED_PREMIUM_REFUND_APPROVED = "UnearnedPremiumRefundApproved";
+
+    // Party master (spec SH01). References only, never identity numbers or contact details (NS-API-003).
+    /** customerRef, partyType, channel (STAFF or SELF_SIGNUP), kycStatus, duplicateReview (boolean). */
+    public static final String PARTY_CREATED = "PartyCreated";
+    /** survivingRef, mergedRef, recordsMoved. */
+    public static final String PARTY_MERGED = "PartyMerged";
+    /** customerRef, review (KYC or EDD), previousStatus, status. */
+    public static final String KYC_STATUS_CHANGED = "KycStatusChanged";
 
     // Collections and claims (spec SH04, SH05).
     public static final String INVOICE_ISSUED = "InvoiceIssued";

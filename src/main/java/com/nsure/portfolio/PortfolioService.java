@@ -105,15 +105,42 @@ public class PortfolioService {
         this.policyAttributes = policyAttributes;
     }
 
+    /**
+     * Party search (SH01 workspace): customers whose name, reference, identity number, email or phone contains the
+     * term (case and spacing ignored); all customers without one. At most 200 matches for a search.
+     */
     @Transactional(readOnly = true)
-    public List<PortfolioViews.CustomerView> customers() {
+    public List<PortfolioViews.CustomerView> customers(String search) {
+        String term = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
+        List<CustomerAccount> rows;
+        if (term.isEmpty()) {
+            rows = list(CustomerAccount.class);
+        } else {
+            String digits = term.replaceAll("\\D", "");
+            boolean phone = digits.length() >= 3;
+            jakarta.persistence.TypedQuery<CustomerAccount> query = em.createQuery(
+                            "select c from CustomerAccount c where lower(c.name) like :term"
+                            + " or lower(c.ref) like :term or lower(c.email) like :term"
+                            + " or lower(replace(c.poiNumber, ' ', '')) like :compact"
+                            + (phone ? " or replace(replace(c.phone, ' ', ''), '+', '') like :digits" : "")
+                            + " order by c.displayOrder asc, c.id desc", CustomerAccount.class)
+                    .setParameter("term", "%" + term + "%")
+                    .setParameter("compact", "%" + term.replace(" ", "") + "%")
+                    .setMaxResults(200);
+            if (phone) {
+                query.setParameter("digits", "%" + digits + "%");
+            }
+            rows = query.getResultList();
+        }
+        // Linked by customer reference, never by name: two customers may share a name (AT-SH11-01).
         Map<String, List<PortfolioViews.CustomerTierView>> tiers = new HashMap<>();
         for (InsurancePolicy policy : em.createQuery(
-                "select p from InsurancePolicy p order by p.id desc", InsurancePolicy.class).getResultList()) {
-            tiers.computeIfAbsent(policy.getCustomerName(), name -> new ArrayList<>()).add(customerTier(policy));
+                "select p from InsurancePolicy p where p.customerRef is not null order by p.id desc",
+                InsurancePolicy.class).getResultList()) {
+            tiers.computeIfAbsent(policy.getCustomerRef(), ref -> new ArrayList<>()).add(customerTier(policy));
         }
-        return list(CustomerAccount.class).stream()
-                .map(row -> customer(row, tiers.getOrDefault(row.getName(), List.of())))
+        return rows.stream()
+                .map(row -> customer(row, tiers.getOrDefault(row.getRef(), List.of())))
                 .toList();
     }
 
@@ -216,7 +243,8 @@ public class PortfolioService {
         return list(GroupScheme.class).stream()
                 .map(scheme -> new PortfolioViews.SchemeView(
                         scheme.getRef(), scheme.getName(), scheme.getSector(), scheme.getInitials(),
-                        scheme.getMembers(), scheme.getPremium(), scheme.getRenewal(), scheme.getColor()))
+                        scheme.getMembers(), scheme.getPremium(), scheme.getRenewal(), scheme.getColor(),
+                        scheme.getStatus() == null ? "" : scheme.getStatus()))
                 .toList();
     }
 
@@ -230,23 +258,39 @@ public class PortfolioService {
         return list(ProductConfiguration.class).stream().map(this::config).toList();
     }
 
+    /**
+     * Identity rules and the duplicate check (NS-SH01-001/002). Field-injected so the long constructor above stays
+     * as it is.
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    private PartyRegister parties;
+
     @Transactional
     public PortfolioViews.CustomerView createCustomer(JsonNode body) {
+        AppUser staff = security.authenticatedUser();
+        staff.validateHasPermissionTo("CREATE_CUSTOMER");
+        return customer(newCustomer(body, staff.getUsername()));
+    }
+
+    /**
+     * A new customer record. Staff (actor given) may keep a record whose identity number another customer holds
+     * only with a reason, and it is referred for duplicate review; self sign-up (no actor) never gets that far.
+     */
+    private CustomerAccount newCustomer(JsonNode body, String staffActor) {
         CustomerAccount row = new CustomerAccount();
         row.setRef(nextRef("CUS-", 4, CustomerAccount.class));
         row.setName(text(body, "name"));
         row.setEmail(text(body, "email"));
         row.setPhone(text(body, "phone"));
-        String poiType = optional(body, "poiType");
-        if (poiType != null && !poiType.isBlank()) {
-            if (!Set.of("Omang", "Passport").contains(poiType)) {
-                throw new IllegalArgumentException("Proof of identity must be Omang or Passport.");
-            }
-            row.setPoiType(poiType);
+        PartyRegister.Identity identity = parties.identity(optional(body, "poiType"), optional(body, "poiNumber"));
+        if (identity != null) {
+            row.setPoiType(identity.type());
+            row.setPoiNumber(identity.number());
         }
-        String poiNumber = optional(body, "poiNumber");
-        if (poiNumber != null && !poiNumber.isBlank()) {
-            row.setPoiNumber(poiNumber.trim());
+        if (staffActor == null) {
+            parties.refuseKnownIdentity(identity);
+        } else {
+            row.setDuplicateReview(parties.referral(identity, optional(body, "duplicateReason")));
         }
         String dateOfBirth = optional(body, "dateOfBirth");
         if (dateOfBirth != null && !dateOfBirth.isBlank()) {
@@ -277,7 +321,9 @@ public class PortfolioService {
             row.setLoginUsername(createCustomerLogin(username, optional(body, "password")));
         }
         em.persist(row);
-        return customer(row);
+        parties.created(row, staffActor == null ? row.getLoginUsername() : staffActor,
+                staffActor == null ? "SELF_SIGNUP" : "STAFF");
+        return row;
     }
 
     // ── customer self sign-up (public) ────────────────────────────────────────────────────────────
@@ -316,7 +362,7 @@ public class PortfolioService {
         checkSignupDetails(body);
         String digits = text(body, "phone").replaceAll("\\D", "");
         codes.verify(OneTimeCodes.Purpose.CUSTOMER_SIGNUP, optional(body, "challenge"), optional(body, "otp"), digits);
-        return createCustomer(body);
+        return customer(newCustomer(body, null));
     }
 
     /** Self sign-up needs every field the staff Add customer form requires, including the sign-in details. */
@@ -329,11 +375,8 @@ public class PortfolioService {
             throw new IllegalArgumentException("Enter a valid email address.");
         }
         text(body, "phone");
-        text(body, "poiType");
-        String poiNumber = text(body, "poiNumber");
-        if (poiNumber.length() < 5 || poiNumber.length() > 40) {
-            throw new IllegalArgumentException("Proof of identity number must be 5–40 characters.");
-        }
+        // The number must fit its document type, and one already registered is refused before a code is sent.
+        parties.refuseKnownIdentity(parties.identity(text(body, "poiType"), text(body, "poiNumber")));
         text(body, "dateOfBirth");
         String username = text(body, "username").toLowerCase();
         if (!username.matches("[a-z0-9._-]{3,100}")) {
@@ -373,15 +416,24 @@ public class PortfolioService {
             applyQuote(row, quote);
             lives = quotes.pricedLives(quote);
         } else {
+            // NS-IL01-004: the server prices every application from the product's tier; a premium sent with it is
+            // never taken as the price (A-33).
+            if (blank(optional(body, "tier")).isBlank()) {
+                throw new IllegalArgumentException("Choose a tier for " + row.getProduct() + ": an application is"
+                        + " priced from the product's tiers, not from a premium sent with it.");
+            }
             QuoteService.PricedOffer offer = applyTierOffer(row, body);
             lives = offer == null ? List.of() : offer.lines();
             if (offer != null) {
                 quote = quotes.record(customer, row.getProduct(), offer, actor.getUsername());
-                quotes.accept(quote.getRef(), quote.getVersionNo(), actor.getUsername(),
-                        "Accepted with the application, recorded by " + actor.getUsername());
+                // A draft's quote is only priced: the applicant accepts it when the application is submitted with
+                // the declaration, not before (A-16).
+                if (!draftRequested(body)) {
+                    acceptWithApplication(quote, actor);
+                }
             }
         }
-        boolean draft = ApplicationCapture.DRAFT.equalsIgnoreCase(blank(optional(body, "status")));
+        boolean draft = draftRequested(body);
         capture.capture(row, body, actor.getUsername());
         capture.answer(row, body, actor.getUsername());
         if (draft) {
@@ -399,7 +451,35 @@ public class PortfolioService {
             // NS-IL01-005: the rules accept an eligible case; anything else is referred to an underwriter.
             underwriting.getObject().assess(row, customer, actor.getUsername());
         }
+        logApplication(row, draft ? "Saved as draft" : "Submitted", null,
+                quote == null ? null : "Priced on " + quote.getRef() + " v" + quote.getVersionNo(), actor.getUsername());
+        em.flush(); // the returned row version is the stored one (If-Match on the next change)
         return cover(row);
+    }
+
+    private static boolean draftRequested(JsonNode body) {
+        return ApplicationCapture.DRAFT.equalsIgnoreCase(blank(optional(body, "status")));
+    }
+
+    /** The quote priced with an application is accepted when the application is submitted (NS-IL01-001). */
+    private void acceptWithApplication(Quote quote, AppUser actor) {
+        quotes.accept(quote.getRef(), quote.getVersionNo(), actor.getUsername(),
+                "Accepted with the application, recorded by " + actor.getUsername());
+    }
+
+    /** One step on the application's timeline (IL01 workspace): what happened and the status it moved between. */
+    private void logApplication(InsuranceApplication app, String action, String previous, String details, String actor) {
+        history.record(ApplicationCapture.HISTORY, app.getRef(), app.getCustomerName(), action, previous,
+                app.getStatus(), details, actor);
+    }
+
+    /** An application not yet issued takes the accepted version's price and lives. */
+    private void takeQuote(InsuranceApplication application, Quote quote) {
+        applyQuote(application, quote);
+        em.createQuery("delete from PolicyLifeCover l where l.application = :app")
+                .setParameter("app", application).executeUpdate();
+        saveLives(application, quotes.pricedLives(quote));
+        application.setQuote(quote.getRef(), quote.getVersionNo());
     }
 
     /** Prices a record exactly as the quote did: its tier, cover, premium and rate version. */
@@ -435,11 +515,14 @@ public class PortfolioService {
         AppUser actor = security.authenticatedUser();
         actor.validateHasPermissionTo("UPDATE_APPLICATION");
         InsuranceApplication app = one(InsuranceApplication.class, ref, "Application");
+        com.nsure.common.ExpectedVersion.check("Application " + ref, app.getRowVersion());
         if (!ApplicationCapture.DRAFT.equals(app.getStatus())) {
             throw new IllegalArgumentException(ref + " was submitted; its answers and declaration can no longer change.");
         }
         capture.capture(app, body, actor.getUsername());
         capture.answer(app, body, actor.getUsername());
+        logApplication(app, "Details updated", app.getStatus(),
+                app.getDeclaredAt() == null ? null : "Declaration accepted", actor.getUsername());
         em.flush();
         return capture.checklist(app, customerOf(app));
     }
@@ -451,12 +534,25 @@ public class PortfolioService {
             actor.validateHasPermissionTo("UPDATE_APPLICATION");
         }
         InsuranceApplication app = one(InsuranceApplication.class, ref, "Application");
+        com.nsure.common.ExpectedVersion.check("Application " + ref, app.getRowVersion());
         if (!ApplicationCapture.DRAFT.equals(app.getStatus())) {
             throw new com.nsure.common.exception.ConflictException(ref + " is already " + app.getStatus() + ".");
         }
         CustomerAccount customer = customerOf(app);
         capture.submit(app, customer, actor.getUsername());
+        // The draft's priced quote is accepted now, with the declaration; one accepted meanwhile stays as it is.
+        if (app.getQuoteRef() != null) {
+            Quote quote = quotes.latest(app.getQuoteRef());
+            if (Quote.QUOTED.equals(quote.getStatus())) {
+                acceptWithApplication(quote, actor);
+                if (app.getQuoteVersion() == null || quote.getVersionNo() != app.getQuoteVersion()) {
+                    takeQuote(app, quote);
+                }
+            }
+        }
         underwriting.getObject().assess(app, customer, actor.getUsername());
+        logApplication(app, "Submitted", ApplicationCapture.DRAFT, null, actor.getUsername());
+        em.flush();
         return capture.checklist(app, customer);
     }
 
@@ -466,12 +562,16 @@ public class PortfolioService {
         AppUser actor = security.authenticatedUser();
         actor.validateHasPermissionTo("UPDATE_APPLICATION");
         InsuranceApplication app = one(InsuranceApplication.class, ref, "Application");
+        com.nsure.common.ExpectedVersion.check("Application " + ref, app.getRowVersion());
+        String before = app.getStatus();
         CustomerAccount customer = customerOf(app);
         capture.recordEvidence(app, customer, text(body, "documentType"), optional(body, "note"), actor.getUsername());
         // The last piece of evidence on an application underwriting has already cleared makes it ready to issue.
         if (ApplicationCapture.UNDER_REVIEW.equals(app.getStatus()) && underwriting.getObject().isCleared(app.getRef())) {
             app.setStatus("Ready to issue");
         }
+        logApplication(app, "Evidence received", before, text(body, "documentType"), actor.getUsername());
+        em.flush();
         return capture.checklist(app, customer);
     }
 
@@ -514,11 +614,9 @@ public class PortfolioService {
         if (quote.getApplicationRef() != null) {
             InsuranceApplication application = one(InsuranceApplication.class, quote.getApplicationRef(), "Application");
             if (!"Issued".equals(application.getStatus())) {
-                applyQuote(application, quote);
-                em.createQuery("delete from PolicyLifeCover l where l.application = :app")
-                        .setParameter("app", application).executeUpdate();
-                saveLives(application, quotes.pricedLives(quote));
-                application.setQuote(quote.getRef(), quote.getVersionNo());
+                takeQuote(application, quote);
+                logApplication(application, "Quote accepted", application.getStatus(),
+                        quote.getRef() + " v" + quote.getVersionNo(), actor.getUsername());
             }
         }
         return quotes.view(quote);
@@ -590,6 +688,8 @@ public class PortfolioService {
         if (!body.hasNonNull("status")) {
             return cover(row);
         }
+        com.nsure.common.ExpectedVersion.check("Application " + ref, row.getRowVersion());
+        String before = row.getStatus();
         // The application's state follows its workflow; only these two moves are made by hand.
         String status = body.get("status").asText().trim();
         if ("Issued".equalsIgnoreCase(row.getStatus())) {
@@ -607,6 +707,8 @@ public class PortfolioService {
             throw new IllegalArgumentException("An application can only be moved to Ready to issue or Withdrawn here;"
                     + " its other states come from submission, underwriting and issue.");
         }
+        logApplication(row, "Status changed", before, null, security.authenticatedUser().getUsername());
+        em.flush();
         return cover(row);
     }
 
@@ -626,6 +728,9 @@ public class PortfolioService {
                             "select p from InsurancePolicy p where p.issueKey = :key", InsurancePolicy.class)
                     .setParameter("key", key).getResultStream().findFirst();
             if (earlier.isPresent()) {
+                // A repeat of the same request gets the same policy; the key on a different request is a conflict,
+                // never silently the earlier policy (§10 issue contract).
+                requireSameIssue(earlier.get(), body, key);
                 return cover(earlier.get());
             }
         }
@@ -634,6 +739,8 @@ public class PortfolioService {
         if (applicationRef != null && !applicationRef.isBlank()) {
             application = one(InsuranceApplication.class, applicationRef.trim(), "Application");
             em.lock(application, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+            // NS-TXN-001: issued from the application as the caller last saw it (If-Match), if they say which.
+            com.nsure.common.ExpectedVersion.check("Application " + application.getRef(), application.getRowVersion());
         }
         // Issued from an application, the customer is the application's; otherwise the request names them.
         boolean named = !blank(optional(body, "customerRef")).isBlank() || !blank(optional(body, "name")).isBlank();
@@ -669,6 +776,7 @@ public class PortfolioService {
         // NS-SH03-003, AT-IL01-01: an application issues at its accepted, still-valid quote, never re-priced.
         Quote quote = application != null && application.getQuoteRef() != null
                 ? quotes.requireIssuable(application.getQuoteRef(), application.getQuoteVersion()) : null;
+        requireAcceptedOffer(body, application, quote);
         List<RateTableService.PricedLife> lives;
         if (quote != null) {
             applyQuote(row, quote);
@@ -696,9 +804,71 @@ public class PortfolioService {
         }
         policyWorkflow.logOpened(row, staff.getUsername());
         if (application != null) {
+            String before = application.getStatus();
             application.setStatus("Issued");
+            logApplication(application, "Issued", before, "Policy offer " + row.getRef() + " awaits its first premium",
+                    staff.getUsername());
+            // IL01: the issue of an application is requested; cover itself follows the first premium (PolicyIssued).
+            Map<String, Object> requested = new java.util.LinkedHashMap<>();
+            requested.put("applicationRef", application.getRef());
+            requested.put("policyRef", row.getRef());
+            requested.put("customerRef", account.getRef());
+            requested.put("product", row.getProduct());
+            requested.put("quoteRef", quote == null ? "" : quote.getRef());
+            requested.put("quoteVersion", quote == null ? 0 : quote.getVersionNo());
+            outbox.publish(com.nsure.integration.Events.ISSUE_REQUESTED, application.getRef(), requested,
+                    staff.getUsername());
         }
+        em.flush();
         return cover(row);
+    }
+
+    /** The same Idempotency-Key must carry the same request: application, customer, product and tier. */
+    private static void requireSameIssue(InsurancePolicy earlier, JsonNode body, String key) {
+        List<String> differs = new ArrayList<>();
+        String app = blank(optional(body, "applicationRef")).trim();
+        if (!app.equalsIgnoreCase(blank(earlier.getApplicationRef()))) {
+            differs.add("application");
+        }
+        String customerRef = blank(optional(body, "customerRef")).trim();
+        if (!customerRef.isEmpty() && !customerRef.equalsIgnoreCase(blank(earlier.getCustomerRef()))) {
+            differs.add("customer");
+        }
+        String product = blank(optional(body, "product")).trim();
+        if (!product.isEmpty() && !product.equals(earlier.getProduct())) {
+            differs.add("product");
+        }
+        String tier = blank(optional(body, "tier")).trim();
+        if (!tier.isEmpty() && !tier.equalsIgnoreCase(blank(earlier.getTier()))) {
+            differs.add("tier");
+        }
+        if (!differs.isEmpty()) {
+            throw new com.nsure.audit.exception.IdempotencyConflictException(null, "COMPLETED", "Idempotency-Key " + key
+                    + " was already used to issue " + earlier.getRef() + " for a different request ("
+                    + String.join(", ", differs) + "). Use a new key for a new request.", null);
+        }
+    }
+
+    /**
+     * {acceptedOfferId?, acceptedOfferVersion?}: when the caller names the offer the customer accepted, issue goes
+     * ahead only if it is still the application's accepted quote version (§10 issue contract).
+     */
+    private static void requireAcceptedOffer(JsonNode body, InsuranceApplication application, Quote quote) {
+        String offer = blank(optional(body, "acceptedOfferId")).trim();
+        boolean versionGiven = body.hasNonNull("acceptedOfferVersion");
+        if (offer.isEmpty() && !versionGiven) {
+            return;
+        }
+        if (application == null || quote == null) {
+            throw new IllegalArgumentException("An accepted offer can only be named when issuing from an application"
+                    + " priced on a quote.");
+        }
+        if ((!offer.isEmpty() && !offer.equalsIgnoreCase(quote.getRef()))
+                || (versionGiven && body.get("acceptedOfferVersion").asInt() != quote.getVersionNo())) {
+            throw new com.nsure.common.exception.ConflictException(application.getRef() + " now stands on offer "
+                    + quote.getRef() + " version " + quote.getVersionNo() + ", not the one named. Refresh and confirm"
+                    + " the customer accepted it.");
+        }
     }
 
     @Transactional(readOnly = true)
@@ -782,6 +952,7 @@ public class PortfolioService {
         AppUser staff = security.authenticatedUser();
         staff.validateHasPermissionTo("UPDATE_POLICY");
         InsurancePolicy policy = one(InsurancePolicy.class, ref, "Policy");
+        com.nsure.common.ExpectedVersion.check("Policy " + ref, policy.getRowVersion());
         requireEddClear(customerOf(policy));
         // A premium staff collected offline: the MANUAL rail, through the same settlement path as every payment.
         com.nsure.payment.PaymentSettlementService.PaymentInitiation result = settlement.getObject()
@@ -796,6 +967,7 @@ public class PortfolioService {
     public PortfolioViews.CoverView cancelPolicy(String ref, JsonNode body) {
         AppUser staff = security.authenticatedUser();
         staff.validateHasPermissionTo("UPDATE_POLICY");
+        expectPolicyVersion(ref);
         return cover(policyWorkflow.cancel(ref, optional(body, "reason"), staff.getUsername()));
     }
 
@@ -803,6 +975,7 @@ public class PortfolioService {
     public PortfolioViews.CoverView addBeneficiary(String ref, JsonNode body) {
         AppUser staff = security.authenticatedUser();
         staff.validateHasPermissionTo("UPDATE_POLICY");
+        expectPolicyVersion(ref);
         policyWorkflow.addBeneficiary(ref, beneficiaryInput(body), staff.getUsername());
         return cover(one(InsurancePolicy.class, ref, "Policy"));
     }
@@ -811,8 +984,14 @@ public class PortfolioService {
     public PortfolioViews.CoverView removeBeneficiary(String ref, Long id) {
         AppUser staff = security.authenticatedUser();
         staff.validateHasPermissionTo("UPDATE_POLICY");
+        expectPolicyVersion(ref);
         policyWorkflow.removeBeneficiary(ref, id, staff.getUsername());
         return cover(one(InsurancePolicy.class, ref, "Policy"));
+    }
+
+    /** NS-TXN-001: a staff command sent with If-Match runs only on the policy version the caller saw. */
+    private void expectPolicyVersion(String ref) {
+        com.nsure.common.ExpectedVersion.check("Policy " + ref, one(InsurancePolicy.class, ref, "Policy").getRowVersion());
     }
 
     /** Runs the scheduled sweeps now: expire unpaid policies, lapse those past their grace period. */
@@ -966,6 +1145,7 @@ public class PortfolioService {
         AppUser reviewer = security.authenticatedUser();
         reviewer.validateHasPermissionTo("EDD_CUSTOMER");
         CustomerAccount row = one(CustomerAccount.class, ref, "Customer");
+        com.nsure.common.ExpectedVersion.check("Customer " + ref, row.getRowVersion());
         if (!"VERIFIED".equals(row.getKycStatus())) {
             throw new IllegalArgumentException("Mark KYC successful before recording the EDD review.");
         }
@@ -982,6 +1162,8 @@ public class PortfolioService {
         row.setEddRejectionReason(reason);
         history.record(WorkflowHistory.EDD_REVIEW, row.getRef(), row.getName(),
                 "VERIFIED".equals(decision) ? "Approved" : "Rejected", previous, decision, reason, reviewer.getUsername());
+        parties.kycChanged(row, "EDD", previous, decision, reviewer.getUsername());
+        em.flush();
         return customer(row);
     }
 
@@ -1075,6 +1257,7 @@ public class PortfolioService {
         AppUser reviewer = security.authenticatedUser();
         reviewer.validateHasPermissionTo("KYC_CUSTOMER");
         CustomerAccount row = one(CustomerAccount.class, ref, "Customer");
+        com.nsure.common.ExpectedVersion.check("Customer " + ref, row.getRowVersion());
         String decision = body == null ? "VERIFIED" : defaultText(body, "decision", "VERIFIED").toUpperCase(Locale.ROOT);
         if (!Set.of("VERIFIED", "FAILED").contains(decision)) {
             throw new IllegalArgumentException("KYC decision must be VERIFIED or FAILED.");
@@ -1086,6 +1269,8 @@ public class PortfolioService {
         row.setKycRejectionReason(reason);
         history.record(WorkflowHistory.KYC_REVIEW, row.getRef(), row.getName(),
                 "VERIFIED".equals(decision) ? "Approved" : "Rejected", previous, decision, reason, reviewer.getUsername());
+        parties.kycChanged(row, "KYC", previous, decision, reviewer.getUsername());
+        em.flush();
         return customer(row);
     }
 
@@ -1180,7 +1365,8 @@ public class PortfolioService {
             case "claim" -> WorkflowHistory.CLAIM;
             case "kyc" -> WorkflowHistory.KYC_REVIEW;
             case "edd" -> WorkflowHistory.EDD_REVIEW;
-            default -> throw new IllegalArgumentException("History type must be policy, claim, kyc or edd.");
+            case "application" -> ApplicationCapture.HISTORY;
+            default -> throw new IllegalArgumentException("History type must be policy, claim, kyc, edd or application.");
         };
         return history.of(entity, ref);
     }
@@ -1438,7 +1624,9 @@ public class PortfolioService {
                 row.getEddStatus() == null ? "" : row.getEddStatus(),
                 tiers,
                 blank(row.getKycRejectionReason()),
-                blank(row.getEddRejectionReason()));
+                blank(row.getEddRejectionReason()),
+                blank(row.getDuplicateReview()),
+                row.getRowVersion());
     }
 
     private String createCustomerLogin(String username, String password) {
@@ -1476,8 +1664,21 @@ public class PortfolioService {
                 .getResultStream()
                 .map(this::claim)
                 .toList();
+        // NS-UX-001: the customer sees when each record last changed, from its own workflow log.
+        Map<String, java.time.LocalDateTime> updated = new HashMap<>();
+        List<String> refs = new ArrayList<>();
+        policies.forEach(p -> refs.add(p.id()));
+        claims.forEach(c -> refs.add(c.id()));
+        if (!refs.isEmpty()) {
+            for (Object[] row : em.createQuery("select l.entityRef, max(l.performedAt) from WorkflowLog l"
+                            + " where l.entityType in (:types) and l.entityRef in (:refs) group by l.entityRef", Object[].class)
+                    .setParameter("types", List.of(WorkflowHistory.POLICY, WorkflowHistory.CLAIM))
+                    .setParameter("refs", refs).getResultList()) {
+                updated.put((String) row[0], (java.time.LocalDateTime) row[1]);
+            }
+        }
         return new PortfolioViews.ShopView(customer(account), products(),
-                policies.stream().filter(p -> !isRequest(p.status())).toList(), requests, claims);
+                policies.stream().filter(p -> !isRequest(p.status())).toList(), requests, claims, updated);
     }
 
     private static boolean isRequest(String status) {
@@ -1547,7 +1748,10 @@ public class PortfolioService {
                 documents,
                 policy != null ? policyWorkflow.terms(policy).getMaxBeneficiaries() : maxBeneficiaries(row.getProduct()),
                 row instanceof InsuranceApplication a ? blank(a.getQuoteRef()) : policy != null ? blank(policy.getQuoteRef()) : "",
-                row instanceof InsuranceApplication a2 ? a2.getQuoteVersion() : policy != null ? policy.getQuoteVersion() : null);
+                row instanceof InsuranceApplication a2 ? a2.getQuoteVersion() : policy != null ? policy.getQuoteVersion() : null,
+                blank(row.getCustomerRef()),
+                row instanceof InsuranceApplication a3 ? Long.valueOf(a3.getRowVersion())
+                        : policy != null ? Long.valueOf(policy.getRowVersion()) : null);
     }
 
     private int maxBeneficiaries(String product) {

@@ -177,6 +177,20 @@ with 409 (`WorkOwnershipGuard`; service desk cases check their own owner). Event
   `MemberCoverChanged`, `CensusBatchCompleted` and `UnearnedPremiumRefundApproved`; `SchemeActivated` is published for
   schemes set up directly as well as from quotes.
 
+## Party master (SH01)
+
+- **Identity numbers** are checked by document type on Add customer and self sign-up: by default an Omang is 9 digits
+  and a passport 6–20 letters and digits (spaces ignored). These defaults await the insurer's confirmation; set
+  `nsure.identity.omang-pattern` / `nsure.identity.passport-pattern` (regular expressions) to change them.
+- **Duplicates**: an identity number an active customer already holds is refused on sign-up. Staff get 409 naming
+  the holder and may create the record only with `duplicateReason`; it is then referred for duplicate review (listed
+  in Data & assistants → Duplicate parties). A merge moves the records as entities under their row versions.
+- **Events**: PartyCreated, KycStatusChanged and PartyMerged go through the outbox (references only).
+- **KYC evidence**: a customer awaiting verification uploads identity documents from the portal
+  (`/portfolio/shop/identity-documents`); staff with `READ_CUSTOMER` open them on the customer record.
+- Customers and applications carry a row version; KYC/EDD decisions, application commands and issue honour
+  `If-Match` (409 `STALE_VERSION`).
+
 ## Individual Life modules (Nsure Life IL02–IL05)
 
 | Module | Package | API | What it does |

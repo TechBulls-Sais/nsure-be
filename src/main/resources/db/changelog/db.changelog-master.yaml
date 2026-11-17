@@ -234,6 +234,18 @@ databaseChangeLog:
       file: changes/079-demo-only-default-accounts.yaml
       relativeToChangelogFile: true
   - include:
+      file: changes/080-party-identity.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/081-identity-documents.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/082-row-versions.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/083-underwriting-decision-basis.yaml
+      relativeToChangelogFile: true
+  - include:
       file: changes/090-credit-claim-payees.yaml
       relativeToChangelogFile: true
   - include:

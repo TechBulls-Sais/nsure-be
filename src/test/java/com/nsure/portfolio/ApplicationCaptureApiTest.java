@@ -87,6 +87,52 @@ class ApplicationCaptureApiTest {
     }
 
     @Test
+    void aSavedDraftIsResumedAndItsQuoteIsAcceptedOnlyWhenItIsSubmitted() throws Exception {
+        String customer = customer("Mpho Resume", "+267 71 700 004");
+        String draft = mockMvc.perform(json(post("/portfolio/applications"), "admin", "{\"status\":\"Draft\","
+                        + "\"customerRef\":\"" + customer + "\",\"product\":\"Term Life\",\"tier\":\"Silver\","
+                        + "\"mandateMethod\":\"DEBIT_ORDER\",\"mandateInstitution\":\"First National Bank\","
+                        + "\"mandateAccount\":\"62009876\",\"mandateDebitDay\":5}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Draft"))
+                .andExpect(jsonPath("$.customerRef").value(customer))
+                .andReturn().getResponse().getContentAsString();
+        String app = JsonPath.read(draft, "$.id");
+        String quote = JsonPath.read(draft, "$.quoteRef");
+        // A draft has a priced quote, but nobody has accepted it: the declaration is not made yet (A-16).
+        mockMvc.perform(get("/portfolio/quotes/" + quote).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[0].status").value("QUOTED"))
+                .andExpect(jsonPath("$[0].applicationRef").value(app));
+
+        // Resumed later: answers and the declaration added, the payer changed; the bank details on record stay.
+        mockMvc.perform(json(put("/portfolio/applications/" + app + "/details"), "admin", "{\"payerName\":\"Kabo Resume\","
+                        + "\"payerRelationship\":\"Spouse\",\"mandateMethod\":\"DEBIT_ORDER\",\"mandateDebitDay\":7,"
+                        + "\"channel\":\"DIRECT\",\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},"
+                        + "\"declarationAccepted\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.submissionProblems").isEmpty())
+                .andExpect(jsonPath("$.mandateAccount").value("•••9876"))
+                .andExpect(jsonPath("$.mandateDebitDay").value(7))
+                .andExpect(jsonPath("$.payerName").value("Kabo Resume"))
+                .andExpect(jsonPath("$.payerRelationship").value("Spouse"));
+        mockMvc.perform(post("/portfolio/applications/" + app + "/submit").with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Ready to issue"));
+        mockMvc.perform(get("/portfolio/quotes/" + quote).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[0].status").value("ACCEPTED"))
+                .andExpect(jsonPath("$[0].acceptedBy").value("admin"));
+        // IL01 workspace: the application's own timeline, not a sample one.
+        mockMvc.perform(get("/portfolio/history/application/" + app).with(signedIn("support", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].action").value("Saved as draft"))
+                .andExpect(jsonPath("$[0].newState").value("Draft"))
+                .andExpect(jsonPath("$[1].action").value("Details updated"))
+                .andExpect(jsonPath("$[2].action").value("Submitted"))
+                .andExpect(jsonPath("$[2].previousState").value("Draft"))
+                .andExpect(jsonPath("$[2].newState").value("Ready to issue"));
+    }
+
+    @Test
     void anApplicationSubmittedBeforeCaptureIsNotAskedToFixItsSubmission() throws Exception {
         String customer = customer("Naledi Historic", "+267 71 700 003");
         String app = JsonPath.read(mockMvc.perform(json(post("/portfolio/applications"), "admin", "{\"customerRef\":\"" + customer

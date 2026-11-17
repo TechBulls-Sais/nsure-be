@@ -37,11 +37,12 @@ abstract class ProductionProfileSupport {
     protected OneTimeCodes codes;
 
     static String details(String username, String challenge, String otp) {
+        // Each username its own 9-digit Omang number: a number already registered is refused (NS-SH01-002).
         return """
                 {"name":"Kabo Prod","email":"kabo@example.com","phone":"%s",
-                 "poiType":"Omang","poiNumber":"770101404","dateOfBirth":"1985-01-01",
+                 "poiType":"Omang","poiNumber":"%09d","dateOfBirth":"1985-01-01",
                  "username":"%s","password":"password123","pep":false%s%s}
-                """.formatted(PHONE, username,
+                """.formatted(PHONE, Math.floorMod(username.hashCode(), 1_000_000_000), username,
                 challenge == null ? "" : ",\"challenge\":\"" + challenge + "\"",
                 otp == null ? "" : ",\"otp\":\"" + otp + "\"");
     }

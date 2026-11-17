@@ -55,8 +55,9 @@ public class PortfolioController {
     }
 
     @GetMapping("/customers")
-    public List<PortfolioViews.CustomerView> customers() {
-        return portfolio.customers();
+    public List<PortfolioViews.CustomerView> customers(
+            @org.springframework.web.bind.annotation.RequestParam(required = false) String search) {
+        return portfolio.customers(search);
     }
 
     @PostMapping("/customers")
@@ -158,7 +159,7 @@ public class PortfolioController {
     }
 
     // The type is in the path pattern so ApiAccessRules can gate each history on its own read permission.
-    @GetMapping("/history/{type:policy|claim|kyc|edd}/{ref}")
+    @GetMapping("/history/{type:policy|claim|kyc|edd|application}/{ref}")
     public List<PortfolioViews.HistoryView> history(@PathVariable String type, @PathVariable String ref) {
         return portfolio.history(type, ref);
     }

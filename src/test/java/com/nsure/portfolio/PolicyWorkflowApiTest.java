@@ -267,6 +267,11 @@ class PolicyWorkflowApiTest {
         String app = JsonPath.read(application, "$.id");
         String issueBody = "{\"customerRef\":\"" + second + "\",\"applicationRef\":\"" + app
                 + "\",\"product\":\"Term Life\",\"tier\":\"Silver\",\"status\":\"Active\"}";
+        // §10: naming an offer other than the application's accepted quote version is refused.
+        mockMvc.perform(json(post("/portfolio/policies"), "admin", issueBody.replace("}",
+                        ",\"acceptedOfferId\":\"" + JsonPath.read(application, "$.quoteRef")
+                                + "\",\"acceptedOfferVersion\":9}")))
+                .andExpect(status().isConflict());
         String issued = mockMvc.perform(json(post("/portfolio/policies"), "admin", issueBody)
                         .header("Idempotency-Key", "issue-" + app))
                 .andExpect(status().isOk())
@@ -276,6 +281,14 @@ class PolicyWorkflowApiTest {
         mockMvc.perform(json(post("/portfolio/policies"), "admin", issueBody).header("Idempotency-Key", "issue-" + app))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(policy));
+        // The same key on a different request is a conflict, not the earlier policy (§10 issue contract).
+        mockMvc.perform(json(post("/portfolio/policies"), "admin", issueBody.replace("Silver", "Gold"))
+                        .header("Idempotency-Key", "issue-" + app))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("IDEMPOTENCY_CONFLICT"));
+        Long requested = tx.execute(st -> em.createQuery("select count(e) from OutboxEvent e where e.eventType = "
+                + "'IssueRequested' and e.aggregateRef = :ref", Long.class).setParameter("ref", app).getSingleResult());
+        org.assertj.core.api.Assertions.assertThat(requested).isEqualTo(1L);
         mockMvc.perform(json(post("/portfolio/policies"), "admin", issueBody))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString(policy)));

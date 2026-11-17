@@ -86,9 +86,16 @@ public class UnderwritingService {
     private final ReferenceNumbers numbers;
     private final EvidenceChain audit;
     private final RoleRepository roles;
+    /** The application's quote takes each accepted offer's premium as a new version (AT-IL02-02). */
+    private final com.nsure.portfolio.QuoteService quotes;
+    /** The application's timeline records each underwriting step that moves it (IL01 workspace). */
+    private final com.nsure.portfolio.WorkflowHistory history;
 
     public UnderwritingService(EntityManager em, PlatformSecurityContext security, Outbox outbox,
-            ReferenceNumbers numbers, EvidenceChain audit, RoleRepository roles) {
+            ReferenceNumbers numbers, EvidenceChain audit, RoleRepository roles,
+            com.nsure.portfolio.QuoteService quotes, com.nsure.portfolio.WorkflowHistory history) {
+        this.quotes = quotes;
+        this.history = history;
         this.em = em;
         this.security = security;
         this.outbox = outbox;
@@ -254,7 +261,8 @@ public class UnderwritingService {
                         "select d from UwDecision d where d.caseRef = :ref order by d.sequenceNo", Decision.class)
                 .setParameter("ref", c.ref).getResultList().stream()
                 .map(d -> new UnderwritingViews.DecisionView(d.sequenceNo, d.decision, d.loadingPercent, d.exclusion,
-                        d.postponeUntil, d.reason, d.offerVersion, d.offerPremium, d.decidedBy, d.decidedAt))
+                        d.postponeUntil, d.reason, d.offerVersion, d.offerPremium, d.decidedBy, d.decidedAt,
+                        d.lifeRef, d.benefit, d.sumAssured, d.evidenceBasis))
                 .toList();
         List<UnderwritingViews.ExposureLine> exposure = c.customerRef == null ? List.of()
                 : em.createQuery("select p from InsurancePolicy p where p.customerRef = :ref order by p.id desc",
@@ -426,9 +434,11 @@ public class UnderwritingService {
         c.decidedBy = user.getUsername();
         c.decidedAt = now;
         c.updatedAt = now;
-        // NS-IL02-005, AT-IL02-02: any earlier acceptance belonged to earlier terms.
+        String before = app.getStatus();
+        // NS-IL02-005, AT-IL02-02: any earlier acceptance belonged to earlier terms, and so did its price.
         c.offerAcceptedBy = null;
         c.offerAcceptedAt = null;
+        restorePrice(c, app, user.getUsername(), reason);
         switch (decision) {
             case ACCEPT_STANDARD -> {
                 c.status = ACCEPTED;
@@ -456,6 +466,10 @@ public class UnderwritingService {
             }
         }
         addDecision(c, now);
+        // The timeline names the decision, not its clinical reasons (those stay on the underwriting case).
+        logApplication(app, "Underwriting decision", before, decision.replace('_', ' ').toLowerCase(Locale.ROOT)
+                + (ACCEPT_WITH_TERMS.equals(decision) ? ", offer v" + c.offerVersion : "") + " (" + c.ref + ")",
+                user.getUsername());
         publishDecided(c, user.getUsername());
         if (ACCEPT_WITH_TERMS.equals(decision)) {
             Map<String, Object> data = new LinkedHashMap<>();
@@ -487,6 +501,7 @@ public class UnderwritingService {
             throw new IllegalArgumentException("Say how the applicant gave their answer.");
         }
         InsuranceApplication app = application(c);
+        String before = app.getStatus();
         LocalDateTime now = LocalDateTime.now();
         boolean accept = body.path("accept").asBoolean(false);
         c.offerAcceptedBy = user.getUsername();
@@ -496,6 +511,25 @@ public class UnderwritingService {
             c.offerStatus = OFFER_ACCEPTED;
             c.status = ACCEPTED;
             app.setStatus(applicationStatusWhenCleared(app));
+            // The application and its price trace take the accepted offer's premium, as a new quote version.
+            if (c.offerPremium != null && (app.getPremium() == null || c.offerPremium.compareTo(app.getPremium()) != 0)) {
+                if (app.getQuoteRef() != null) {
+                    com.nsure.portfolio.Quote version = quotes.underwritten(app.getQuoteRef(), c.appliedPremium,
+                            c.offerPremium, c.loadingPercent, c.ref, c.offerVersion, user.getUsername(), note);
+                    app.setQuote(version.getRef(), version.getVersionNo());
+                }
+                app.setPremium(c.offerPremium);
+            }
+            // IL01: the spec's OfferAccepted for an underwriting offer (OfferAnswered below stays for its handlers).
+            Map<String, Object> accepted = new LinkedHashMap<>();
+            accepted.put("caseRef", c.ref);
+            accepted.put("applicationRef", c.applicationRef);
+            accepted.put("customerRef", c.customerRef == null ? "" : c.customerRef);
+            accepted.put("offerVersion", c.offerVersion);
+            accepted.put("quoteRef", app.getQuoteRef() == null ? "" : app.getQuoteRef());
+            accepted.put("version", app.getQuoteVersion() == null ? 0 : app.getQuoteVersion());
+            accepted.put("premium", app.getPremium() == null ? "" : app.getPremium().toPlainString());
+            outbox.publish(Events.OFFER_ACCEPTED, c.ref, accepted, user.getUsername());
         } else {
             c.offerStatus = OFFER_REFUSED;
             c.status = DECLINED;
@@ -508,9 +542,32 @@ public class UnderwritingService {
         data.put("offerVersion", c.offerVersion);
         data.put("accepted", accept);
         outbox.publish(Events.OFFER_ANSWERED, c.ref, data, user.getUsername());
+        logApplication(app, accept ? "Offer accepted" : "Offer refused", before, "Offer v" + c.offerVersion + " ("
+                + c.ref + ")", user.getUsername());
         audit.record(user.getUsername(), accept ? "Offer accepted" : "Offer refused", "UnderwritingCase", c.ref,
                 "Offer v" + c.offerVersion + ": " + note);
         return detail(c, user);
+    }
+
+    private void logApplication(InsuranceApplication app, String action, String previous, String details, String actor) {
+        history.record(com.nsure.portfolio.ApplicationCapture.HISTORY, app.getRef(), app.getCustomerName(), action,
+                previous, app.getStatus(), details, actor);
+    }
+
+    /**
+     * Terms accepted earlier no longer stand (a new decision, or the case reopened): the application's price goes back
+     * to the one quoted before them, as a new version of its quote (AT-IL02-02).
+     */
+    private void restorePrice(Case c, InsuranceApplication app, String actor, String reason) {
+        if (app.getQuoteRef() != null) {
+            com.nsure.portfolio.Quote restored = quotes.withdrawUnderwriting(app.getQuoteRef(), c.ref, actor, reason);
+            if (restored != null) {
+                app.setQuote(restored.getRef(), restored.getVersionNo());
+                app.setPremium(restored.getPremium());
+            }
+        } else if (c.appliedPremium != null) {
+            app.setPremium(c.appliedPremium);
+        }
     }
 
     /** {reason}: reopens a decided case for reassessment (NS-IL02-006). Earlier decisions stay on the record. */
@@ -544,7 +601,10 @@ public class UnderwritingService {
         c.status = outstanding(c.ref) > 0 ? EVIDENCE_PENDING : REFERRED;
         c.referralReasons = (c.referralReasons == null ? "" : c.referralReasons + "\n") + "Reopened: " + reason;
         c.updatedAt = now;
+        String before = app.getStatus();
         app.setStatus("Under review");
+        restorePrice(c, app, user.getUsername(), reason);
+        logApplication(app, "Underwriting reopened", before, c.ref, user.getUsername());
         audit.record(user.getUsername(), "Underwriting reopened", "UnderwritingCase", c.ref, reason);
         return detail(c, user);
     }
@@ -730,6 +790,17 @@ public class UnderwritingService {
         d.offerPremium = c.offerPremium;
         d.decidedBy = c.decidedBy;
         d.decidedAt = now;
+        // IL02: the life, the benefit and the evidence (each item's id and status, never clinical notes) it rested on.
+        d.lifeRef = c.customerRef;
+        InsuranceApplication app = em.createQuery("select a from InsuranceApplication a where a.ref = :ref",
+                InsuranceApplication.class).setParameter("ref", c.applicationRef).getResultStream().findFirst().orElse(null);
+        d.benefit = clip(c.product + (app != null && app.getTier() != null ? " · " + app.getTier() : ""), 200);
+        d.sumAssured = c.sumAssured;
+        List<String> basis = em.createQuery("select e from UwEvidence e where e.caseRef = :ref order by e.id",
+                        Evidence.class).setParameter("ref", c.ref).getResultStream()
+                .map(e -> "#" + e.id + " " + e.requirement + ": " + e.status)
+                .toList();
+        d.evidenceBasis = basis.isEmpty() ? "No evidence requested" : clip(String.join("; ", basis), 1000);
         em.persist(d);
     }
 

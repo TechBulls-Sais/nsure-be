@@ -24,12 +24,17 @@ class CustomerSignupApiTest {
     @Autowired
     private MockMvc mockMvc;
 
+    /** A 9-digit Omang number of the username's own, so each sign-up is a new identity (NS-SH01-002). */
+    static String omang(String username) {
+        return String.format("%09d", Math.floorMod(username.hashCode(), 1_000_000_000));
+    }
+
     static String details(String username, String phone, String challenge, String otp) {
         return """
                 {"name":"Neo Kgosi","email":"neo@example.com","phone":"%s",
-                 "poiType":"Omang","poiNumber":"880618404","dateOfBirth":"1990-04-12",
+                 "poiType":"Omang","poiNumber":"%s","dateOfBirth":"1990-04-12",
                  "username":"%s","password":"password123","pep":false%s%s}
-                """.formatted(phone, username,
+                """.formatted(phone, omang(username), username,
                 challenge == null ? "" : ",\"challenge\":\"" + challenge + "\"",
                 otp == null ? "" : ",\"otp\":\"" + otp + "\"");
     }
@@ -58,7 +63,7 @@ class CustomerSignupApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.loginUsername").value("neo.signup"))
                 .andExpect(jsonPath("$.kycStatus").value("PENDING"))
-                .andExpect(jsonPath("$.poiNumber").value("880618404"));
+                .andExpect(jsonPath("$.poiNumber").value(omang("neo.signup")));
 
         mockMvc.perform(get("/me").with(signedIn("neo.signup", "password123")))
                 .andExpect(status().isOk())

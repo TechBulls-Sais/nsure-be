@@ -27,7 +27,11 @@ public final class PortfolioViews {
             List<CustomerTierView> tiers,
             // Why staff rejected the KYC or EDD review; empty unless rejected.
             String kycRejectionReason,
-            String eddRejectionReason
+            String eddRejectionReason,
+            // Created although another customer holds the same identity number: the match and why (NS-SH01-002).
+            String duplicateReview,
+            // Row version: send it back as If-Match with a KYC or EDD decision (NS-TXN-001).
+            long version
     ) {
     }
 
@@ -47,7 +51,9 @@ public final class PortfolioViews {
             // Cover the customer asked for that staff have not accepted: awaiting review, or rejected with a reason.
             List<CoverView> requests,
             // Claims on the customer's policies, newest first.
-            List<ClaimView> claims
+            List<ClaimView> claims,
+            // When each of those policies, requests and claims last changed, by reference (NS-UX-001).
+            java.util.Map<String, java.time.LocalDateTime> lastUpdated
     ) {
     }
 
@@ -82,7 +88,11 @@ public final class PortfolioViews {
             int maxBeneficiaries,
             // The accepted quote this application or policy was priced from (NS-IL01-001).
             String quoteRef,
-            Integer quoteVersion
+            Integer quoteVersion,
+            // The customer record it belongs to: screens link records by this reference, never by name.
+            String customerRef,
+            // Row version of an application or policy (null otherwise): send it back as If-Match (NS-TXN-001).
+            Long version
     ) {
     }
 
@@ -111,7 +121,11 @@ public final class PortfolioViews {
             java.time.LocalDateTime submittedAt, List<DisclosureItem> disclosures, List<ApplicationEvidenceItem> evidence,
             List<String> submissionProblems, List<String> missingEvidence,
             // Submitted before disclosures and the declaration were captured: they were never recorded for it.
-            boolean preCapture) {
+            boolean preCapture,
+            // The payer as captured, so a draft can be reopened in the application form (NS-UX-001).
+            String payerName, String payerRelationship,
+            // The application's row version, for If-Match on the next change (NS-TXN-001).
+            long version) {
     }
 
     /** A stored quote priced again under its own rate version: whether it reproduces the booked amount. */
@@ -352,7 +366,9 @@ public final class PortfolioViews {
             int members,
             int premium,
             String renewal,
-            String color
+            String color,
+            // The scheme's own status, so screens count and label it from the record (D-29).
+            String status
     ) {
     }
 

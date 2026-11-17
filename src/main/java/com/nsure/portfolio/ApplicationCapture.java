@@ -29,6 +29,8 @@ public class ApplicationCapture {
     public static final String DRAFT = "Draft";
     public static final String UNDER_REVIEW = "Under review";
     public static final String EVIDENCE_NEEDED = "Evidence needed";
+    /** The workflow-log type of an application's timeline (IL01 workspace). */
+    public static final String HISTORY = "Application";
     static final Set<String> CHANNELS = Set.of("DIRECT", "BRANCH", "AGENT", "BROKER", "CALL_CENTRE");
     static final Set<String> MANDATES = Set.of("DEBIT_ORDER", "MOBILE_WALLET", "CARD", "BANK_EFT");
 
@@ -61,8 +63,15 @@ public class ApplicationCapture {
                 throw new IllegalArgumentException("Payment mandate must be one of " + String.join(", ", MANDATES) + ".");
             }
             app.setMandateMethod(method);
-            app.setMandateInstitution(clip(text(body, "mandateInstitution"), 60));
-            app.setMandateAccount(clip(text(body, "mandateAccount"), 60));
+            // A resumed draft is shown the account only masked, so a debit order whose bank details are not sent
+            // again keeps the ones on record; any other method drops them.
+            boolean keepBank = "DEBIT_ORDER".equals(method);
+            if (body.has("mandateInstitution") || !keepBank) {
+                app.setMandateInstitution(clip(text(body, "mandateInstitution"), 60));
+            }
+            if (body.has("mandateAccount") || !keepBank) {
+                app.setMandateAccount(clip(text(body, "mandateAccount"), 60));
+            }
             String day = text(body, "mandateDebitDay");
             if (day != null) {
                 try {
@@ -234,7 +243,8 @@ public class ApplicationCapture {
                 app.getMandateDebitDay(), app.getChannel() == null ? "DIRECT" : app.getChannel(),
                 app.getIntermediaryCode(), app.getDeclaredBy(), app.getDeclaredAt(), app.getSubmittedBy(),
                 app.getSubmittedAt(), disclosures, items, draft ? submissionProblems(app) : List.of(),
-                missingEvidence(app, customer), preCapture);
+                missingEvidence(app, customer), preCapture, app.getPayerName(), app.getPayerRelationship(),
+                app.getRowVersion());
     }
 
     public List<PortfolioViews.DisclosureItem> questionsFor(String product) {
