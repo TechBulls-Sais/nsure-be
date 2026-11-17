@@ -350,7 +350,9 @@ public final class PortfolioViews {
             int members,
             int premium,
             String renewal,
-            String color
+            String color,
+            // The scheme's own status, so screens count and label it from the record (D-29).
+            String status
     ) {
     }
 

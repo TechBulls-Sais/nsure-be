@@ -43,7 +43,10 @@ class PortfolioApiTest {
                 .andExpect(jsonPath("$[0].name").isNotEmpty());
         mockMvc.perform(get("/portfolio/schemes").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[?(@.id == 'SCH-001')]").isNotEmpty());
+                .andExpect(jsonPath("$[?(@.id == 'SCH-001')]").isNotEmpty())
+                // D-29: the overview counts schemes by their own status.
+                .andExpect(jsonPath("$[?(@.id == 'SCH-001')].status").value(org.hamcrest.Matchers.hasItem(
+                        org.hamcrest.Matchers.not(org.hamcrest.Matchers.emptyOrNullString()))));
         mockMvc.perform(get("/portfolio/receipts").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.id == 'INV-0091')]").isNotEmpty());

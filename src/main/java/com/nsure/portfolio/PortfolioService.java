@@ -218,7 +218,8 @@ public class PortfolioService {
         return list(GroupScheme.class).stream()
                 .map(scheme -> new PortfolioViews.SchemeView(
                         scheme.getRef(), scheme.getName(), scheme.getSector(), scheme.getInitials(),
-                        scheme.getMembers(), scheme.getPremium(), scheme.getRenewal(), scheme.getColor()))
+                        scheme.getMembers(), scheme.getPremium(), scheme.getRenewal(), scheme.getColor(),
+                        scheme.getStatus() == null ? "" : scheme.getStatus()))
                 .toList();
     }
 
