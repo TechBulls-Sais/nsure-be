@@ -1,7 +1,6 @@
 package com.nsure.portfolio;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import java.util.Map;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -9,7 +8,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * Customer self sign-up from the public Customer sign-in page; no sign-in needed (see ApiAccessRules).
- * The customer gives the same details staff enter on Add customer, then confirms a one-time code.
+ * The customer gives the same details staff enter on Add customer, then confirms the one-time code sent to their
+ * phone ({@code challenge} from the first call plus {@code otp}).
  */
 @RestController
 @RequestMapping("/public/signup")
@@ -22,7 +22,7 @@ public class CustomerSignupController {
     }
 
     @PostMapping("/otp")
-    public Map<String, String> requestOtp(@RequestBody JsonNode body) {
+    public PortfolioService.SignupCodeView requestOtp(@RequestBody JsonNode body) {
         return portfolio.requestSignupOtp(body);
     }
 

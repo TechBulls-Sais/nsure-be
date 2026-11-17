@@ -9,6 +9,7 @@ import com.nsure.rating.RateTableViews;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.domain.Role;
 import com.nsure.security.exception.NoAuthorizationException;
+import com.nsure.security.otp.OneTimeCodes;
 import com.nsure.security.repository.AppUserRepository;
 import com.nsure.security.repository.RoleRepository;
 import com.nsure.security.service.PlatformSecurityContext;
@@ -60,6 +61,8 @@ public class PortfolioService {
     private final org.springframework.beans.factory.ObjectProvider<com.nsure.payment.PaymentSettlementService> settlement;
     /** IL02: every submitted application is underwritten before it can be issued. */
     private final org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting;
+    /** Customer sign-up codes: per request, expiring, attempt-limited; the fixed demo code only in dev/demo. */
+    private final OneTimeCodes codes;
 
     public PortfolioService(
             EntityManager em,
@@ -77,7 +80,9 @@ public class PortfolioService {
             DeclarationService declarations, ClaimFinancials claimFinancials, QuoteService quotes,
             com.fasterxml.jackson.databind.ObjectMapper mapper, com.nsure.integration.Outbox outbox,
             ApplicationCapture capture, ProductConfigHistory configHistory,
-            org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting) {
+            org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting,
+            OneTimeCodes codes) {
+        this.codes = codes;
         this.underwriting = underwriting;
         this.configHistory = configHistory;
         this.capture = capture;
@@ -277,27 +282,40 @@ public class PortfolioService {
 
     // ── customer self sign-up (public) ────────────────────────────────────────────────────────────
 
-    /** Demo build: no SMS or email gateway is wired, so every sign-up uses this fixed one-time code. */
-    static final String SIGNUP_OTP = "123456";
-
-    /** Step 1 of sign-up: check the details before "sending" the code, so the customer fixes them first. */
-    @Transactional(readOnly = true)
-    public Map<String, String> requestSignupOtp(JsonNode body) {
-        checkSignupDetails(body);
-        String phone = text(body, "phone");
-        String tail = phone.replaceAll("\\D", "");
-        tail = tail.length() > 3 ? tail.substring(tail.length() - 3) : tail;
-        return Map.of("sentTo", "•••• " + tail, "email", text(body, "email"));
+    /**
+     * What the customer gets back when a sign-up code is on its way: the challenge to send with the code, and in a
+     * dev or demo installation only, the demo code to type ({@link OneTimeCodes}).
+     */
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    public record SignupCodeView(String sentTo, String email, String challenge, java.time.LocalDateTime expiresAt,
+            int attemptsAllowed, String demoCode) {
     }
 
-    /** Step 2 of sign-up: the code must match, then the customer is created exactly as staff would add them. */
+    /**
+     * Step 1 of sign-up: check the details before sending the code, so the customer fixes them first. Each request
+     * gets its own code, bound to the phone it was sent to. With no messaging provider outside dev/demo, sign-up is
+     * refused here.
+     */
+    @Transactional
+    public SignupCodeView requestSignupOtp(JsonNode body) {
+        checkSignupDetails(body);
+        String phone = text(body, "phone");
+        String digits = phone.replaceAll("\\D", "");
+        OneTimeCodes.Issued issued = codes.issue(OneTimeCodes.Purpose.CUSTOMER_SIGNUP, digits, phone);
+        String tail = digits.length() > 3 ? digits.substring(digits.length() - 3) : digits;
+        return new SignupCodeView("•••• " + tail, text(body, "email"), issued.challenge(), issued.expiresAt(),
+                issued.attemptsAllowed(), issued.demoCode());
+    }
+
+    /**
+     * Step 2 of sign-up: the code for this request's challenge must match, for the same phone it was sent to; then
+     * the customer is created exactly as staff would add them.
+     */
     @Transactional
     public PortfolioViews.CustomerView signUp(JsonNode body) {
-        String otp = optional(body, "otp");
-        if (otp == null || !SIGNUP_OTP.equals(otp.replaceAll("\\s", ""))) {
-            throw new IllegalArgumentException("The verification code is incorrect.");
-        }
         checkSignupDetails(body);
+        String digits = text(body, "phone").replaceAll("\\D", "");
+        codes.verify(OneTimeCodes.Purpose.CUSTOMER_SIGNUP, optional(body, "challenge"), optional(body, "otp"), digits);
         return createCustomer(body);
     }
 

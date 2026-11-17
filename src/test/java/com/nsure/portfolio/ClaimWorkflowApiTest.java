@@ -2,7 +2,7 @@ package com.nsure.portfolio;
 
 import static com.nsure.portfolio.PolicyWorkflowApiTest.json;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -62,10 +62,10 @@ class ClaimWorkflowApiTest {
                 .andReturn().getResponse().getContentAsString();
         String claim = JsonPath.read(body, "$.claims[0].id");
 
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(httpBasic("onboarding", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("onboarding", "password")))
                 .andExpect(status().isForbidden());
         // NS-SH05-007: sending the payout leaves it in flight; nothing is paid until the provider confirms it.
-        String sent = mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(httpBasic("assessor", "password")))
+        String sent = mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Payout Sent"))
                 .andExpect(jsonPath("$.payoutReference").value(org.hamcrest.Matchers.startsWith("PAYOUT-")))
@@ -87,7 +87,7 @@ class ClaimWorkflowApiTest {
                 .andExpect(jsonPath("$.actions").isEmpty());
         assertThat(claimPaidEvents(claim)).isEqualTo(1L);
 
-        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[0].action").value("Lodged"))
                 .andExpect(jsonPath("$[1].action").value("Auto Approved"))
                 .andExpect(jsonPath("$[1].performedBy").value("system"))
@@ -107,26 +107,26 @@ class ClaimWorkflowApiTest {
         beneficiary(policy, "Naledi Molefe");
 
         String claim = staffLodge(policy, "Naledi Molefe");
-        mockMvc.perform(get("/portfolio/claims").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].status").value("Under Review"))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].stpIneligibleReason").value(
                         "Payout of BWP 50000 is over the straight-through ceiling of BWP 5000"));
 
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(
                         "Cannot approve a claim that is Under Review. Allowed from here: assess, reject"));
 
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(httpBasic("onboarding", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("onboarding", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(httpBasic("assessor", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Recommended"))
                 .andExpect(jsonPath("$.recommendedBy").value("assessor"))
                 .andExpect(jsonPath("$.payee.verified").value(true));
 
         // Four-eyes: the assessor cannot approve their own recommendation.
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/approve").with(httpBasic("assessor", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/approve").with(signedIn("assessor", "password")))
                 .andExpect(status().isForbidden());
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":60000}"))
                 .andExpect(status().isUnprocessableEntity())
@@ -145,7 +145,7 @@ class ClaimWorkflowApiTest {
                         "{\"name\":\"Someone Else\",\"payoutMethod\":\"Bank Account\",\"accountRef\":\"1\"}"))
                 .andExpect(status().isUnprocessableEntity());
 
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Payout Sent"));
 
@@ -159,7 +159,7 @@ class ClaimWorkflowApiTest {
                 .andExpect(jsonPath("$.payee.verified").value(false))
                 .andExpect(jsonPath("$.actions[0]").value("pay"));
         assertThat(claimPaidEvents(claim)).isZero();
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("admin", "password")))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("verify")));
         mockMvc.perform(json(put("/portfolio/claims/" + claim + "/payee"), "assessor",
@@ -167,7 +167,7 @@ class ClaimWorkflowApiTest {
                                 + "\"accountRef\":\"62009988\",\"verified\":true}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.payee.verified").value(true));
-        String resent = mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(httpBasic("admin", "password")))
+        String resent = mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Payout Sent"))
                 .andReturn().getResponse().getContentAsString();
@@ -196,14 +196,14 @@ class ClaimWorkflowApiTest {
                 .andReturn().getResponse().getContentAsString();
         String claim = JsonPath.read(body, "$.claims[0].id");
 
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(httpBasic("assessor", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
                 .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(put("/portfolio/claims/" + claim + "/payee"), "assessor",
                         "{\"name\":\"Unknown Person\",\"payoutMethod\":\"Mobile Wallet\",\"accountRef\":\"71234567\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.payee.source").value("Entered by Assessor"))
                 .andExpect(jsonPath("$.payee.verified").value(false));
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/checks").with(httpBasic("assessor", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/checks").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Under Review"));
 
@@ -218,7 +218,7 @@ class ClaimWorkflowApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Rejected"));
 
-        mockMvc.perform(get("/portfolio/shop").with(httpBasic("mphod", "password1")))
+        mockMvc.perform(get("/portfolio/shop").with(signedIn("mphod", "password1")))
                 .andExpect(jsonPath("$.claims[0].status").value("Rejected"))
                 .andExpect(jsonPath("$.claims[0].rejectionReason").value("The event happened before cover started"));
     }
@@ -244,12 +244,12 @@ class ClaimWorkflowApiTest {
         beneficiary(policy, "Mpho Seretse");
         String claim = staffLodge(policy, "Mpho Seretse");
 
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.recommendedBy").value("admin"));
         // Spec 12 C-9 and Nsure Life NS-SH11-003: no role holds the override, the administrator included. It comes only
         // through time-limited emergency access granted by someone else, and still needs a written reason.
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.message").value("You assessed this claim, so you cannot also authorise its "
                         + "payout. A second approver must action it."));
@@ -269,15 +269,15 @@ class ClaimWorkflowApiTest {
                 .andExpect(jsonPath("$.fourEyesApplied").value(false))
                 .andExpect(jsonPath("$.fourEyesOverrideReason").value("Only approver on duty during the outage"));
         mockMvc.perform(post("/admin/emergency-access/" + JsonPath.read(grant, "$.id") + "/revoke")
-                        .with(httpBasic("secadmin", "password")))
+                        .with(signedIn("secadmin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("REVOKED"));
 
-        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Approved')].details").value(org.hamcrest.Matchers.hasItem(
                         org.hamcrest.Matchers.containsString("FOUR-EYES OVERRIDDEN"))));
         // C-17: the override shows on the control-bypass register.
-        mockMvc.perform(get("/admin/controls/stp-dashboard").with(httpBasic("compliance", "password")))
+        mockMvc.perform(get("/admin/controls/stp-dashboard").with(signedIn("compliance", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.fourEyesNotApplied[?(@.claimRef == '" + claim + "')].detail").value(
                         org.hamcrest.Matchers.hasItem(org.hamcrest.Matchers.startsWith("Override:"))));
@@ -290,10 +290,10 @@ class ClaimWorkflowApiTest {
         beneficiary(policy, "Kabo Ramotswe");
         String claim = staffLodge(policy, "Kabo Ramotswe");
         // Over the STP ceiling: routed to a person with the reason recorded as a code (spec 12 C-12).
-        mockMvc.perform(get("/portfolio/claims").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].stpEligible").value(false))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].stpIneligibleCode").value("OVER_CEILING"));
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(httpBasic("assessor", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk());
 
         Long roleId = ((Number) em.createQuery("select r.id from Role r where r.name = 'Claims Assessor'")
@@ -360,7 +360,7 @@ class ClaimWorkflowApiTest {
                 .andReturn().getResponse().getContentAsString();
         String claim = JsonPath.read(body, "$.id");
 
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("admin", "password")))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString(
                         "Policy Active, Waiting Period, Premiums Paid failed, so there was no valid cover")));
@@ -376,10 +376,10 @@ class ClaimWorkflowApiTest {
         beneficiary(policy, "Masego Tau");
         // The claimant is not a named beneficiary: Beneficiary Match fails, the payee is the beneficiary.
         String claim = staffLodge(policy, "Uncle Tau");
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(httpBasic("assessor", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk());
 
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString(
                         "Beneficiary Match failed")));
@@ -390,7 +390,7 @@ class ClaimWorkflowApiTest {
                 .andExpect(jsonPath("$.checkOverrideReason").value("Paid to the named beneficiary, verified against the ID"))
                 // Following the rule is not an audit case.
                 .andExpect(jsonPath("$.auditFlag").value(""));
-        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Approved')].details").value(org.hamcrest.Matchers.hasItem(
                         org.hamcrest.Matchers.containsString("approved despite Beneficiary Match"))));
     }
@@ -407,7 +407,7 @@ class ClaimWorkflowApiTest {
         // ...the same event again is.
         String again = staffLodge(policy, "Kagiso Bole");
         for (String[] expected : new String[][] {{first, "Pass"}, {other, "Pass"}, {again, "Fail"}}) {
-            mockMvc.perform(get("/portfolio/claims").with(httpBasic("admin", "password")))
+            mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
                     .andExpect(jsonPath("$[?(@.id == '" + expected[0] + "')].checks[?(@.name == 'No Duplicate')].result")
                             .value(org.hamcrest.Matchers.hasItem(expected[1])));
         }
@@ -424,7 +424,7 @@ class ClaimWorkflowApiTest {
                         + " c.checkPolicyActive = 'Fail' where c.ref = :ref")
                 .setParameter("ref", claim)
                 .executeUpdate());
-        mockMvc.perform(get("/portfolio/claims").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].auditFlag").value(org.hamcrest.Matchers.hasItem(
                         "Paid despite failed checks: Policy Active")));
     }
@@ -448,11 +448,11 @@ class ClaimWorkflowApiTest {
         org.assertj.core.api.Assertions.assertThat(claims.refreshChecks(id)).containsExactly("Premiums Paid: Pass → Fail");
         org.assertj.core.api.Assertions.assertThat(claims.refreshChecks(id)).isEmpty();
 
-        mockMvc.perform(get("/portfolio/claims").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].status").value(org.hamcrest.Matchers.hasItem("Paid")))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].auditFlag").value(org.hamcrest.Matchers.hasItem(
                         "Paid despite failed checks: Policy Active, Waiting Period, Premiums Paid")));
-        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Checks Re-run')].details").value(org.hamcrest.Matchers.hasItem(
                         "Check rules updated · Premiums Paid: Pass → Fail")));
     }
@@ -468,7 +468,7 @@ class ClaimWorkflowApiTest {
                         + " c.checkNoDuplicate = null where c.ref = :ref")
                 .setParameter("ref", claim)
                 .executeUpdate());
-        mockMvc.perform(get("/portfolio/claims").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].checks[*].result").value(
                         org.hamcrest.Matchers.everyItem(org.hamcrest.Matchers.is("Not run"))))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].auditFlag").value(org.hamcrest.Matchers.hasItem(
@@ -486,7 +486,7 @@ class ClaimWorkflowApiTest {
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Nobody called Nobody Here")));
 
         String claim = staffLodge(policy, "Kabo Reserve");
-        String claims = mockMvc.perform(get("/portfolio/claims").with(httpBasic("admin", "password")))
+        String claims = mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString();
         String self = "$[?(@.id == '" + claim + "')]";
         assertThat((List<String>) JsonPath.read(claims, self + ".coveredLife")).containsExactly("Dineo Reserve");
@@ -496,27 +496,27 @@ class ClaimWorkflowApiTest {
         assertThat((List<Object>) JsonPath.read(claims, self + ".evidence[?(@.documentType == 'Death certificate'"
                 + " && @.mandatory == true && @.received == false)]")).hasSize(1);
 
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(httpBasic("assessor", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk());
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":45000}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.reserve").value(45000.0));
-        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.lifeLimit").value(50000.0))
                 .andExpect(jsonPath("$.lifeUsed").value(45000.0))
                 .andExpect(jsonPath("$.policyUsed").value(45000.0))
                 .andExpect(jsonPath("$.movements.length()").value(2));
-        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Approved')].details").value(org.hamcrest.Matchers.hasItem(
                         org.hamcrest.Matchers.containsString("evidence outstanding: Death certificate"))));
 
-        String sent = mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(httpBasic("admin", "password")))
+        String sent = mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString();
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/confirm-payout"), "admin",
                         "{\"providerReference\":\"" + JsonPath.read(sent, "$.payoutReference") + "\"}"))
                 .andExpect(jsonPath("$.status").value("Paid"))
                 .andExpect(jsonPath("$.reserve").value(0.0));
-        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.lifeUsed").value(45000.0))
                 .andExpect(jsonPath("$.movements[2].reason").value("Released: payout settled"));
         Long consumed = tx.execute(s -> em.createQuery("select count(e) from OutboxEvent e where e.eventType ="
@@ -533,7 +533,7 @@ class ClaimWorkflowApiTest {
         String first = staffLodge(policy, "Boipelo Limit");
         String second = staffLodge(policy, "Boipelo Limit");
         for (String claim : List.of(first, second)) {
-            mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(httpBasic("assessor", "password")))
+            mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
                     .andExpect(status().isOk());
         }
         // AT-SH05-02: each fits the limit alone; together they would not.
@@ -556,7 +556,7 @@ class ClaimWorkflowApiTest {
             statuses.add(result.get());
         }
         assertThat(statuses).containsExactlyInAnyOrder(200, 422);
-        mockMvc.perform(get("/portfolio/claims/" + first + "/financials").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/claims/" + first + "/financials").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policyUsed").value(30000.0));
     }
 
@@ -583,12 +583,12 @@ class ClaimWorkflowApiTest {
                 .andExpect(jsonPath("$.status").value("Under Review"))
                 .andExpect(jsonPath("$.rejectionReason").value(""))
                 .andExpect(jsonPath("$.reserve").value(50000.0));
-        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Reopened')].details").value(
                         org.hamcrest.Matchers.hasItem(org.hamcrest.Matchers.containsString(
                                 "Reason: The certificate has now arrived."))));
         // §09, NS-SH05-004: the rejection it set aside is kept in full, with who made it and why.
-        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.decisions[0].decision").value("REJECTED"))
                 .andExpect(jsonPath("$.decisions[0].reason").value("No death certificate was provided."))
@@ -607,13 +607,13 @@ class ClaimWorkflowApiTest {
         customer("Lorato Bene", "loratobene");
         String policy = activePolicy("Lorato Bene", 50000, 60);
         beneficiary(policy, "Pako Bene");
-        String beneficiaries = mockMvc.perform(get("/portfolio/policies").with(httpBasic("admin", "password")))
+        String beneficiaries = mockMvc.perform(get("/portfolio/policies").with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString();
         Integer id = ((List<Integer>) JsonPath.read(beneficiaries,
                 "$[?(@.id == '" + policy + "')].beneficiaries[?(@.fullName == 'Pako Bene')].id")).get(0);
         // Removed today: from tomorrow they are no longer a beneficiary, but they were one when the event happened.
         mockMvc.perform(delete("/portfolio/policies/" + policy + "/beneficiaries/" + id)
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         // Nominated today, so not a beneficiary when the event happened five days ago.
         mockMvc.perform(json(post("/portfolio/policies/" + policy + "/beneficiaries"), "admin",
@@ -639,7 +639,7 @@ class ClaimWorkflowApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         mockMvc.perform(post("/portfolio/customers/" + JsonPath.read(body, "$.id") + "/kyc")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
     }
 

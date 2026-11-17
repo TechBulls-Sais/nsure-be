@@ -1,7 +1,7 @@
 package com.nsure.grouplife;
 
 import static org.hamcrest.Matchers.containsString;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -39,7 +39,7 @@ class GroupLifeApiTest {
         mockMvc.perform(json(post("/group-life/quotes/" + ref + "/revision"), "admin", "{\"ratePerMille\":3.0}"))
                 .andExpect(jsonPath("$.version").value(2))
                 .andExpect(jsonPath("$.annualPremium").value(86400.0));
-        mockMvc.perform(get("/group-life/quotes").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/group-life/quotes").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.version == 1)].status").value("SUPERSEDED"));
         mockMvc.perform(json(post("/group-life/quotes/" + ref + "/progress"), "admin", "{\"action\":\"SUBMIT\"}"))
                 .andExpect(jsonPath("$.status").value("SUBMITTED"));
@@ -66,7 +66,7 @@ class GroupLifeApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACTIVATED"))
                 .andReturn().getResponse().getContentAsString(), "$.schemeRef");
-        mockMvc.perform(get("/group-life/schemes/" + scheme + "/benefits").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/group-life/schemes/" + scheme + "/benefits").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.length()").value(3));
 
         // AT-GL02-01: a scheme cannot go above the product maximum.
@@ -89,7 +89,7 @@ class GroupLifeApiTest {
                 .andExpect(jsonPath("$.duplicates").value(2))
                 .andExpect(jsonPath("$.accepted").value(0));
         java.util.List<Integer> ids = JsonPath.read(mockMvc.perform(get("/group-life/schemes/" + scheme + "/credit-loans")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.length()").value(2))
                 .andReturn().getResponse().getContentAsString(), "$[?(@.lenderLoanId == 'A1')].id");
         Integer loan = ids.get(0);
@@ -100,7 +100,7 @@ class GroupLifeApiTest {
                 .andExpect(jsonPath("$.refund").value(3672.0));
 
         // Renewal: previewed, requested, decided by someone else; the policy year moves on with no gap.
-        mockMvc.perform(get("/group-life/schemes/" + scheme + "/impact?eventType=RENEWAL").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/group-life/schemes/" + scheme + "/impact?eventType=RENEWAL").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policyYear").value(1));
         String renewal = JsonPath.read(mockMvc.perform(json(post("/group-life/schemes/" + scheme + "/events"), "admin",
                         "{\"eventType\":\"RENEWAL\",\"rateChangePercent\":5,\"reason\":\"Annual renewal on updated census\"}"))
@@ -110,7 +110,7 @@ class GroupLifeApiTest {
                 .andExpect(status().isForbidden());
         mockMvc.perform(json(post("/group-life/events/" + renewal + "/decision"), "secadmin", "{\"approve\":true,\"note\":\"Terms agreed\"}"))
                 .andExpect(jsonPath("$.status").value("APPROVED"));
-        mockMvc.perform(get("/group-life/schemes/" + scheme + "/impact?eventType=CLOSURE").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/group-life/schemes/" + scheme + "/impact?eventType=CLOSURE").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policyYear").value(2))
                 .andExpect(jsonPath("$.renewalDate").value(LocalDate.now().plusYears(2).toString()));
 
@@ -121,13 +121,13 @@ class GroupLifeApiTest {
                 .andReturn().getResponse().getContentAsString(), "$.ref");
         mockMvc.perform(json(post("/group-life/events/" + closure + "/decision"), "secadmin", "{\"approve\":true,\"note\":\"Confirmed\"}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(get("/group/schemes/" + scheme).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/group/schemes/" + scheme).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.scheme.status").value("CLOSED"));
         mockMvc.perform(json(post("/group-life/schemes/" + scheme + "/credit-loans"), "admin", file.replace("BDX-1", "BDX-2")))
                 .andExpect(status().isUnprocessableEntity());
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

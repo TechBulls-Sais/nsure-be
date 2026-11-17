@@ -2,7 +2,7 @@ package com.nsure.portfolio;
 
 import static com.nsure.portfolio.PolicyWorkflowApiTest.json;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -39,7 +39,7 @@ class PolicyDocumentApiTest {
         String policy = customerPolicy("Gosego Ramotswa", "gosego");
 
         String list = mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].type").value("Policy schedule"))
@@ -50,7 +50,7 @@ class PolicyDocumentApiTest {
         Integer id = JsonPath.read(list, "$[0].id");
 
         byte[] pdf = mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + id)
-                        .with(httpBasic("assessor", "password")))
+                        .with(signedIn("assessor", "password")))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType("application/pdf"))
                 .andReturn().getResponse().getContentAsByteArray();
@@ -64,9 +64,9 @@ class PolicyDocumentApiTest {
             assertThat(text).doesNotContain("62004567", "Created by admin");
         }
 
-        mockMvc.perform(get("/portfolio/policies").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + policy + "')].documents.length()").value(1));
-        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Schedule Generated')].performedBy").value(Matchers.hasItem("admin")));
     }
 
@@ -74,24 +74,24 @@ class PolicyDocumentApiTest {
     void aPolicyHasOneScheduleOnly() throws Exception {
         String policy = customerPolicy("Mpho Dintwe", "mpho");
 
-        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
-        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(signedIn("admin", "password")))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value(Matchers.containsString("already has its policy schedule")));
         // Not from the customer portal either.
         mockMvc.perform(post("/portfolio/shop/policies/" + policy + "/documents/schedule")
-                        .with(httpBasic("mpho", "password1")))
+                        .with(signedIn("mpho", "password1")))
                 .andExpect(status().isConflict());
 
-        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.length()").value(1));
     }
 
     @Test
     void oldLayoutSchedulesAreReplacedByOneCurrentSchedule() throws Exception {
         String policy = customerPolicy("Kagiso Moremi", "kagiso");
-        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         // As the old button left it: three schedules in the old layout.
         Long policyId = jdbc.queryForObject("select max(policy_id) from ins_policy_document", Long.class);
@@ -109,7 +109,7 @@ class PolicyDocumentApiTest {
         assertThat(documents.policiesWithOldSchedules()).doesNotContain(policyId);
         assertThat(documents.replaceOldSchedules(policyId)).isZero();
         // Blueprint §8: the old-layout schedules are kept as superseded, linked to the one current schedule.
-        String list = mockMvc.perform(get("/portfolio/policies/" + policy + "/documents").with(httpBasic("admin", "password")))
+        String list = mockMvc.perform(get("/portfolio/policies/" + policy + "/documents").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.length()").value(4))
                 .andExpect(jsonPath("$[?(@.status == 'CURRENT')]", Matchers.hasSize(1)))
                 .andExpect(jsonPath("$[0].status").value("SUPERSEDED"))
@@ -119,14 +119,14 @@ class PolicyDocumentApiTest {
                 .andReturn().getResponse().getContentAsString();
         assertThat((Integer) JsonPath.read(list, "$[0].supersededBy")).isEqualTo((Integer) JsonPath.read(list, "$[3].id"));
         byte[] pdf = mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + JsonPath.read(list, "$[3].id"))
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsByteArray();
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             assertThat(new PDFTextStripper().getText(doc)).contains("1. Your policy", "Important terms");
         }
         // Still one per policy afterwards.
-        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(signedIn("admin", "password")))
                 .andExpect(status().isConflict());
     }
 
@@ -136,7 +136,7 @@ class PolicyDocumentApiTest {
         // issued files are checked against their hash, and access/downloads are audited.
         String policy = customerPolicy("Neo Sebina", "neosebina");
         String first = mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].status").value("CURRENT"))
                 .andExpect(jsonPath("$[0].sha256").value(Matchers.matchesPattern("[0-9a-f]{64}")))
@@ -158,32 +158,32 @@ class PolicyDocumentApiTest {
                 .andReturn().getResponse().getContentAsString();
         Integer current = JsonPath.read(reissued, "$[1].id");
         assertThat((Integer) JsonPath.read(reissued, "$[0].supersededBy")).isEqualTo(current);
-        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Schedule Generated')].details").value(Matchers.hasItem(
                         Matchers.containsString("Beneficiary name corrected"))));
         // Only the current schedule can be reissued; the superseded file is kept and still opens.
         mockMvc.perform(json(post("/portfolio/policies/" + policy + "/documents/" + original + "/reissue"), "admin",
                         "{\"reason\":\"Again\"}"))
                 .andExpect(status().isConflict());
-        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + original).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + original).with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         mockMvc.perform(get("/portfolio/shop/policies/" + policy + "/documents/" + current)
-                        .with(httpBasic("neosebina", "password1")))
+                        .with(signedIn("neosebina", "password1")))
                 .andExpect(status().isOk());
 
         // The download log: who, which channel, which file. Auditors read it; others do not.
         String log = mockMvc.perform(get("/portfolio/policies/" + policy + "/document-access")
-                        .with(httpBasic("compliance", "password")))
+                        .with(signedIn("compliance", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat(JsonPath.<java.util.List<String>>read(log, "$[*].channel")).containsExactly("PORTAL", "STAFF");
         assertThat(JsonPath.<java.util.List<String>>read(log, "$[*].username")).containsExactly("neosebina", "admin");
-        mockMvc.perform(get("/portfolio/policies/" + policy + "/document-access").with(httpBasic("onboarding", "password")))
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/document-access").with(signedIn("onboarding", "password")))
                 .andExpect(status().isForbidden());
 
         // A stored file that no longer matches its recorded hash is refused, never served.
         jdbc.update("update ins_policy_document set sha256 = ? where id = ?", "0".repeat(64), current);
-        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + current).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + current).with(signedIn("admin", "password")))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value(Matchers.containsString("failed its integrity check")));
     }
@@ -194,25 +194,25 @@ class PolicyDocumentApiTest {
         customerPolicy("Neo Seleka", "neoseleka");
 
         String shop = mockMvc.perform(post("/portfolio/shop/policies/" + policy + "/documents/schedule")
-                        .with(httpBasic("thabo", "password1")))
+                        .with(signedIn("thabo", "password1")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.policies[0].documents[0].type").value("Policy schedule"))
                 .andExpect(jsonPath("$.policies[0].documents[0].uploadedBy").value("thabo"))
                 .andReturn().getResponse().getContentAsString();
         Integer id = JsonPath.read(shop, "$.policies[0].documents[0].id");
 
-        mockMvc.perform(get("/portfolio/shop/policies/" + policy + "/documents/" + id).with(httpBasic("thabo", "password1")))
+        mockMvc.perform(get("/portfolio/shop/policies/" + policy + "/documents/" + id).with(signedIn("thabo", "password1")))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType("application/pdf"));
         // Another customer: answered as if the policy did not exist.
         mockMvc.perform(get("/portfolio/shop/policies/" + policy + "/documents/" + id)
-                        .with(httpBasic("neoseleka", "password1")))
+                        .with(signedIn("neoseleka", "password1")))
                 .andExpect(status().isNotFound());
         mockMvc.perform(post("/portfolio/shop/policies/" + policy + "/documents/schedule")
-                        .with(httpBasic("neoseleka", "password1")))
+                        .with(signedIn("neoseleka", "password1")))
                 .andExpect(status().isNotFound());
         // A customer never reaches the staff endpoints.
-        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + id).with(httpBasic("thabo", "password1")))
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + id).with(signedIn("thabo", "password1")))
                 .andExpect(status().isForbidden());
     }
 
@@ -220,14 +220,14 @@ class PolicyDocumentApiTest {
     void readingNeedsReadPolicyAndGeneratingNeedsAPolicyWritePermission() throws Exception {
         String policy = customerPolicy("Lorato Kgosi", "lorato");
 
-        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents").with(httpBasic("onboarding", "password")))
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents").with(signedIn("onboarding", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(httpBasic("onboarding", "password")))
+        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(signedIn("onboarding", "password")))
                 .andExpect(status().isForbidden());
         // The assessor reads policies but does not issue or service them.
-        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents").with(httpBasic("assessor", "password")))
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk());
-        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(httpBasic("assessor", "password")))
+        mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule").with(signedIn("assessor", "password")))
                 .andExpect(status().isForbidden());
     }
 
@@ -239,7 +239,7 @@ class PolicyDocumentApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         mockMvc.perform(post("/portfolio/customers/" + JsonPath.read(customer, "$.id") + "/kyc")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         String policy = mockMvc.perform(json(post("/portfolio/policies"), "admin",
                         "{\"name\":\"" + name + "\",\"product\":\"Term Life\",\"amount\":250000,\"premium\":180}"))

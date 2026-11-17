@@ -15,6 +15,7 @@ import com.nsure.security.repository.AppUserRepository;
 import com.nsure.security.repository.RoleRepository;
 import com.nsure.security.service.PlatformSecurityContext;
 import com.nsure.security.service.PortalCustomerLinks;
+import com.nsure.security.session.SessionTokenService;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -30,6 +31,7 @@ public class UserCommandHandler implements CommandHandler {
     private final PasswordEncoder passwordEncoder;
     private final PortalCustomerLinks portalLinks;
     private final ObjectMapper mapper;
+    private final SessionTokenService sessions;
 
     public UserCommandHandler(
             AppUserRepository users,
@@ -37,7 +39,9 @@ public class UserCommandHandler implements CommandHandler {
             PlatformSecurityContext security,
             PasswordEncoder passwordEncoder,
             PortalCustomerLinks portalLinks,
-            ObjectMapper mapper) {
+            ObjectMapper mapper,
+            SessionTokenService sessions) {
+        this.sessions = sessions;
         this.users = users;
         this.roles = roles;
         this.security = security;
@@ -130,6 +134,8 @@ public class UserCommandHandler implements CommandHandler {
         if (user.getRoles() != null) {
             user.getRoles().clear();
         }
+        // Their browser sessions go with them; the rows would otherwise block the delete.
+        sessions.forget(user);
         users.delete(user);
         return new CommandResult(user.getId(), idJson(user.getId()));
     }

@@ -1,6 +1,6 @@
 package com.nsure.ops;
 
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -26,47 +26,47 @@ class OpsApiTest {
     @Test
     void aPartnerSeesOnlyItsOwnRecordsAndStaffWorkOneQueue() throws Exception {
         // Each partner login is confined to its portal and its own scope.
-        mockMvc.perform(get("/ops/portal").with(httpBasic("lender", "password")))
+        mockMvc.perform(get("/ops/portal").with(signedIn("lender", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.portalType").value("LENDER"))
                 .andExpect(jsonPath("$.scopeRef").value("LND-0001"))
                 .andExpect(jsonPath("$.loans").isArray());
-        mockMvc.perform(get("/ops/portal").with(httpBasic("employer", "password")))
+        mockMvc.perform(get("/ops/portal").with(signedIn("employer", "password")))
                 .andExpect(jsonPath("$.portalType").value("EMPLOYER"))
                 .andExpect(jsonPath("$.members").isArray());
-        mockMvc.perform(get("/ops/portal").with(httpBasic("agent", "password")))
+        mockMvc.perform(get("/ops/portal").with(signedIn("agent", "password")))
                 .andExpect(jsonPath("$.portalType").value("AGENT"));
-        mockMvc.perform(get("/portfolio/claims").with(httpBasic("lender", "password"))).andExpect(status().isForbidden());
-        mockMvc.perform(get("/credit/loans").with(httpBasic("lender", "password"))).andExpect(status().isForbidden());
-        mockMvc.perform(get("/ops/queue").with(httpBasic("lender", "password"))).andExpect(status().isForbidden());
+        mockMvc.perform(get("/portfolio/claims").with(signedIn("lender", "password"))).andExpect(status().isForbidden());
+        mockMvc.perform(get("/credit/loans").with(signedIn("lender", "password"))).andExpect(status().isForbidden());
+        mockMvc.perform(get("/ops/queue").with(signedIn("lender", "password"))).andExpect(status().isForbidden());
 
         // A partner's request gets a reference and lands in the staff queue with an SLA.
-        String ref = JsonPath.read(mockMvc.perform(post("/ops/portal/requests").with(httpBasic("lender", "password"))
+        String ref = JsonPath.read(mockMvc.perform(post("/ops/portal/requests").with(signedIn("lender", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"requestType\":\"NEW_LOAN\",\"detail\":\"Loan LSH-9 for T Molefe, 80,000 over 24 months\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.ref");
         String key = "PORTAL_REQUEST:" + ref;
-        mockMvc.perform(get("/ops/queue").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/ops/queue").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.key == '" + key + "')].team").value("Operations"))
                 .andExpect(jsonPath("$[?(@.key == '" + key + "')].dueAt").isNotEmpty());
         // Ownership is taken once: a second person is told who has it.
-        mockMvc.perform(post("/ops/queue/claim").param("key", key).with(httpBasic("admin", "password"))).andExpect(status().isOk());
-        mockMvc.perform(post("/ops/queue/claim").param("key", key).with(httpBasic("secadmin", "password"))).andExpect(status().isConflict());
-        mockMvc.perform(post("/ops/portal-requests/" + ref + "/close").with(httpBasic("admin", "password"))
+        mockMvc.perform(post("/ops/queue/claim").param("key", key).with(signedIn("admin", "password"))).andExpect(status().isOk());
+        mockMvc.perform(post("/ops/queue/claim").param("key", key).with(signedIn("secadmin", "password"))).andExpect(status().isConflict());
+        mockMvc.perform(post("/ops/portal-requests/" + ref + "/close").with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"note\":\"Loan registered as LN-000009\"}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(get("/ops/portal").with(httpBasic("lender", "password")))
+        mockMvc.perform(get("/ops/portal").with(signedIn("lender", "password")))
                 .andExpect(jsonPath("$.requests[0].status").value("DONE"));
 
         // Definitions, the calendar, documents and payouts.
-        mockMvc.perform(put("/ops/workflow/definitions/UNDERWRITING").with(httpBasic("admin", "password"))
+        mockMvc.perform(put("/ops/workflow/definitions/UNDERWRITING").with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"slaHours\":24}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.definitions[?(@.code == 'UNDERWRITING')].versionNo").value(2));
-        mockMvc.perform(get("/ops/documents").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/ops/documents").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.retention['Policy document']").value(10));
-        mockMvc.perform(get("/ops/payouts").with(httpBasic("admin", "password"))).andExpect(status().isOk());
+        mockMvc.perform(get("/ops/payouts").with(signedIn("admin", "password"))).andExpect(status().isOk());
     }
 
     @Test

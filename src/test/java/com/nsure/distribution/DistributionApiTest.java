@@ -1,7 +1,7 @@
 package com.nsure.distribution;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -155,11 +155,11 @@ class DistributionApiTest {
 
         // Refused, and what was already assigned stays as it was.
         assign(later, agent).andExpect(status().isUnprocessableEntity());
-        mockMvc.perform(get("/distribution/assignments?intermediaryRef=" + agent).with(httpBasic("distribution", "password")))
+        mockMvc.perform(get("/distribution/assignments?intermediaryRef=" + agent).with(signedIn("distribution", "password")))
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].policyRef").value(kept))
                 .andExpect(jsonPath("$[0].open").value(true));
-        mockMvc.perform(get("/distribution/assignments?policyRef=" + later).with(httpBasic("distribution", "password")))
+        mockMvc.perform(get("/distribution/assignments?policyRef=" + later).with(signedIn("distribution", "password")))
                 .andExpect(jsonPath("$.length()").value(0));
         // The seeded suspended agent too.
         assign(later, "INT-00003").andExpect(status().isUnprocessableEntity());
@@ -200,7 +200,7 @@ class DistributionApiTest {
 
         assign(policy, broker).andExpect(status().isOk()).andExpect(jsonPath("$.open").value(true));
         assign(policy, broker).andExpect(status().isUnprocessableEntity());
-        mockMvc.perform(get("/distribution/assignments?policyRef=" + policy).with(httpBasic("distribution", "password")))
+        mockMvc.perform(get("/distribution/assignments?policyRef=" + policy).with(signedIn("distribution", "password")))
                 .andExpect(jsonPath("$.length()").value(2))
                 .andExpect(jsonPath("$[0].intermediaryRef").value(broker))
                 .andExpect(jsonPath("$[0].open").value(true))
@@ -243,12 +243,12 @@ class DistributionApiTest {
         mockMvc.perform(json(post("/distribution/statements"), "finance", issue))
                 .andExpect(status().isUnprocessableEntity());
 
-        mockMvc.perform(post("/distribution/statements/" + statement + "/pay").with(httpBasic("finance", "password")))
+        mockMvc.perform(post("/distribution/statements/" + statement + "/pay").with(signedIn("finance", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PAID"))
                 .andExpect(jsonPath("$.paidBy").value("finance"))
                 .andExpect(jsonPath("$.lines[0].status").value("PAID"));
-        mockMvc.perform(post("/distribution/statements/" + statement + "/pay").with(httpBasic("finance", "password")))
+        mockMvc.perform(post("/distribution/statements/" + statement + "/pay").with(signedIn("finance", "password")))
                 .andExpect(status().isConflict());
         Long paidEvents = tx.execute(s -> em.createQuery("select count(e) from OutboxEvent e where e.eventType = :type"
                         + " and e.aggregateRef = :ref", Long.class)
@@ -266,9 +266,9 @@ class DistributionApiTest {
                 .andReturn().getResponse().getContentAsString();
         assertAmount(JsonPath.read(negative, "$.netAmount"), accrued.negate());
         mockMvc.perform(post("/distribution/statements/" + JsonPath.read(negative, "$.ref") + "/pay")
-                        .with(httpBasic("finance", "password")))
+                        .with(signedIn("finance", "password")))
                 .andExpect(status().isUnprocessableEntity());
-        mockMvc.perform(get("/distribution/statements").with(httpBasic("distribution", "password")))
+        mockMvc.perform(get("/distribution/statements").with(signedIn("distribution", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.ref == '" + statement + "')].status").value("PAID"));
     }
@@ -289,7 +289,7 @@ class DistributionApiTest {
         mockMvc.perform(json(post("/distribution/commission-rules"), "distribution",
                         rule.replace("Individual Credit", "Space Cover")))
                 .andExpect(status().isUnprocessableEntity());
-        mockMvc.perform(get("/distribution/commission-rules").with(httpBasic("distribution", "password")))
+        mockMvc.perform(get("/distribution/commission-rules").with(signedIn("distribution", "password")))
                 .andExpect(jsonPath("$[?(@.product == 'Individual Credit' && @.intermediaryType == 'BROKER'"
                         + " && @.current == true)].effectiveFrom").value(today))
                 .andExpect(jsonPath("$[?(@.product == 'Individual Credit' && @.intermediaryType == 'BROKER'"
@@ -315,10 +315,10 @@ class DistributionApiTest {
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.parentName").value("Mokolodi Insurance Brokers"));
 
-        mockMvc.perform(get("/distribution/intermediaries").with(httpBasic("finance", "password")))
+        mockMvc.perform(get("/distribution/intermediaries").with(signedIn("finance", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.ref == 'INT-00003')].status").value("SUSPENDED"));
-        mockMvc.perform(get("/distribution/intermediaries").with(httpBasic("reinsurance", "password")))
+        mockMvc.perform(get("/distribution/intermediaries").with(signedIn("reinsurance", "password")))
                 .andExpect(status().isForbidden());
         mockMvc.perform(json(post("/distribution/intermediaries"), "finance", "{}"))
                 .andExpect(status().isForbidden());
@@ -356,9 +356,9 @@ class DistributionApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String customer = JsonPath.read(body, "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
-        String shop = mockMvc.perform(post("/portfolio/shop").with(httpBasic(username, "password1"))
+        String shop = mockMvc.perform(post("/portfolio/shop").with(signedIn(username, "password1"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"product\":\"" + product + "\",\"tier\":\"" + tier + "\"}"))
                 .andExpect(status().isOk())
@@ -386,7 +386,7 @@ class DistributionApiTest {
 
     private List<Map<String, Object>> commissions(String policy) throws Exception {
         String body = mockMvc.perform(get("/distribution/commissions?policyRef=" + policy)
-                        .with(httpBasic("distribution", "password")))
+                        .with(signedIn("distribution", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return JsonPath.read(body, "$");
@@ -409,6 +409,6 @@ class DistributionApiTest {
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

@@ -3,7 +3,7 @@ package com.nsure.servicing;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -56,7 +56,7 @@ class ServicingApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.route").value("APPLY"))
                 .andExpect(jsonPath("$.after").value("Payer: Kabelo Payer (Spouse)"));
-        mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policy.payerName").doesNotExist())
                 .andExpect(jsonPath("$.policy.contractStatus").value("Active"))
                 .andExpect(jsonPath("$.policy.coverStatus").value("In cover"))
@@ -64,7 +64,7 @@ class ServicingApiTest {
         mockMvc.perform(json(post(base + "/endorsements"), "admin", payer))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPLIED"));
-        mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policy.payerName").value("Kabelo Payer"));
         assertThat(events("PolicyChanged", policy)).isEqualTo(1);
 
@@ -80,7 +80,7 @@ class ServicingApiTest {
         String ref = JsonPath.read(mockMvc.perform(json(post(base + "/endorsements"), "admin", increase))
                 .andExpect(jsonPath("$.status").value("REFERRED_UNDERWRITING"))
                 .andReturn().getResponse().getContentAsString(), "$.ref");
-        mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policy.sumAssured").value(250000.0));
         String approve = "{\"approve\":true,\"note\":\"Within limits for this life\"}";
         mockMvc.perform(json(post("/servicing/endorsements/" + ref + "/decision"), "admin", approve))
@@ -88,7 +88,7 @@ class ServicingApiTest {
         mockMvc.perform(json(post("/servicing/endorsements/" + ref + "/decision"), "underwriter", approve))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPLIED"));
-        mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policy.sumAssured").value(500000.0))
                 .andExpect(jsonPath("$.policy.premium").value(420.0))
                 .andExpect(jsonPath("$.policy.tier").value("Silver"));
@@ -122,9 +122,9 @@ class ServicingApiTest {
                 .andExpect(jsonPath("$.status").value("IMPACT_REVIEW"))
                 .andExpect(jsonPath("$.holdReason").value(containsString("must be reviewed first")))
                 .andReturn().getResponse().getContentAsString(), "$.ref");
-        mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policy.premiumFrequency").value("MONTHLY"));
-        mockMvc.perform(get("/servicing/endorsements?status=HELD").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/servicing/endorsements?status=HELD").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.ref == '" + held + "')]").isNotEmpty());
     }
 
@@ -134,7 +134,7 @@ class ServicingApiTest {
                 ",\"lives\":[{\"relationship\":\"Spouse\",\"fullName\":\"Neo Family\",\"dateOfBirth\":\"" + LocalDate.now().minusYears(33) + "\"}]");
         dates(policy, LocalDate.now().minusDays(45), LocalDate.now().plusDays(1), LocalDate.now().plusDays(31));
         String base = "/servicing/policies/" + policy;
-        String view = mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        String view = mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.lives.length()").value(2))
                 .andReturn().getResponse().getContentAsString();
         Integer spouse = ((List<Integer>) JsonPath.read(view, "$.lives[?(@.relationship == 'Spouse')].id")).get(0);
@@ -148,7 +148,7 @@ class ServicingApiTest {
         mockMvc.perform(json(post(base + "/endorsements"), "admin", "{\"type\":\"REMOVE_LIFE\",\"lifeId\":" + main
                         + ",\"reason\":\"Remove the main insured\"}"))
                 .andExpect(status().isUnprocessableEntity());
-        mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.endorsements").isEmpty())
                 .andExpect(jsonPath("$.policy.premium").value(premium));
 
@@ -160,7 +160,7 @@ class ServicingApiTest {
                 .andReturn().getResponse().getContentAsString(), "$.ref");
         mockMvc.perform(json(post("/servicing/endorsements/" + add + "/decision"), "underwriter", "{\"approve\":true,\"note\":\"Eligible child\"}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.lives.length()").value(3))
                 .andExpect(jsonPath("$.lives[?(@.fullName == 'Tumo Family')].waitingPeriodStart").value(LocalDate.now().toString()))
                 .andExpect(jsonPath("$.lives[?(@.fullName == 'Tumo Family')].status").value("ACTIVE"));
@@ -171,7 +171,7 @@ class ServicingApiTest {
                         + ",\"reason\":\"Divorce finalised\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPLIED"));
-        mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.lives.length()").value(3))
                 .andExpect(jsonPath("$.lives[?(@.id == " + spouse + ")].status").value("CEASED"))
                 .andExpect(jsonPath("$.lives[?(@.id == " + spouse + ")].effectiveTo").value(LocalDate.now().toString()));
@@ -184,25 +184,25 @@ class ServicingApiTest {
                 .andReturn().getResponse().getContentAsString(), "$.ref");
         mockMvc.perform(json(post("/servicing/endorsements/" + again + "/decision"), "underwriter", "{\"approve\":true,\"note\":\"Previously covered\"}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.lives[?(@.fullName == 'Neo Family' && @.status == 'ACTIVE')].waitingPeriodStart")
                         .value(LocalDate.now().minusDays(45).toString()));
 
         // NS-IL04-005: a child nearing the review age gets a dated task; ceasing them reduces the premium.
         jdbc.update("update ins_policy_life_cover set date_of_birth = ? where full_name = 'Tumo Family'",
                 LocalDate.now().minusYears(21).plusDays(30));
-        mockMvc.perform(post("/servicing/life-reviews/run").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/servicing/life-reviews/run").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.created").value(1));
-        mockMvc.perform(post("/servicing/life-reviews/run").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/servicing/life-reviews/run").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.created").value(0));
-        Integer review = ((List<Integer>) JsonPath.read(mockMvc.perform(get("/servicing/life-reviews").with(httpBasic("admin", "password")))
+        Integer review = ((List<Integer>) JsonPath.read(mockMvc.perform(get("/servicing/life-reviews").with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString(), "$[?(@.lifeName == 'Tumo Family')].id")).get(0);
         mockMvc.perform(json(post("/servicing/life-reviews/" + review + "/close"), "admin",
                         "{\"outcome\":\"CEASE\",\"note\":\"No longer a student\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("CEASED"));
-        mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.lives[?(@.fullName == 'Tumo Family')].status").value("CEASED"));
     }
 
@@ -212,12 +212,12 @@ class ServicingApiTest {
         String base = "/servicing/policies/" + policy;
 
         // AT-IL03-03: no surrender rule, so no surrender value and no surrender action.
-        mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.benefitsOffered", hasItem("CASHBACK")))
                 .andExpect(jsonPath("$.surrenderOffered").value(false))
                 .andExpect(jsonPath("$.schedule[0].benefitType").value("CASHBACK"))
                 .andExpect(jsonPath("$.schedule[0].amount").value(2300.0));
-        mockMvc.perform(get(base + "/surrender-quote").with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base + "/surrender-quote").with(signedIn("admin", "password")))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(containsString("no approved surrender rule")));
         mockMvc.perform(json(post(base + "/surrender"), "admin", "{\"reason\":\"Customer asked\"}"))
@@ -225,11 +225,11 @@ class ServicingApiTest {
 
         // The cashback falls due after 36 months in force, once, and is paid through approval.
         dates(policy, LocalDate.now().minusMonths(37), LocalDate.now().plusDays(1), LocalDate.now().plusDays(31));
-        String ref = ((List<String>) JsonPath.read(mockMvc.perform(post("/servicing/benefit-events/run").with(httpBasic("admin", "password")))
+        String ref = ((List<String>) JsonPath.read(mockMvc.perform(post("/servicing/benefit-events/run").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.created").value(1))
                 .andReturn().getResponse().getContentAsString(), "$.refs")).get(0);
-        mockMvc.perform(post("/servicing/benefit-events/run").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/servicing/benefit-events/run").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.created").value(0));
         mockMvc.perform(json(post("/servicing/benefit-events/" + ref + "/payment"), "assessor", "{\"paymentReference\":\"EFT-1\"}"))
                 .andExpect(status().isConflict());
@@ -252,7 +252,7 @@ class ServicingApiTest {
         mockMvc.perform(json(put("/servicing/benefit-rules"), "admin", "{\"product\":\"Term Life\",\"benefitType\":\"SURRENDER\","
                         + "\"percent\":40,\"minMonths\":12,\"description\":\"40% of premiums paid after 12 months\"}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(get(base + "/surrender-quote").with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base + "/surrender-quote").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.value").value(92.0));
         String surrender = JsonPath.read(mockMvc.perform(json(post(base + "/surrender"), "admin", "{\"reason\":\"Customer emigrating\"}"))
@@ -262,7 +262,7 @@ class ServicingApiTest {
         mockMvc.perform(json(post("/servicing/benefit-events/" + surrender + "/decision"), "assessor",
                         "{\"approve\":true,\"note\":\"Signed surrender form received\"}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policy.contractStatus").value("Terminated"))
                 .andExpect(jsonPath("$.policy.terminationReason").value("SURRENDER"))
                 .andExpect(jsonPath("$.policy.coverStatus").value("Ended"));
@@ -273,7 +273,7 @@ class ServicingApiTest {
     @Test
     void aLatePremiumRestoresCoverOnlyWhereTheProductRulesAllowIt() throws Exception {
         String policy = activePolicy("Lorato Reinstate", "Whole of Life", "Bronze", "");
-        Integer rule = ((List<Integer>) JsonPath.read(mockMvc.perform(get("/servicing/rules").with(httpBasic("admin", "password")))
+        Integer rule = ((List<Integer>) JsonPath.read(mockMvc.perform(get("/servicing/rules").with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString(), "$[?(@.product == 'Whole of Life')].id")).get(0);
         mockMvc.perform(json(put("/servicing/rules/" + rule), "admin", "{\"reinstatementNeedsApproval\":true}"))
                 .andExpect(status().isOk())
@@ -285,10 +285,10 @@ class ServicingApiTest {
         // NS-IL03-004: the premium is received, but cover stays off until the reinstatement is approved.
         mockMvc.perform(json(post("/portfolio/policies/" + policy + "/payments"), "admin", "{\"method\":\"Orange Money\"}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(get("/servicing/policies/" + policy).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/servicing/policies/" + policy).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policy.contractStatus").value("Reinstatement Pending"))
                 .andExpect(jsonPath("$.policy.coverStatus").value("No cover"));
-        mockMvc.perform(get("/servicing/reinstatements").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/servicing/reinstatements").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.ref == '" + policy + "')]").isNotEmpty());
         mockMvc.perform(json(post("/servicing/policies/" + policy + "/reinstatement"), "support", "{\"approve\":true,\"note\":\"ok\"}"))
                 .andExpect(status().isForbidden());
@@ -316,7 +316,7 @@ class ServicingApiTest {
                                 + "\",\"email\":\"s" + Math.abs(name.hashCode()) + "@example.com\",\"phone\":\"+267 71 900 001\","
                                 + "\"dateOfBirth\":\"" + LocalDate.now().minusYears(36) + "\"}"))
                         .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         String policy = JsonPath.read(mockMvc.perform(json(post("/portfolio/policies"), "admin", "{\"customerRef\":\"" + customer
                                 + "\",\"product\":\"" + product + "\",\"tier\":\"" + tier + "\"" + extra + "}"))
@@ -349,6 +349,6 @@ class ServicingApiTest {
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

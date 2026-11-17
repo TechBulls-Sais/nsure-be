@@ -64,10 +64,8 @@ public class InstallationGuard implements SmartInitializingSingleton {
     }
 
     private void bootstrapAdministrator() {
-        if (bootstrapUsername == null || bootstrapUsername.isBlank()) {
-            return;
-        }
-        if (bootstrapPassword == null || bootstrapPassword.length() < 12) {
+        boolean configured = bootstrapUsername != null && !bootstrapUsername.isBlank();
+        if (configured && (bootstrapPassword == null || bootstrapPassword.length() < 12)) {
             throw new IllegalStateException("NSURE_BOOTSTRAP_ADMIN_PASSWORD must be at least 12 characters.");
         }
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
@@ -75,14 +73,23 @@ public class InstallationGuard implements SmartInitializingSingleton {
                 + " join app_role r on r.id = ur.role_id where r.name = 'Super Admin' and u.enabled = ?", Long.class,
                 Boolean.TRUE);
         if (admins != null && admins > 0) {
-            log.info("Bootstrap administrator skipped: an enabled Super Admin already exists");
+            if (configured) {
+                log.info("Bootstrap administrator skipped: an enabled Super Admin already exists");
+            }
+            return;
+        }
+        if (!configured) {
+            // A production installation has no default administrator (migration 079 locks the demo logins).
+            log.warn("No enabled Super Admin exists. Set NSURE_BOOTSTRAP_ADMIN_USERNAME and"
+                    + " NSURE_BOOTSTRAP_ADMIN_PASSWORD (12+ characters) for one start to create the first one.");
             return;
         }
         Long taken = jdbc.queryForObject("select count(*) from app_user where username = ?", Long.class,
                 bootstrapUsername);
         if (taken != null && taken > 0) {
             throw new IllegalStateException("Bootstrap user " + bootstrapUsername + " exists but is not an enabled"
-                    + " Super Admin; resolve it by hand rather than letting startup change it.");
+                    + " Super Admin (a locked demo login such as admin is one); choose another"
+                    + " NSURE_BOOTSTRAP_ADMIN_USERNAME, or resolve it by hand rather than letting startup change it.");
         }
         jdbc.update("insert into app_user (username, password, enabled) values (?, ?, ?)",
                 bootstrapUsername, passwords.encode(bootstrapPassword), Boolean.TRUE);

@@ -1,6 +1,6 @@
 package com.nsure.portfolio;
 
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -21,7 +21,7 @@ class ProductDetailsApiTest {
 
     @Test
     void productsCarryTheirCustomerFacingContent() throws Exception {
-        mockMvc.perform(get("/portfolio/products").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/products").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.name == 'Term Life')].need").value("family"))
                 .andExpect(jsonPath("$[?(@.name == 'Term Life')].needLabel").value("Family income"))
@@ -37,7 +37,7 @@ class ProductDetailsApiTest {
 
     @Test
     void customerShopReturnsTheSameProductContent() throws Exception {
-        mockMvc.perform(get("/portfolio/shop").with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/portfolio/shop").with(signedIn("customer", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.products[?(@.name == 'Individual Credit')].needIcon").value("Landmark"))
                 .andExpect(jsonPath("$.products[?(@.name == 'Individual Credit')].summary")

@@ -1,7 +1,7 @@
 package com.nsure;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -43,7 +43,7 @@ class RbacAndAuditIntegrationTest {
     void healthIsPublicAndApiRequiresAuthentication() throws Exception {
         mockMvc.perform(get("/actuator/health")).andExpect(status().isOk());
         mockMvc.perform(get("/roles")).andExpect(status().isUnauthorized());
-        mockMvc.perform(get("/roles").with(httpBasic("system", "nope"))).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/roles").with(signedIn("system", "nope"))).andExpect(status().isUnauthorized());
 
         AppUser system = users.findByUsername("system").orElseThrow();
         assertThat(system.getId()).isEqualTo(1L);
@@ -308,7 +308,7 @@ class RbacAndAuditIntegrationTest {
 
     private JsonNode send(String username, MockHttpServletRequestBuilder request, int expectedStatus) throws Exception {
         MvcResult result = mockMvc.perform(request
-                        .with(httpBasic(username, "password"))
+                        .with(signedIn(username, "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().is(expectedStatus))

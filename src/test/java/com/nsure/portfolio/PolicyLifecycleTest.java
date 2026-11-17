@@ -2,7 +2,7 @@ package com.nsure.portfolio;
 
 import static com.nsure.portfolio.PolicyWorkflowApiTest.json;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -60,7 +60,7 @@ class PolicyLifecycleTest {
         assertThat(statusOf(policy)).isEqualTo(PolicyWorkflow.ACTIVE);
         // TC-18: the original cover start stands, so waiting periods are not restarted.
         assertThat(coverStart(policy)).isEqualTo(start);
-        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Cover Ended')]").isNotEmpty());
     }
 
@@ -71,7 +71,7 @@ class PolicyLifecycleTest {
         // A sweep that catches up after downtime moves through both steps: cover ended, then the 3-month window.
         tx.execute(s -> policies.lapseOverdue());
         assertThat(statusOf(policy)).isEqualTo(PolicyWorkflow.LAPSED);
-        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Cover Ended')]").isNotEmpty())
                 .andExpect(jsonPath("$[?(@.action == 'Lapsed')]").isNotEmpty());
         // TC-21: a premium after lapse does not reinstate.
@@ -86,7 +86,7 @@ class PolicyLifecycleTest {
                         "{\"reason\":\"Customer asked in writing\"}"))
                 .andExpect(status().isOk());
         assertThat(statusOf(policy)).isEqualTo(PolicyWorkflow.CANCELLED);
-        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Cancelled')].details").value(org.hamcrest.Matchers.hasItem(
                         org.hamcrest.Matchers.startsWith("Cooling-off cancellation"))));
     }
@@ -117,7 +117,7 @@ class PolicyLifecycleTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         mockMvc.perform(post("/portfolio/customers/" + JsonPath.read(customer, "$.id") + "/kyc")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         String body = mockMvc.perform(json(post("/portfolio/policies"), "admin",
                         "{\"name\":\"" + name + "\",\"product\":\"Term Life\",\"amount\":20000,\"premium\":50}"))

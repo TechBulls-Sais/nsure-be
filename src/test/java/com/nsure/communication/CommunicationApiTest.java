@@ -2,7 +2,7 @@ package com.nsure.communication;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -109,7 +109,7 @@ class CommunicationApiTest {
         }
         assertThat(messagesFor(policy)).hasSize(3);
 
-        mockMvc.perform(post("/communications/dispatch").with(httpBasic("service", "password")))
+        mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.delivered").isNumber());
         messages = messagesFor(policy);
@@ -117,7 +117,7 @@ class CommunicationApiTest {
         assertThat((String) one(messages, "POLICY_ISSUED_EMAIL").get("providerMessageId")).startsWith("EML-");
         assertThat(one(messages, "PREMIUM_RECEIVED_EMAIL").get("status")).isEqualTo("DELIVERED");
         assertThat(one(messages, "POLICY_ISSUED_WHATSAPP").get("status")).isEqualTo("SUPPRESSED");
-        mockMvc.perform(post("/communications/dispatch").with(httpBasic("service", "password")))
+        mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
                 .andExpect(status().isOk());
         assertThat(messagesFor(policy)).hasSize(3);
     }
@@ -125,7 +125,7 @@ class CommunicationApiTest {
     @Test
     void anOptOutSuppressesTheChannelAndAnOptInSendsIt() throws Exception {
         String ref = customer("Boitumelo Sebina", "boitumelo", "+267 71 555 127");
-        mockMvc.perform(get("/communications/preferences/" + ref).with(httpBasic("ops", "password")))
+        mockMvc.perform(get("/communications/preferences/" + ref).with(signedIn("ops", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.channels[0].channel").value("EMAIL"))
                 .andExpect(jsonPath("$.channels[0].status").value("OPTED_IN"))
@@ -164,7 +164,7 @@ class CommunicationApiTest {
         assertThat(one(messages, "PREMIUM_RECEIVED_EMAIL").get("status")).isEqualTo("SUPPRESSED");
         assertThat(one(messages, "POLICY_ISSUED_WHATSAPP").get("status")).isEqualTo("QUEUED");
 
-        mockMvc.perform(post("/communications/dispatch").with(httpBasic("service", "password")))
+        mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
                 .andExpect(status().isOk());
         messages = messagesFor(policy);
         assertThat(one(messages, "POLICY_ISSUED_WHATSAPP").get("status")).isEqualTo("DELIVERED");
@@ -200,10 +200,10 @@ class CommunicationApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("QUEUED"));
 
-        mockMvc.perform(get("/communications/messages?status=SUPPRESSED").with(httpBasic("ops", "password")))
+        mockMvc.perform(get("/communications/messages?status=SUPPRESSED").with(signedIn("ops", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].status").value("SUPPRESSED"));
-        mockMvc.perform(get("/communications/messages").with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/communications/messages").with(signedIn("customer", "password")))
                 .andExpect(status().isForbidden());
     }
 
@@ -217,7 +217,7 @@ class CommunicationApiTest {
         Number id = (Number) email.get("id");
 
         for (int attempt = 1; attempt <= 3; attempt++) {
-            mockMvc.perform(post("/communications/dispatch").with(httpBasic("service", "password")))
+            mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
                     .andExpect(status().isOk());
             email = one(messagesFor(policy), "POLICY_ISSUED_EMAIL");
             assertThat(email.get("attempts")).isEqualTo(attempt);
@@ -225,21 +225,21 @@ class CommunicationApiTest {
         }
         assertThat((String) email.get("lastError")).contains("rejected").contains("attempt 3 of 3");
 
-        mockMvc.perform(get("/communications/messages?status=FAILED").with(httpBasic("service", "password")))
+        mockMvc.perform(get("/communications/messages?status=FAILED").with(signedIn("service", "password")))
                 .andExpect(jsonPath("$[?(@.id == " + id + ")].status").value("FAILED"));
-        mockMvc.perform(post("/communications/messages/" + id + "/retry").with(httpBasic("ops", "password")))
+        mockMvc.perform(post("/communications/messages/" + id + "/retry").with(signedIn("ops", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/communications/messages/" + id + "/retry").with(httpBasic("service", "password")))
+        mockMvc.perform(post("/communications/messages/" + id + "/retry").with(signedIn("service", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("QUEUED"))
                 .andExpect(jsonPath("$.attempts").value(0));
-        mockMvc.perform(post("/communications/messages/" + id + "/retry").with(httpBasic("service", "password")))
+        mockMvc.perform(post("/communications/messages/" + id + "/retry").with(signedIn("service", "password")))
                 .andExpect(status().isUnprocessableEntity());
     }
 
     @Test
     void aTemplateVersionIsApprovedByAnotherUser() throws Exception {
-        mockMvc.perform(get("/communications/templates").with(httpBasic("ops", "password")))
+        mockMvc.perform(get("/communications/templates").with(signedIn("ops", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.code == 'POLICY_ISSUED_EMAIL' && @.version == 1)].status").value("APPROVED"))
                 .andExpect(jsonPath("$[?(@.code == 'SERVICE_CASE_OPENED_EMAIL')].approvedBy").value("system"));
@@ -257,7 +257,7 @@ class CommunicationApiTest {
         Number draft = JsonPath.read(body, "$.id");
 
         // Service may draft but not approve; ops (APPROVE_TEMPLATE) may not draft.
-        mockMvc.perform(post("/communications/templates/" + draft + "/approve").with(httpBasic("service", "password")))
+        mockMvc.perform(post("/communications/templates/" + draft + "/approve").with(signedIn("service", "password")))
                 .andExpect(status().isForbidden());
         mockMvc.perform(json(post("/communications/templates"), "ops",
                         "{\"code\":\"OPS_DRAFT\",\"eventType\":\"ClaimPaid\",\"channel\":\"EMAIL\",\"subject\":\"x\",\"body\":\"y\"}"))
@@ -272,9 +272,9 @@ class CommunicationApiTest {
                 .andExpect(jsonPath("$.version").value(1))
                 .andReturn().getResponse().getContentAsString();
         Number ownId = JsonPath.read(own, "$.id");
-        mockMvc.perform(post("/communications/templates/" + ownId + "/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/communications/templates/" + ownId + "/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/communications/templates/" + ownId + "/approve").with(httpBasic("secadmin", "password")))
+        mockMvc.perform(post("/communications/templates/" + ownId + "/approve").with(signedIn("secadmin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPROVED"))
                 .andExpect(jsonPath("$.approvedBy").value("secadmin"));
@@ -286,18 +286,18 @@ class CommunicationApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         Number badId = JsonPath.read(bad, "$.id");
-        mockMvc.perform(post("/communications/templates/" + badId + "/approve").with(httpBasic("ops", "password")))
+        mockMvc.perform(post("/communications/templates/" + badId + "/approve").with(signedIn("ops", "password")))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(containsString("{{nationalId}}")));
 
-        mockMvc.perform(post("/communications/templates/" + draft + "/approve").with(httpBasic("ops", "password")))
+        mockMvc.perform(post("/communications/templates/" + draft + "/approve").with(signedIn("ops", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPROVED"))
                 .andExpect(jsonPath("$.approvedBy").value("ops"));
-        mockMvc.perform(get("/communications/templates").with(httpBasic("service", "password")))
+        mockMvc.perform(get("/communications/templates").with(signedIn("service", "password")))
                 .andExpect(jsonPath("$[?(@.code == 'POLICY_ISSUED_EMAIL' && @.version == 1)].status").value("RETIRED"))
                 .andExpect(jsonPath("$[?(@.code == 'POLICY_ISSUED_EMAIL' && @.version == 2)].status").value("APPROVED"));
-        mockMvc.perform(post("/communications/templates/" + draft + "/approve").with(httpBasic("ops", "password")))
+        mockMvc.perform(post("/communications/templates/" + draft + "/approve").with(signedIn("ops", "password")))
                 .andExpect(status().isUnprocessableEntity());
 
         // A new version keeps its event and channel.
@@ -319,7 +319,7 @@ class CommunicationApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String ref = JsonPath.read(body, "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         return ref;
     }
@@ -339,7 +339,7 @@ class CommunicationApiTest {
     }
 
     private List<Map<String, Object>> messagesFor(String businessRef) throws Exception {
-        String body = mockMvc.perform(get("/communications/messages").with(httpBasic("service", "password")))
+        String body = mockMvc.perform(get("/communications/messages").with(signedIn("service", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return JsonPath.read(body, "$[?(@.businessRef == '" + businessRef + "')]");
@@ -368,7 +368,7 @@ class CommunicationApiTest {
         String ref = customer("Kagiso Rapula", "kagisor");
         String policy = buyAndPay("kagisor");
         outbox.dispatch();
-        mockMvc.perform(post("/communications/dispatch").with(httpBasic("service", "password")))
+        mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
                 .andExpect(status().isOk());
         Map<String, Object> issued = one(messagesFor(policy), "POLICY_ISSUED_EMAIL");
         assertThat(issued.get("status")).isEqualTo("DELIVERED");
@@ -409,10 +409,10 @@ class CommunicationApiTest {
                 .andExpect(jsonPath("$.status").value("TRIAGE"))
                 .andReturn().getResponse().getContentAsString();
         // The unfiltered list ("All" in the UI) returns every inbound message.
-        mockMvc.perform(get("/communications/inbound").with(httpBasic("ops", "password")))
+        mockMvc.perform(get("/communications/inbound").with(signedIn("ops", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(3)));
-        String triage = mockMvc.perform(get("/communications/inbound?status=TRIAGE").with(httpBasic("ops", "password")))
+        String triage = mockMvc.perform(get("/communications/inbound?status=TRIAGE").with(signedIn("ops", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         Integer triageId = JsonPath.<List<Integer>>read(triage, "$[*].id").get(0);
@@ -427,7 +427,7 @@ class CommunicationApiTest {
                 .andExpect(status().isConflict());
 
         // A bulk operational notice is requested by one person and released by another.
-        String templates = mockMvc.perform(get("/communications/templates").with(httpBasic("ops", "password")))
+        String templates = mockMvc.perform(get("/communications/templates").with(signedIn("ops", "password")))
                 .andReturn().getResponse().getContentAsString();
         Integer notice = JsonPath.<List<Integer>>read(templates, "$[?(@.code == 'SERVICE_NOTICE_EMAIL')].id").get(0);
         String requested = mockMvc.perform(json(post("/communications/bulk-notices"), "admin", "{\"templateId\":" + notice
@@ -437,9 +437,9 @@ class CommunicationApiTest {
                 .andReturn().getResponse().getContentAsString();
         String noticeRef = JsonPath.read(requested, "$.ref");
         assertThat((Integer) JsonPath.read(requested, "$.recipients")).isPositive();
-        mockMvc.perform(post("/communications/bulk-notices/" + noticeRef + "/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/communications/bulk-notices/" + noticeRef + "/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/communications/bulk-notices/" + noticeRef + "/approve").with(httpBasic("ops", "password")))
+        mockMvc.perform(post("/communications/bulk-notices/" + noticeRef + "/approve").with(signedIn("ops", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("SENT"))
                 .andExpect(jsonPath("$.decidedBy").value("ops"));
@@ -450,10 +450,10 @@ class CommunicationApiTest {
         // Scheduled premium reminders: one per policy and due date, however often the sweep runs.
         String due = java.time.LocalDate.now().plusDays(3).toString();
         jdbc.update("update ins_policy set next_premium_due = ? where record_ref = ?", java.sql.Date.valueOf(due), policy);
-        mockMvc.perform(post("/communications/reminders/run").with(httpBasic("service", "password")))
+        mockMvc.perform(post("/communications/reminders/run").with(signedIn("service", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.published").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)));
-        mockMvc.perform(post("/communications/reminders/run").with(httpBasic("service", "password")))
+        mockMvc.perform(post("/communications/reminders/run").with(signedIn("service", "password")))
                 .andExpect(jsonPath("$.published").value(0));
         outbox.dispatch();
         assertThat(one(messagesFor(policy + "@" + due), "PREMIUM_DUE_EMAIL").get("subject").toString())
@@ -468,6 +468,6 @@ class CommunicationApiTest {
 
     static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
         String password = List.of("admin", "service", "ops", "customer").contains(user) ? "password" : "password1";
-        return request.with(httpBasic(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

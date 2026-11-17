@@ -2,7 +2,7 @@ package com.nsure.platform;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -34,7 +34,7 @@ class PlatformServicesApiTest {
         String policy = JsonPath.read(mockMvc.perform(json(post("/portfolio/policies"), "admin", "{\"customerRef\":\"" + b
                         + "\",\"product\":\"Term Life\",\"tier\":\"Bronze\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
-        mockMvc.perform(get("/platform/parties/duplicates").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/platform/parties/duplicates").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.first.ref == '" + a + "' && @.second.ref == '" + b + "')].confidence").value(hasItem("LIKELY")));
         mockMvc.perform(json(post("/platform/parties/merges"), "admin", "{\"survivingRef\":\"" + a + "\",\"mergedRef\":\"" + b + "\",\"reason\":\"ok\"}"))
                 .andExpect(status().isUnprocessableEntity());
@@ -42,9 +42,9 @@ class PlatformServicesApiTest {
                         + "\",\"reason\":\"Same person captured twice at the branch\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.recordsMoved").value(1));
-        mockMvc.perform(get("/servicing/policies/" + policy).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/servicing/policies/" + policy).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policy.customerRef").value(a));
-        mockMvc.perform(get("/platform/parties/merges").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/platform/parties/merges").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[0].mergedRef").value(b));
     }
 
@@ -53,16 +53,16 @@ class PlatformServicesApiTest {
         String ref = JsonPath.read(mockMvc.perform(json(post("/platform/wordings"), "admin",
                         "{\"product\":\"Term Life\",\"clauseType\":\"EXCLUSION\",\"title\":\"War risks\",\"body\":\"No benefit is payable for death caused by war.\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.ref");
-        mockMvc.perform(post("/platform/wordings/" + ref + "/versions/1/approval").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/platform/wordings/" + ref + "/versions/1/approval").with(signedIn("admin", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/platform/wordings/" + ref + "/versions/1/approval").with(httpBasic("secadmin", "password")))
+        mockMvc.perform(post("/platform/wordings/" + ref + "/versions/1/approval").with(signedIn("secadmin", "password")))
                 .andExpect(status().isOk());
 
         mockMvc.perform(json(post("/platform/extracts"), "admin", "{\"extractType\":\"POLICIES\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.checksum").isNotEmpty())
                 .andExpect(jsonPath("$.recordCount").value(org.hamcrest.Matchers.greaterThan(0)));
-        mockMvc.perform(get("/platform/metrics").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/platform/metrics").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.name == 'Persistency (13-month)')]").isNotEmpty());
 
         String customer = customer("Bonolo Assist", "assist@example.com");
@@ -80,7 +80,7 @@ class PlatformServicesApiTest {
                         "{\"customerRef\":\"" + customer + "\",\"purpose\":\"PREMIUM_REMINDER\"}"))
                 .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(put("/platform/assistants/DRAFT_MESSAGE"), "admin", "{\"enabled\":true}")).andExpect(status().isOk());
-        mockMvc.perform(post("/platform/assistants/risk-indicators/" + customer).with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/platform/assistants/risk-indicators/" + customer).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.output[0]").value(containsString("Lapse indicator")));
     }
 
@@ -92,6 +92,6 @@ class PlatformServicesApiTest {
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

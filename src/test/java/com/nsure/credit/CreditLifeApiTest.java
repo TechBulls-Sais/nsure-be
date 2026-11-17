@@ -2,7 +2,7 @@ package com.nsure.credit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -65,7 +65,7 @@ class CreditLifeApiTest {
         assertThat(events("LoanDisbursed", ref)).isEqualTo(1);
         mockMvc.perform(json(post("/portfolio/policies/" + policy + "/payments"), "admin", "{\"method\":\"Bank EFT\"}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(get("/credit/loans/" + ref).with(httpBasic("credit", "password")))
+        mockMvc.perform(get("/credit/loans/" + ref).with(signedIn("credit", "password")))
                 .andExpect(jsonPath("$.loan.status").value("COVER_ACTIVE"))
                 .andExpect(jsonPath("$.loan.coverStart").value(LocalDate.now().toString()))
                 .andExpect(jsonPath("$.loan.coverEnd").value(LocalDate.now().plusMonths(36).toString()));
@@ -130,14 +130,14 @@ class CreditLifeApiTest {
         String[] active = activeLoan("Tshepo Claim", "LSH-3001", 120000, 36, "REGULAR", LocalDate.now().minusDays(200));
         String ref = active[0];
         // AT-IL05-03: the only balance is 200 days old, so the claim goes to manual resolution.
-        mockMvc.perform(get("/credit/loans/" + ref + "/claim-assessment").with(httpBasic("credit", "password")))
+        mockMvc.perform(get("/credit/loans/" + ref + "/claim-assessment").with(signedIn("credit", "password")))
                 .andExpect(jsonPath("$.manualResolution").value(true))
                 .andExpect(jsonPath("$.lenderAmount").doesNotExist());
         String claim = "{\"eventDate\":\"" + LocalDate.now() + "\",\"claimRef\":\"CLM-9001\",\"payeeVerified\":true}";
         mockMvc.perform(json(post("/credit/loans/" + ref + "/claim"), "credit", claim))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(containsString("manual resolution")));
-        mockMvc.perform(get("/credit/loans/" + ref).with(httpBasic("credit", "password")))
+        mockMvc.perform(get("/credit/loans/" + ref).with(signedIn("credit", "password")))
                 .andExpect(jsonPath("$.loan.status").value("COVER_ACTIVE"))
                 .andExpect(jsonPath("$.loan.balanceException").value(containsString("needs a confirmed balance")));
 
@@ -161,7 +161,7 @@ class CreditLifeApiTest {
         String[] active = activeLoan("Lebogang Settle", "LSH-4001", 120000, 36, "SINGLE", LocalDate.now());
         String ref = active[0];
         String policy = active[1];
-        mockMvc.perform(get("/credit/loans/" + ref + "/settlement-preview").with(httpBasic("credit", "password")))
+        mockMvc.perform(get("/credit/loans/" + ref + "/settlement-preview").with(signedIn("credit", "password")))
                 .andExpect(jsonPath("$.monthsRemaining").value(36))
                 .andExpect(jsonPath("$.refund").value(3304.8));
         String settle = "{\"settlementReference\":\"SET-4001\",\"settlementDate\":\"" + LocalDate.now() + "\"}";
@@ -180,11 +180,11 @@ class CreditLifeApiTest {
         assertThat(jdbc.queryForObject("select count(*) from crd_refund where loan_ref = ?", Long.class, ref)).isEqualTo(1);
         assertThat(events("LoanSettled", ref)).isEqualTo(1);
         assertThat(events("CreditCoverTerminated", ref)).isEqualTo(1);
-        mockMvc.perform(get("/servicing/policies/" + policy).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/servicing/policies/" + policy).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policy.contractStatus").value("Terminated"))
                 .andExpect(jsonPath("$.policy.terminationReason").value("LOAN_SETTLED"));
 
-        String refund = JsonPath.read(mockMvc.perform(get("/credit/refunds").with(httpBasic("credit", "password")))
+        String refund = JsonPath.read(mockMvc.perform(get("/credit/refunds").with(signedIn("credit", "password")))
                 .andReturn().getResponse().getContentAsString(), "$[0].ref");
         mockMvc.perform(json(post("/credit/refunds/" + refund + "/payment"), "credit", "{\"paymentReference\":\"EFT-1\"}"))
                 .andExpect(status().isForbidden());
@@ -202,7 +202,7 @@ class CreditLifeApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.refinancedFrom").value(old[0]))
                 .andExpect(jsonPath("$.status").value("QUOTED"));
-        mockMvc.perform(get("/credit/loans/" + old[0]).with(httpBasic("credit", "password")))
+        mockMvc.perform(get("/credit/loans/" + old[0]).with(signedIn("credit", "password")))
                 .andExpect(jsonPath("$.loan.status").value("SETTLED"));
     }
 
@@ -238,12 +238,12 @@ class CreditLifeApiTest {
                                 + "\",\"email\":\"c" + Math.abs(name.hashCode()) + "@example.com\",\"phone\":\"+267 71 950 001\","
                                 + "\"dateOfBirth\":\"" + LocalDate.now().minusYears(age).minusDays(10) + "\"}"))
                         .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         return ref;
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

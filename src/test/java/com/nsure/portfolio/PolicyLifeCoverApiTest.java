@@ -1,6 +1,6 @@
 package com.nsure.portfolio;
 
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -34,7 +34,7 @@ class PolicyLifeCoverApiTest {
 
         // Main insured 30-34: 7.00 x 2.5; spouse 30-34: 5.60 x 2.5; child 0-4: 1.05 x 2.5 on BWP 5,000 cover.
         mockMvc.perform(post("/portfolio/quote")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Kagiso Sebina\",\"product\":\"Family Funeral\",\"tier\":\"Bronze\"," + family + "}"))
                 .andExpect(status().isOk())
@@ -53,7 +53,7 @@ class PolicyLifeCoverApiTest {
 
         // Saving re-prices on the server (R-18): the client's premium of 1 is ignored.
         mockMvc.perform(post("/portfolio/policies")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Kagiso Sebina\",\"product\":\"Family Funeral\",\"tier\":\"Bronze\","
                                 + "\"amount\":1,\"premium\":1," + family + "}"))
@@ -67,7 +67,7 @@ class PolicyLifeCoverApiTest {
                 .andExpect(jsonPath("$.lives[1].dateOfBirth").value(birthday(31).toString()));
 
         // The lives are stored with the policy, not recomputed: they come back on the list too.
-        mockMvc.perform(get("/portfolio/policies").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.name == 'Kagiso Sebina')].lives.length()").value(3))
                 .andExpect(jsonPath("$[?(@.name == 'Kagiso Sebina')].premium").value(34.13));
@@ -84,7 +84,7 @@ class PolicyLifeCoverApiTest {
                 life("Child", "Thato Tau", 8),
                 "{\"relationship\":\"Spouse\",\"fullName\":\"Boitumelo Tau\"}");
         mockMvc.perform(post("/portfolio/applications")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Lesego Tau\",\"product\":\"Family Funeral\",\"tier\":\"Bronze\"," + lives + "}"))
                 .andExpect(status().isUnprocessableEntity())
@@ -98,7 +98,7 @@ class PolicyLifeCoverApiTest {
                         "The Bronze plan covers at most 3 Child lives; 4 were added.")));
 
         // Nothing was saved by the refused request.
-        mockMvc.perform(get("/portfolio/applications").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/applications").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.name == 'Lesego Tau')]").isEmpty());
     }
 
@@ -106,7 +106,7 @@ class PolicyLifeCoverApiTest {
     void theMainInsuredIsTheCustomerAndFlatPlansTakeNoLives() throws Exception {
         verifiedCustomer("Masego Pule", null, 45);
         mockMvc.perform(post("/portfolio/applications")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Masego Pule\",\"product\":\"Family Funeral\",\"tier\":\"Silver\","
                                 + lives(life("Main Insured", "Someone Else", 20)) + "}"))
@@ -114,7 +114,7 @@ class PolicyLifeCoverApiTest {
                 .andExpect(jsonPath("$.message").value("The customer is the Main Insured; add only the other lives to cover."));
 
         mockMvc.perform(post("/portfolio/applications")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Masego Pule\",\"product\":\"Term Life\",\"tier\":\"Silver\","
                                 + lives(life("Spouse", "Kitso Pule", 44)) + "}"))
@@ -123,7 +123,7 @@ class PolicyLifeCoverApiTest {
 
         // Credit life rates the borrower only: a spouse is not in the plan's life assured rules.
         mockMvc.perform(post("/portfolio/quote")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Masego Pule\",\"product\":\"Individual Credit\",\"tier\":\"Bronze\","
                                 + lives(life("Spouse", "Kitso Pule", 44)) + "}"))
@@ -133,7 +133,7 @@ class PolicyLifeCoverApiTest {
 
         // No lives on a rated plan still prices the main insured alone (45-49 on Silver: 18.10 x 5).
         mockMvc.perform(post("/portfolio/applications")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Masego Pule\",\"product\":\"Family Funeral\",\"tier\":\"Silver\"}"))
                 .andExpect(status().isOk())
@@ -142,7 +142,7 @@ class PolicyLifeCoverApiTest {
 
         // A flat tier quotes its fixed premium and stores no lives.
         mockMvc.perform(post("/portfolio/quote")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Masego Pule\",\"product\":\"Term Life\",\"tier\":\"Silver\"}"))
                 .andExpect(status().isOk())
@@ -157,7 +157,7 @@ class PolicyLifeCoverApiTest {
 
         // Gold is BWP 100,000 (x10): main 25-29 60.00, spouse 25-29 31.00, child 5-9 12.00.
         mockMvc.perform(post("/portfolio/shop/quote")
-                        .with(httpBasic("goitse", "password1"))
+                        .with(signedIn("goitse", "password1"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"product\":\"Family Funeral\",\"tier\":\"Gold\"," + family + "}"))
                 .andExpect(status().isOk())
@@ -165,7 +165,7 @@ class PolicyLifeCoverApiTest {
                 .andExpect(jsonPath("$.premium").value(103.0));
 
         mockMvc.perform(post("/portfolio/shop")
-                        .with(httpBasic("goitse", "password1"))
+                        .with(signedIn("goitse", "password1"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"product\":\"Family Funeral\",\"tier\":\"Gold\"," + family + "}"))
                 .andExpect(status().isOk())
@@ -174,7 +174,7 @@ class PolicyLifeCoverApiTest {
                 .andExpect(jsonPath("$.requests[0].lives.length()").value(3));
 
         // The tier cards carry the rules that drive the "add a life" screen.
-        mockMvc.perform(get("/portfolio/shop").with(httpBasic("goitse", "password1")))
+        mockMvc.perform(get("/portfolio/shop").with(signedIn("goitse", "password1")))
                 .andExpect(jsonPath("$.products[?(@.name == 'Family Funeral')].tiers[?(@.name == 'Gold')].lives[1].lifeType")
                         .value("Spouse"))
                 .andExpect(jsonPath("$.products[?(@.name == 'Family Funeral')].tiers[?(@.name == 'Gold')].lives[2].maxAge")
@@ -182,7 +182,7 @@ class PolicyLifeCoverApiTest {
 
         // A customer cannot quote for someone else through the staff endpoint.
         mockMvc.perform(post("/portfolio/quote")
-                        .with(httpBasic("goitse", "password1"))
+                        .with(signedIn("goitse", "password1"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"Kagiso Sebina\",\"product\":\"Family Funeral\",\"tier\":\"Bronze\"}"))
                 .andExpect(status().isForbidden());
@@ -192,7 +192,7 @@ class PolicyLifeCoverApiTest {
     private String verifiedCustomer(String name, String username, int age) throws Exception {
         String login = username == null ? "" : ",\"username\":\"" + username + "\",\"password\":\"password1\"";
         String body = mockMvc.perform(post("/portfolio/customers")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"name\":\"" + name + "\",\"email\":\"" + name.replace(' ', '.').toLowerCase()
                                 + "@example.com\",\"phone\":\"+267 71 000 000\",\"dateOfBirth\":\"" + birthday(age) + "\""
@@ -200,7 +200,7 @@ class PolicyLifeCoverApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String ref = JsonPath.read(body, "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         return ref;
     }

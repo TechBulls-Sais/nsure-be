@@ -2,7 +2,7 @@ package com.nsure.underwriting;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -35,7 +35,7 @@ class UnderwritingApiTest {
         String customer = customer("Kagiso Clean", "+267 71 800 001");
         String app = apply(customer, "Family Funeral", "Bronze", "NO", "NO", "Ready to issue");
 
-        mockMvc.perform(get("/underwriting/applications/" + app).with(httpBasic("underwriter", "password")))
+        mockMvc.perform(get("/underwriting/applications/" + app).with(signedIn("underwriter", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.underwritingCase.status").value("ACCEPTED"))
                 .andExpect(jsonPath("$.underwritingCase.decision").value("ACCEPT_STANDARD"))
@@ -55,7 +55,7 @@ class UnderwritingApiTest {
         String app = apply(customer, "Term Life", "Bronze", "YES", "NO", "Under review");
         String issue = issue(app, customer, "Term Life", "Bronze");
         String ref = JsonPath.read(mockMvc.perform(get("/underwriting/applications/" + app)
-                        .with(httpBasic("underwriter", "password")))
+                        .with(signedIn("underwriter", "password")))
                 .andExpect(jsonPath("$.underwritingCase.status").value("REFERRED"))
                 .andExpect(jsonPath("$.underwritingCase.referralReasons[0]").value(containsString("Tobacco")))
                 .andReturn().getResponse().getContentAsString(), "$.underwritingCase.ref");
@@ -77,7 +77,7 @@ class UnderwritingApiTest {
                 .andExpect(jsonPath("$.underwritingCase.offerVersion").value(1))
                 .andExpect(jsonPath("$.underwritingCase.offerPremium").value(287.5));
         assertThat(events("OfferRevised", ref)).isEqualTo(1);
-        mockMvc.perform(get("/portfolio/applications").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/applications").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + app + "')].status").value("Offered"));
         mockMvc.perform(json(post("/portfolio/policies"), "admin", issue))
                 .andExpect(status().isUnprocessableEntity())
@@ -131,7 +131,7 @@ class UnderwritingApiTest {
                             "{\"decision\":\"ACCEPT_STANDARD\",\"reason\":\"Acceptable risk on the evidence held.\"}"))
                     .andExpect(status().isForbidden())
                     .andExpect(jsonPath("$.message").value(containsString("above your underwriting authority")));
-            mockMvc.perform(get("/underwriting/cases/" + ref).with(httpBasic("underwriter", "password")))
+            mockMvc.perform(get("/underwriting/cases/" + ref).with(signedIn("underwriter", "password")))
                     .andExpect(jsonPath("$.underwritingCase.status").value("REFERRED"))
                     .andExpect(jsonPath("$.underwritingCase.withinMyAuthority").value(false));
         } finally {
@@ -159,7 +159,7 @@ class UnderwritingApiTest {
         String customer = customer("Lesedi Treatment", "+267 71 800 004");
         String app = apply(customer, "Term Life", "Bronze", "NO", "YES", "Under review");
         String ref = caseRef(app);
-        String body = mockMvc.perform(get("/underwriting/cases/" + ref).with(httpBasic("underwriter", "password")))
+        String body = mockMvc.perform(get("/underwriting/cases/" + ref).with(signedIn("underwriter", "password")))
                 .andExpect(jsonPath("$.underwritingCase.status").value("EVIDENCE_PENDING"))
                 .andExpect(jsonPath("$.evidence[0].requirement").value("Attending doctor's report"))
                 .andExpect(jsonPath("$.evidence[0].restricted").value(true))
@@ -178,7 +178,7 @@ class UnderwritingApiTest {
                 .andExpect(jsonPath("$.evidence[0].note").value(containsString("no recurrence")));
 
         // AT-IL02-03: someone who is not an underwriter sees the request and its status, never the clinical note.
-        mockMvc.perform(get("/underwriting/cases/" + ref).with(httpBasic("support", "password")))
+        mockMvc.perform(get("/underwriting/cases/" + ref).with(signedIn("support", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.evidence[0].status").value("RECEIVED"))
                 .andExpect(jsonPath("$.evidence[0].note").doesNotExist());
@@ -188,14 +188,14 @@ class UnderwritingApiTest {
         mockMvc.perform(json(post("/underwriting/cases/" + ref + "/decision"), "underwriter", accept))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.underwritingCase.status").value("ACCEPTED"));
-        mockMvc.perform(get("/portfolio/applications").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/applications").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + app + "')].status").value("Ready to issue"));
     }
 
     @Test
     void changedRulesTakeANewVersionAndApplyToLaterCases() throws Exception {
         java.util.List<Integer> ids = JsonPath.read(mockMvc.perform(get("/underwriting/rules")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(), "$[?(@.product == 'Care Cash')].id");
         Integer id = ids.get(0);
@@ -221,7 +221,7 @@ class UnderwritingApiTest {
 
     private String caseRef(String app) throws Exception {
         return JsonPath.read(mockMvc.perform(get("/underwriting/applications/" + app)
-                        .with(httpBasic("underwriter", "password")))
+                        .with(signedIn("underwriter", "password")))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.underwritingCase.ref");
     }
 
@@ -240,12 +240,12 @@ class UnderwritingApiTest {
                                 + "\",\"email\":\"" + phone.replaceAll("\\D", "") + "@example.com\",\"phone\":\"" + phone
                                 + "\",\"dateOfBirth\":\"" + java.time.LocalDate.now().minusYears(36) + "\"}"))
                         .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         return ref;
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

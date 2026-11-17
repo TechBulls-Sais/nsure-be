@@ -59,8 +59,7 @@ class FoundationApiTest {
     @Test
     void seededControlsAreVisibleToAReader() throws Exception {
         // Actuary holds controls.read (READ_CONTROL) in the spec grant matrix.
-        mockMvc.perform(get("/admin/controls").with(org.springframework.security.test.web.servlet.request
-                        .SecurityMockMvcRequestPostProcessors.httpBasic("actuary", "password")))
+        mockMvc.perform(get("/admin/controls").with(com.nsure.testsupport.SignIn.signedIn("actuary", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(10))
                 .andExpect(jsonPath("$[?(@.key == 'claim.stp_ceiling')].numericValue").value(5000.00))

@@ -1,6 +1,7 @@
 package com.nsure.common;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -30,7 +31,7 @@ class ErrorContractApiTest {
     @Test
     void eachKindOfFailureHasItsStatusAndCodeAndTheRequestsCorrelationId() throws Exception {
         // 400: the request itself is malformed.
-        MvcResult unreadable = mockMvc.perform(post("/portfolio/policies").with(httpBasic("admin", "password"))
+        MvcResult unreadable = mockMvc.perform(post("/portfolio/policies").with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON).content("{not json"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
@@ -40,12 +41,12 @@ class ErrorContractApiTest {
         assertThat(correlation).isNotBlank();
         assertThat(unreadable.getResponse().getHeader(CorrelationId.HEADER)).isEqualTo(correlation);
 
-        mockMvc.perform(get("/audits/not-a-number").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/audits/not-a-number").with(signedIn("admin", "password")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.fieldErrors[0].field").value("id"));
 
         // 422: a well-formed request that a business rule refuses; the caller's correlation id is kept.
-        mockMvc.perform(post("/portfolio/policies").with(httpBasic("admin", "password"))
+        mockMvc.perform(post("/portfolio/policies").with(signedIn("admin", "password"))
                         .header(CorrelationId.HEADER, "partner-req-0001")
                         .contentType(MediaType.APPLICATION_JSON).content("{\"product\":\"Term Life\"}"))
                 .andExpect(status().isUnprocessableEntity())
@@ -58,12 +59,12 @@ class ErrorContractApiTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("UNAUTHENTICATED"))
                 .andExpect(jsonPath("$.correlationId").isNotEmpty());
-        mockMvc.perform(get("/audits/1").with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/audits/1").with(signedIn("customer", "password")))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("FORBIDDEN"));
 
         // 404 for a record that is not there.
-        mockMvc.perform(get("/audits/99999999").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/audits/99999999").with(signedIn("admin", "password")))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("NOT_FOUND"));
     }
@@ -78,8 +79,10 @@ class ErrorContractApiTest {
                 .andExpect(status().isTooManyRequests())
                 .andExpect(header().exists("Retry-After"))
                 .andExpect(jsonPath("$.code").value("RATE_LIMITED"));
-        // Another account from the same address is not locked out by it.
+        // Another account from the same address is not locked out by it (a staff password answers with the
+        // one-time-code challenge).
         mockMvc.perform(post("/auth/session").with(httpBasic("admin", "password")))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.secondFactorRequired").value(true));
     }
 }

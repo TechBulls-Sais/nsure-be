@@ -2,7 +2,7 @@ package com.nsure.carecash;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -34,7 +34,7 @@ class CareCashApiTest {
     void anAdmissionIsWorkedOutBenefitByBenefitWithinItsLimits() throws Exception {
         String policy = policy("Dineo Hospital", 14);
         String base = "/care-cash/policies/" + policy;
-        double daily = ((Number) JsonPath.read(mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        double daily = ((Number) JsonPath.read(mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.dailyBenefit")).doubleValue();
 
         // One night does not qualify; two do, and are paid from day one.
@@ -52,7 +52,7 @@ class CareCashApiTest {
                 .andExpect(jsonPath("$.waiverMonths").value(3))
                 .andReturn().getResponse().getContentAsString();
         String ref = JsonPath.read(recorded, "$.ref");
-        mockMvc.perform(get(base).with(httpBasic("admin", "password")))
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policyDaysUsed").value(12))
                 .andExpect(jsonPath("$.lives[0].usedThisYear").value(12));
 
@@ -118,7 +118,7 @@ class CareCashApiTest {
                                 + "\",\"email\":\"cc" + Math.abs(name.hashCode()) + "@example.com\",\"phone\":\"+267 71 960 001\","
                                 + "\"dateOfBirth\":\"" + LocalDate.now().minusYears(34) + "\"}"))
                         .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(httpBasic("admin", "password"))).andExpect(status().isOk());
+        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(signedIn("admin", "password"))).andExpect(status().isOk());
         String policy = JsonPath.read(mockMvc.perform(json(post("/portfolio/policies"), "admin", "{\"customerRef\":\"" + customer
                                 + "\",\"product\":\"Care Cash\",\"tier\":\"Bronze\"}"))
                         .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
@@ -129,6 +129,6 @@ class CareCashApiTest {
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

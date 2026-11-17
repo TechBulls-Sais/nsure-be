@@ -25,8 +25,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
  * Throttles the endpoints that guess passwords or send messages (NS-API-001: 429 for rate limit). Signing in is
- * limited per client address and username, so one person mistyping does not lock out a whole office; the public
- * sign-up and code-request endpoints are limited per address. Over the limit the answer is 429 with
+ * limited per client address and username, so one person mistyping does not lock out a whole office; the sign-in
+ * code check and the public sign-up and code-request endpoints are limited per address. Over the limit the answer is 429 with
  * {@code Retry-After}. Counts are kept in memory per installation (one backend per insurer).
  */
 @Component
@@ -43,11 +43,13 @@ public class RateLimitFilter extends OncePerRequestFilter {
     public RateLimitFilter(ObjectMapper mapper,
             @Value("${nsure.rate-limit.sign-in-per-15-minutes:20}") int signIn,
             @Value("${nsure.rate-limit.signup-code-per-15-minutes:10}") int signupCode,
-            @Value("${nsure.rate-limit.signup-per-15-minutes:20}") int signup) {
+            @Value("${nsure.rate-limit.signup-per-15-minutes:20}") int signup,
+            @Value("${nsure.rate-limit.sign-in-code-per-15-minutes:30}") int signInCode) {
         this.mapper = mapper;
         Duration window = Duration.ofMinutes(15);
         this.rules = new Rule[] {
             new Rule("POST", "/auth/session", signIn, window, true),
+            new Rule("POST", "/auth/session/verify", signInCode, window, false),
             new Rule("POST", "/public/signup/otp", signupCode, window, false),
             new Rule("POST", "/public/signup", signup, window, false),
         };
