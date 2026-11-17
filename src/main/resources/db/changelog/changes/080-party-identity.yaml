@@ -1,0 +1,12 @@
+# NS-SH01-002: a customer created although another active customer holds the same identity number keeps a note of
+# the match and why staff kept it; the duplicate-review queue lists it until a data steward merges or keeps it.
+databaseChangeLog:
+  - changeSet:
+      id: 080-party-duplicate-review
+      author: nsure
+      comment: Duplicate-review note on a customer referred at creation.
+      changes:
+        - addColumn:
+            tableName: ins_customer
+            columns:
+              - column: {name: duplicate_review, type: varchar(500)}

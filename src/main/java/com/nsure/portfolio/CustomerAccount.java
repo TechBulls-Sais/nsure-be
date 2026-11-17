@@ -68,6 +68,11 @@ public class CustomerAccount {
     @Column(name = "edd_rejection_reason", length = 500)
     private String eddRejectionReason;
 
+    // Created although another customer holds the same identity number: who it matched and why staff kept it
+    // (NS-SH01-002). Listed in the duplicate-review queue; empty for an ordinary record.
+    @Column(name = "duplicate_review", length = 500)
+    private String duplicateReview;
+
     protected CustomerAccount() {
     }
 
@@ -209,5 +214,13 @@ public class CustomerAccount {
 
     public void setEddRejectionReason(String eddRejectionReason) {
         this.eddRejectionReason = eddRejectionReason;
+    }
+
+    public String getDuplicateReview() {
+        return duplicateReview;
+    }
+
+    public void setDuplicateReview(String duplicateReview) {
+        this.duplicateReview = duplicateReview;
     }
 }

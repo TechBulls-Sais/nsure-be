@@ -27,7 +27,9 @@ public final class PortfolioViews {
             List<CustomerTierView> tiers,
             // Why staff rejected the KYC or EDD review; empty unless rejected.
             String kycRejectionReason,
-            String eddRejectionReason
+            String eddRejectionReason,
+            // Created although another customer holds the same identity number: the match and why (NS-SH01-002).
+            String duplicateReview
     ) {
     }
 
@@ -82,7 +84,9 @@ public final class PortfolioViews {
             int maxBeneficiaries,
             // The accepted quote this application or policy was priced from (NS-IL01-001).
             String quoteRef,
-            Integer quoteVersion
+            Integer quoteVersion,
+            // The customer record it belongs to: screens link records by this reference, never by name.
+            String customerRef
     ) {
     }
 

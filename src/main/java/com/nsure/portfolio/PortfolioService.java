@@ -107,13 +107,15 @@ public class PortfolioService {
 
     @Transactional(readOnly = true)
     public List<PortfolioViews.CustomerView> customers() {
+        // Linked by customer reference, never by name: two customers may share a name (AT-SH11-01).
         Map<String, List<PortfolioViews.CustomerTierView>> tiers = new HashMap<>();
         for (InsurancePolicy policy : em.createQuery(
-                "select p from InsurancePolicy p order by p.id desc", InsurancePolicy.class).getResultList()) {
-            tiers.computeIfAbsent(policy.getCustomerName(), name -> new ArrayList<>()).add(customerTier(policy));
+                "select p from InsurancePolicy p where p.customerRef is not null order by p.id desc",
+                InsurancePolicy.class).getResultList()) {
+            tiers.computeIfAbsent(policy.getCustomerRef(), ref -> new ArrayList<>()).add(customerTier(policy));
         }
         return list(CustomerAccount.class).stream()
-                .map(row -> customer(row, tiers.getOrDefault(row.getName(), List.of())))
+                .map(row -> customer(row, tiers.getOrDefault(row.getRef(), List.of())))
                 .toList();
     }
 
@@ -230,23 +232,39 @@ public class PortfolioService {
         return list(ProductConfiguration.class).stream().map(this::config).toList();
     }
 
+    /**
+     * Identity rules and the duplicate check (NS-SH01-001/002). Field-injected so the long constructor above stays
+     * as it is.
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    private PartyRegister parties;
+
     @Transactional
     public PortfolioViews.CustomerView createCustomer(JsonNode body) {
+        AppUser staff = security.authenticatedUser();
+        staff.validateHasPermissionTo("CREATE_CUSTOMER");
+        return customer(newCustomer(body, staff.getUsername()));
+    }
+
+    /**
+     * A new customer record. Staff (actor given) may keep a record whose identity number another customer holds
+     * only with a reason, and it is referred for duplicate review; self sign-up (no actor) never gets that far.
+     */
+    private CustomerAccount newCustomer(JsonNode body, String staffActor) {
         CustomerAccount row = new CustomerAccount();
         row.setRef(nextRef("CUS-", 4, CustomerAccount.class));
         row.setName(text(body, "name"));
         row.setEmail(text(body, "email"));
         row.setPhone(text(body, "phone"));
-        String poiType = optional(body, "poiType");
-        if (poiType != null && !poiType.isBlank()) {
-            if (!Set.of("Omang", "Passport").contains(poiType)) {
-                throw new IllegalArgumentException("Proof of identity must be Omang or Passport.");
-            }
-            row.setPoiType(poiType);
+        PartyRegister.Identity identity = parties.identity(optional(body, "poiType"), optional(body, "poiNumber"));
+        if (identity != null) {
+            row.setPoiType(identity.type());
+            row.setPoiNumber(identity.number());
         }
-        String poiNumber = optional(body, "poiNumber");
-        if (poiNumber != null && !poiNumber.isBlank()) {
-            row.setPoiNumber(poiNumber.trim());
+        if (staffActor == null) {
+            parties.refuseKnownIdentity(identity);
+        } else {
+            row.setDuplicateReview(parties.referral(identity, optional(body, "duplicateReason")));
         }
         String dateOfBirth = optional(body, "dateOfBirth");
         if (dateOfBirth != null && !dateOfBirth.isBlank()) {
@@ -277,7 +295,9 @@ public class PortfolioService {
             row.setLoginUsername(createCustomerLogin(username, optional(body, "password")));
         }
         em.persist(row);
-        return customer(row);
+        parties.created(row, staffActor == null ? row.getLoginUsername() : staffActor,
+                staffActor == null ? "SELF_SIGNUP" : "STAFF");
+        return row;
     }
 
     // ── customer self sign-up (public) ────────────────────────────────────────────────────────────
@@ -316,7 +336,7 @@ public class PortfolioService {
         checkSignupDetails(body);
         String digits = text(body, "phone").replaceAll("\\D", "");
         codes.verify(OneTimeCodes.Purpose.CUSTOMER_SIGNUP, optional(body, "challenge"), optional(body, "otp"), digits);
-        return createCustomer(body);
+        return customer(newCustomer(body, null));
     }
 
     /** Self sign-up needs every field the staff Add customer form requires, including the sign-in details. */
@@ -329,11 +349,8 @@ public class PortfolioService {
             throw new IllegalArgumentException("Enter a valid email address.");
         }
         text(body, "phone");
-        text(body, "poiType");
-        String poiNumber = text(body, "poiNumber");
-        if (poiNumber.length() < 5 || poiNumber.length() > 40) {
-            throw new IllegalArgumentException("Proof of identity number must be 5–40 characters.");
-        }
+        // The number must fit its document type, and one already registered is refused before a code is sent.
+        parties.refuseKnownIdentity(parties.identity(text(body, "poiType"), text(body, "poiNumber")));
         text(body, "dateOfBirth");
         String username = text(body, "username").toLowerCase();
         if (!username.matches("[a-z0-9._-]{3,100}")) {
@@ -982,6 +999,7 @@ public class PortfolioService {
         row.setEddRejectionReason(reason);
         history.record(WorkflowHistory.EDD_REVIEW, row.getRef(), row.getName(),
                 "VERIFIED".equals(decision) ? "Approved" : "Rejected", previous, decision, reason, reviewer.getUsername());
+        parties.kycChanged(row, "EDD", previous, decision, reviewer.getUsername());
         return customer(row);
     }
 
@@ -1086,6 +1104,7 @@ public class PortfolioService {
         row.setKycRejectionReason(reason);
         history.record(WorkflowHistory.KYC_REVIEW, row.getRef(), row.getName(),
                 "VERIFIED".equals(decision) ? "Approved" : "Rejected", previous, decision, reason, reviewer.getUsername());
+        parties.kycChanged(row, "KYC", previous, decision, reviewer.getUsername());
         return customer(row);
     }
 
@@ -1437,7 +1456,8 @@ public class PortfolioService {
                 row.getEddStatus() == null ? "" : row.getEddStatus(),
                 tiers,
                 blank(row.getKycRejectionReason()),
-                blank(row.getEddRejectionReason()));
+                blank(row.getEddRejectionReason()),
+                blank(row.getDuplicateReview()));
     }
 
     private String createCustomerLogin(String username, String password) {
@@ -1546,7 +1566,8 @@ public class PortfolioService {
                 documents,
                 policy != null ? policyWorkflow.terms(policy).getMaxBeneficiaries() : maxBeneficiaries(row.getProduct()),
                 row instanceof InsuranceApplication a ? blank(a.getQuoteRef()) : policy != null ? blank(policy.getQuoteRef()) : "",
-                row instanceof InsuranceApplication a2 ? a2.getQuoteVersion() : policy != null ? policy.getQuoteVersion() : null);
+                row instanceof InsuranceApplication a2 ? a2.getQuoteVersion() : policy != null ? policy.getQuoteVersion() : null,
+                blank(row.getCustomerRef()));
     }
 
     private int maxBeneficiaries(String product) {

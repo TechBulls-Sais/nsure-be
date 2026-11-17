@@ -48,6 +48,10 @@ public class PlatformService {
     private final PlatformSecurityContext security;
     private final EvidenceChain audit;
 
+    /** Party identity rules, record moves and party events (field-injected; the constructor is shared). */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.nsure.portfolio.PartyRegister parties;
+
     public PlatformService(EntityManager em, JdbcTemplate jdbc, PlatformSecurityContext security, EvidenceChain audit) {
         this.em = em;
         this.jdbc = jdbc;
@@ -91,6 +95,12 @@ public class PlatformService {
                 }
                 if (reasons.isEmpty() || reasons.equals(List.of("Same phone"))) {
                     continue;
+                }
+                // A record staff kept despite the match carries their note (NS-SH01-002: referred, not merged).
+                for (CustomerAccount c : List.of(a, b)) {
+                    if (c.getDuplicateReview() != null && !c.getDuplicateReview().isBlank()) {
+                        reasons.add(c.getRef() + " referred when created: " + c.getDuplicateReview());
+                    }
                 }
                 Map<String, Object> pair = new LinkedHashMap<>();
                 pair.put("first", party(a));
@@ -140,13 +150,8 @@ public class PlatformService {
         if (gone.getStatus() != null && gone.getStatus().startsWith("Merged")) {
             throw new ConflictException(gone.getRef() + " has already been merged.");
         }
-        int moved = 0;
-        for (String entity : List.of("InsuranceApplication", "InsurancePolicy", "InsuranceClaim")) {
-            moved += em.createQuery("update " + entity + " e set e.customerRef = :keep, e.customerName = :name"
-                            + " where e.customerRef = :gone")
-                    .setParameter("keep", keep.getRef()).setParameter("name", keep.getName())
-                    .setParameter("gone", gone.getRef()).executeUpdate();
-        }
+        // The portfolio module moves its own records, as entities under their row versions (NS-ARC-002).
+        int moved = parties.moveRecords(gone, keep);
         keep.setPolicyCount(keep.getPolicyCount() + gone.getPolicyCount());
         gone.setPolicyCount(0);
         gone.setStatus("Merged into " + keep.getRef());
@@ -155,6 +160,7 @@ public class PlatformService {
                 user.getUsername(), LocalDateTime.now());
         audit.record(user.getUsername(), "Parties merged", "Customer", keep.getRef(), gone.getRef() + " merged in: "
                 + reason);
+        parties.merged(keep, gone, moved, user.getUsername());
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("survivingRef", keep.getRef());
         out.put("mergedRef", gone.getRef());
@@ -607,6 +613,7 @@ public class PlatformService {
         m.put("phone", c.getPhone());
         m.put("dateOfBirth", c.getDateOfBirth());
         m.put("identityNumber", c.getPoiNumber());
+        m.put("identityType", c.getPoiType());
         m.put("policies", c.getPolicyCount());
         return m;
     }

@@ -83,6 +83,14 @@ public final class Events {
     public static final String GROUP_PREMIUM_REFUNDED = "GroupPremiumRefunded";
     public static final String OFFER_ACCEPTED = "OfferAccepted";
 
+    // Party master (spec SH01). References only, never identity numbers or contact details (NS-API-003).
+    /** customerRef, partyType, channel (STAFF or SELF_SIGNUP), kycStatus, duplicateReview (boolean). */
+    public static final String PARTY_CREATED = "PartyCreated";
+    /** survivingRef, mergedRef, recordsMoved. */
+    public static final String PARTY_MERGED = "PartyMerged";
+    /** customerRef, review (KYC or EDD), previousStatus, status. */
+    public static final String KYC_STATUS_CHANGED = "KycStatusChanged";
+
     // Collections and claims (spec SH04, SH05).
     public static final String INVOICE_ISSUED = "InvoiceIssued";
     public static final String RECEIPT_ALLOCATED = "ReceiptAllocated";
