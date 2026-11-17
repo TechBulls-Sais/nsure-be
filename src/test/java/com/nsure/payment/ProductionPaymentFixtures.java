@@ -1,7 +1,7 @@
 package com.nsure.payment;
 
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -14,7 +14,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Shared by the prod-profile payment tests: what application-prod.yml requires from the environment (database and
- * identity, nothing payment-related), and the steps that bring a customer's policy to Pending Payment.
+ * identity, nothing payment-related), and the steps that bring a customer's policy to Pending Payment. Requests are
+ * signed in with {@link com.nsure.testsupport.SignIn}, which stands in for the staff one-time-code step.
  */
 final class ProductionPaymentFixtures {
 
@@ -49,7 +50,7 @@ final class ProductionPaymentFixtures {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         mockMvc.perform(post("/portfolio/customers/" + JsonPath.read(customer, "$.id") + "/kyc")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         String shop = mockMvc.perform(json(post("/portfolio/shop"), username, "{\"product\":\"Term Life\",\"tier\":\"Silver\"}"))
                 .andExpect(status().isOk())
@@ -68,7 +69,7 @@ final class ProductionPaymentFixtures {
 
     static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
         String password = user.equals("admin") ? "password" : "password1";
-        return request.with(httpBasic(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 
     String policyStatus(String ref) {
