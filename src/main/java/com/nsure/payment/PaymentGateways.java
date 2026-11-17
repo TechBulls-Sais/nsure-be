@@ -1,14 +1,23 @@
 package com.nsure.payment;
 
 import jakarta.persistence.EntityManager;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Component;
 
 /**
  * Chooses the rail per payment method (spec 13 S-25): Card goes to hosted checkout; Orange Money, MyZaka and Bank EFT
  * stay on the inline mock until DPO's Botswana mobile-money support is confirmed (blocker B4). Staff-recorded receipts
  * use the MANUAL rail. {@code nsure.payments.card-gateway=MOCK} keeps cards inline (tests, demos without a browser).
+ *
+ * <p>The mock and the hosted-checkout simulator confirm money no provider received, so the prod profile never uses
+ * them: a method without a real provider is refused before an attempt exists (nothing is charged, cover stays
+ * unpaid), {@code card-gateway} must be {@code NONE} or start-up fails, and an attempt a simulated rail started earlier
+ * is never verified as paid — it waits, unconfirmed, until it expires.
  */
 @Component
 public class PaymentGateways {
@@ -16,22 +25,64 @@ public class PaymentGateways {
     public static final String MOCK = "MOCK";
     public static final String MANUAL = "MANUAL";
 
-    private final Map<String, PaymentGateway> byProvider;
-    private final String cardProvider;
+    /** {@code nsure.payments.card-gateway}: the hosted-checkout simulator (development and demos only). */
+    public static final String SIMULATOR = "SIMULATOR";
+    /** {@code nsure.payments.card-gateway}: no card provider is connected, so card payments are refused. */
+    public static final String NONE = "NONE";
 
-    public PaymentGateways(PaymentTransactionRepository transactions, EntityManager em,
+    private static final Set<String> CARD_GATEWAYS = Set.of(SIMULATOR, MOCK, NONE);
+
+    private final Map<String, PaymentGateway> byProvider;
+    /** {@code null} when no card provider is connected. */
+    private final String cardProvider;
+    private final boolean simulatorsEnabled;
+
+    public PaymentGateways(PaymentTransactionRepository transactions, EntityManager em, Environment environment,
             @Value("${nsure.payments.card-gateway:SIMULATOR}") String cardGateway,
             @Value("${nsure.payments.public-base-url:http://127.0.0.1:5180/api}") String publicBaseUrl,
             @Value("${nsure.payments.token-minutes:30}") int tokenMinutes) {
-        PaymentGateway mock = new InlineGateway(MOCK, transactions);
+        this.simulatorsEnabled = !environment.acceptsProfiles(Profiles.of("prod"));
+        String card = cardGateway == null ? "" : cardGateway.trim().toUpperCase(Locale.ROOT);
+        if (!CARD_GATEWAYS.contains(card)) {
+            throw new IllegalStateException("nsure.payments.card-gateway must be NONE, SIMULATOR or MOCK, not \""
+                    + cardGateway + "\".");
+        }
+        if (!simulatorsEnabled && !NONE.equals(card)) {
+            throw new IllegalStateException("The prod profile cannot send card payments to the " + card
+                    + " gateway: it confirms payments no provider received. Set NSURE_CARD_GATEWAY=NONE until a"
+                    + " real card provider is connected.");
+        }
         PaymentGateway manual = new InlineGateway(MANUAL, transactions);
-        PaymentGateway hosted = new HostedCheckoutSimulator(em, publicBaseUrl, tokenMinutes);
-        this.byProvider = Map.of(MOCK, mock, MANUAL, manual, HostedCheckoutSimulator.PROVIDER, hosted);
-        this.cardProvider = "MOCK".equalsIgnoreCase(cardGateway) ? MOCK : HostedCheckoutSimulator.PROVIDER;
+        if (simulatorsEnabled) {
+            this.byProvider = Map.of(MANUAL, manual, MOCK, new InlineGateway(MOCK, transactions),
+                    HostedCheckoutSimulator.PROVIDER, new HostedCheckoutSimulator(em, publicBaseUrl, tokenMinutes));
+        } else {
+            // Attempts a simulated rail started before this installation ran with the prod profile: never paid.
+            this.byProvider = Map.of(MANUAL, manual, MOCK, new Unconfirmed(MOCK),
+                    HostedCheckoutSimulator.PROVIDER, new Unconfirmed(HostedCheckoutSimulator.PROVIDER));
+        }
+        this.cardProvider = switch (card) {
+            case MOCK -> MOCK;
+            case SIMULATOR -> HostedCheckoutSimulator.PROVIDER;
+            default -> null;
+        };
     }
 
+    /**
+     * The rail for a customer payment. A method no provider can take here is refused (a business-rule error for the
+     * customer) before any attempt is created.
+     */
     public PaymentGateway forMethod(String method) {
-        return byProvider.get("Card".equalsIgnoreCase(method) ? cardProvider : MOCK);
+        if ("Card".equalsIgnoreCase(method)) {
+            if (cardProvider == null) {
+                throw notAvailable("Card");
+            }
+            return byProvider.get(cardProvider);
+        }
+        if (!simulatorsEnabled) {
+            throw notAvailable(method);
+        }
+        return byProvider.get(MOCK);
     }
 
     public PaymentGateway manual() {
@@ -44,5 +95,33 @@ public class PaymentGateways {
             throw new IllegalStateException("No payment gateway for provider " + provider);
         }
         return gateway;
+    }
+
+    /** False under the prod profile: no mock or simulator may confirm money there. */
+    public boolean simulatorsEnabled() {
+        return simulatorsEnabled;
+    }
+
+    private static IllegalArgumentException notAvailable(String method) {
+        return new IllegalArgumentException(method + " payments are not available yet: no payment provider is"
+                + " connected for them, so nothing was charged.");
+    }
+
+    /**
+     * Stands in for a simulated rail under the prod profile. It never reports a payment, so an attempt that rail
+     * started stays unconfirmed until it expires; it starts none of its own.
+     */
+    private record Unconfirmed(String provider) implements PaymentGateway {
+
+        @Override
+        public TokenResult createToken(PaymentRequest request) {
+            return new TokenResult.Rejected("NO_PROVIDER", provider + " is a simulated rail and is off here.");
+        }
+
+        @Override
+        public Verification verify(String reference, String token) {
+            return new Verification(Outcome.PENDING, null, null, "NO_PROVIDER", provider
+                    + " is a simulated rail and cannot confirm a payment here; waiting for a real provider.");
+        }
     }
 }

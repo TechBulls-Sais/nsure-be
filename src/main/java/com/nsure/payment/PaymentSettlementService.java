@@ -83,6 +83,8 @@ public class PaymentSettlementService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Choose a payment method: " + String.join(", ", PolicyWorkflow.PAYMENT_METHODS) + "."));
         BigDecimal amount = agreedPremium(policy);
+        // Chosen first: a method no provider can take here is refused before an open attempt is resumed.
+        PaymentGateway gateway = manual ? gateways.manual() : gateways.forMethod(paymentMethod);
 
         List<PaymentTransaction> attempts = transactions.findByPolicyRefAndPeriodStartAndPurposeOrderByIdDesc(
                 policy.getRef(), period.start(), period.purpose());
@@ -92,7 +94,6 @@ public class PaymentSettlementService {
                 return initiation(open);
             }
         }
-        PaymentGateway gateway = manual ? gateways.manual() : gateways.forMethod(paymentMethod);
         String reference = "NSP-" + policy.getRef() + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         PaymentTransaction tx = new PaymentTransaction(policy.getRef(), policy.getCustomerRef(), gateway.provider(),
                 paymentMethod, reference, idempotencyKey(policy.getRef(), period, attempts.size() + 1), amount, "BWP",
