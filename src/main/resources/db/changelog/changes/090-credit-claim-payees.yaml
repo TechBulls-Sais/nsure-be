@@ -1,0 +1,15 @@
+databaseChangeLog:
+  # IL05 claim payee breakdown: the benefit a credit claim was for, and who confirmed the lender's payment details
+  # (NS-IL05-005 requires payee verification) and when.
+  - changeSet:
+      id: 090-credit-claim-payees
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: crd_loan
+            columns:
+              # DEATH, PERMANENT_DISABILITY, TEMPORARY_DISABILITY or CRITICAL_ILLNESS.
+              - column: {name: claim_cause, type: varchar(30)}
+              - column: {name: claim_accidental, type: boolean}
+              - column: {name: payee_verified_by, type: varchar(100)}
+              - column: {name: payee_verified_at, type: timestamp(6)}

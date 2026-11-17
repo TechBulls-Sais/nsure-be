@@ -172,7 +172,13 @@ class CreditLifeApiTest {
                 .andExpect(jsonPath("$.loan.status").value("CLAIMED"))
                 .andExpect(jsonPath("$.loan.policyStatus").value("Terminated"))
                 .andExpect(jsonPath("$.loan.lenderAmount").value(90000.0))
-                .andExpect(jsonPath("$.loan.estateAmount").value(30000.0));
+                .andExpect(jsonPath("$.loan.estateAmount").value(30000.0))
+                // IL05 payee breakdown: the benefit, the event and who verified the lender's payment details.
+                .andExpect(jsonPath("$.loan.claimCause").value("DEATH"))
+                .andExpect(jsonPath("$.loan.claimAccidental").value(true))
+                .andExpect(jsonPath("$.loan.claimEventDate").value(LocalDate.now().toString()))
+                .andExpect(jsonPath("$.loan.payeeVerifiedBy").value("credit"))
+                .andExpect(jsonPath("$.loan.payeeVerifiedAt").isNotEmpty());
         // The claim closes the credit policy, for death, so no further premium is due on it.
         mockMvc.perform(get("/servicing/policies/" + active[1]).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policy.contractStatus").value("Terminated"))

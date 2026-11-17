@@ -498,6 +498,10 @@ public class CreditService {
         }
         l.claimRef = optional(body, "claimRef");
         l.claimEventDate = eventDate;
+        l.claimCause = cause;
+        l.claimAccidental = body.path("accidental").asBoolean(false);
+        l.payeeVerifiedBy = user.getUsername();
+        l.payeeVerifiedAt = LocalDateTime.now().withNano(0);
         l.lenderAmount = a.lenderAmount();
         l.estateAmount = a.estateAmount();
         l.status = CLAIMED;
@@ -908,7 +912,8 @@ public class CreditService {
                 l.permanentDisability, l.temporaryDisability, l.criticalIllness, l.waitingMonths, l.disbursementDate,
                 start, start == null ? null : start.plusMonths(l.termMonths), statusOf(l, policy), l.balance,
                 l.balanceAsOf, stale, l.balanceException, l.settledOn, l.settlementReference, l.claimRef, l.lenderAmount,
-                l.estateAmount, l.refinancedFrom, l.createdAt);
+                l.estateAmount, l.refinancedFrom, l.createdAt, l.claimCause, l.claimAccidental, l.claimEventDate,
+                l.payeeVerifiedBy, l.payeeVerifiedAt);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────

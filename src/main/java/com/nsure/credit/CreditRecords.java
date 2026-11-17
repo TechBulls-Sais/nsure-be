@@ -144,6 +144,15 @@ public final class CreditRecords {
         String claimRef;
         @Column(name = "claim_event_date")
         LocalDate claimEventDate;
+        @Column(name = "claim_cause", length = 30)
+        String claimCause;
+        @Column(name = "claim_accidental")
+        Boolean claimAccidental;
+        /** Who confirmed the lender's payment details before the claim was allocated (NS-IL05-005), and when. */
+        @Column(name = "payee_verified_by", length = 100)
+        String payeeVerifiedBy;
+        @Column(name = "payee_verified_at")
+        LocalDateTime payeeVerifiedAt;
         @Column(name = "lender_amount", precision = 19, scale = 2)
         BigDecimal lenderAmount;
         @Column(name = "estate_amount", precision = 19, scale = 2)
