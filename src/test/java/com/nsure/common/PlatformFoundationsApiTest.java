@@ -8,7 +8,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jayway.jsonpath.JsonPath;
+import com.nsure.integration.DomainEvent;
+import com.nsure.integration.DomainEventHandler;
 import com.nsure.integration.EventDelivery;
+import com.nsure.integration.Outbox;
 import com.nsure.integration.OutboxDispatcher;
 import jakarta.persistence.EntityManager;
 import java.time.LocalDateTime;
@@ -17,6 +20,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -29,6 +34,7 @@ import org.springframework.transaction.support.TransactionTemplate;
         "spring.datasource.url=jdbc:h2:mem:nsure-foundations;DB_CLOSE_DELAY=-1",
         "nsure.integration.dispatch-delay-ms=3600000"})
 @AutoConfigureMockMvc
+@org.springframework.context.annotation.Import(PlatformFoundationsApiTest.SupersedingConsumer.class)
 class PlatformFoundationsApiTest {
 
     @Autowired
@@ -89,6 +95,17 @@ class PlatformFoundationsApiTest {
             }
         }
 
+        // NS-API-004: a hold behind a failed event is a sequence gap that will not close by itself: integration staff
+        // get one reconciliation alert per handler and aggregate, and the hold says what to do.
+        assertThat(second.stream().filter(d -> firstHandlers.contains(d.getHandler())))
+                .allSatisfy(d -> assertThat(d.getLastError()).contains("sequence gap"));
+        Long gapAlerts = jdbc.queryForObject("select count(*) from staff_alert where alert_type = 'EVENT_SEQUENCE_GAP'"
+                + " and dedup_key like ?", Long.class, "%:" + policy);
+        assertThat(gapAlerts).isPositive();
+        outbox.dispatch();
+        assertThat(jdbc.queryForObject("select count(*) from staff_alert where alert_type = 'EVENT_SEQUENCE_GAP'"
+                + " and dedup_key like ?", Long.class, "%:" + policy)).isEqualTo(gapAlerts);
+
         // Once the earlier event is through, the held one follows.
         tx.executeWithoutResult(s -> em.createQuery("update EventDelivery d set d.status = 'PENDING', d.attempts = 0,"
                         + " d.nextAttemptAt = :now where d.event.id in (select e.id from OutboxEvent e"
@@ -96,6 +113,78 @@ class PlatformFoundationsApiTest {
                 .setParameter("now", LocalDateTime.now().minusSeconds(1)).setParameter("ref", policy).executeUpdate());
         outbox.dispatch();
         assertThat(deliveries(policy, 2)).allSatisfy(d -> assertThat(d.getStatus()).isEqualTo(EventDelivery.DELIVERED));
+    }
+
+    /** A consumer that judges some older events irrelevant (here: those marked stale). */
+    @TestConfiguration
+    static class SupersedingConsumer {
+        static final java.util.List<String> HANDLED = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Bean
+        DomainEventHandler supersedingHandler() {
+            return new DomainEventHandler() {
+                @Override
+                public String name() {
+                    return "test.superseding";
+                }
+
+                @Override
+                public java.util.Set<String> eventTypes() {
+                    return java.util.Set.of("TestReading");
+                }
+
+                @Override
+                public String ignoreReason(DomainEvent event) {
+                    return event.flag("stale") ? "a later reading of " + event.aggregateRef() + " replaced it" : null;
+                }
+
+                @Override
+                public void handle(DomainEvent event) {
+                    HANDLED.add(event.eventId());
+                }
+            };
+        }
+    }
+
+    @Autowired
+    private Outbox events;
+
+    /** NS-API-004: an event the consumer judges irrelevant is recorded IGNORED with its reason, not handled or lost. */
+    @Test
+    void anIrrelevantOlderEventIsIgnoredWithEvidence() {
+        String stale = tx.execute(s -> events.publish("TestReading", "METER-1", java.util.Map.of("stale", true), "test")
+                .getEventId());
+        String fresh = tx.execute(s -> events.publish("TestReading", "METER-1", java.util.Map.of("stale", false), "test")
+                .getEventId());
+        outbox.dispatch();
+        List<EventDelivery> first = deliveries("METER-1", 1);
+        assertThat(first).singleElement().satisfies(d -> {
+            assertThat(d.getStatus()).isEqualTo(EventDelivery.IGNORED);
+            assertThat(d.getLastError()).isEqualTo("Ignored: a later reading of METER-1 replaced it");
+        });
+        // The ignored event does not hold up the next one.
+        assertThat(deliveries("METER-1", 2)).singleElement()
+                .satisfies(d -> assertThat(d.getStatus()).isEqualTo(EventDelivery.DELIVERED));
+        assertThat(SupersedingConsumer.HANDLED).contains(fresh).doesNotContain(stale);
+    }
+
+    /** NS-API-004: an event in a newer contract version than its consumer supports is refused, not guessed at. */
+    @Test
+    void anEventNewerThanItsConsumerSupportsIsRefusedWithTheReason() throws Exception {
+        String customer = customer("Kopano Version", "+267 71 400 003");
+        String policy = JsonPath.read(mockMvc.perform(json(post("/portfolio/policies"), "admin",
+                                "{\"customerRef\":\"" + customer + "\",\"product\":\"Term Life\",\"amount\":20000,\"premium\":50}"))
+                        .andExpect(status().isOk())
+                        .andReturn().getResponse().getContentAsString(), "$.id");
+        mockMvc.perform(json(post("/portfolio/policies/" + policy + "/payments"), "admin", "{\"method\":\"Bank EFT\"}"))
+                .andExpect(status().isOk());
+        jdbc.update("update int_outbox_event set schema_version = 2 where aggregate_ref = ? and aggregate_version = 1", policy);
+        outbox.dispatch();
+        List<EventDelivery> refused = deliveries(policy, 1);
+        assertThat(refused).isNotEmpty().allSatisfy(d -> {
+            assertThat(d.getStatus()).isEqualTo(EventDelivery.FAILED);
+            assertThat(d.getLastError()).contains("schema version 2").contains("Upgrade the consumer");
+        });
     }
 
     @Test
