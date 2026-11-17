@@ -239,3 +239,6 @@ databaseChangeLog:
   - include:
       file: changes/096-work-queue.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/097-access-review.yaml
+      relativeToChangelogFile: true

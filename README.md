@@ -73,6 +73,14 @@ it is granted or revoked. It lapses on its own or is revoked early, and once it 
 granter and the holder reviews it (`REVIEW_EMERGENCY_ACCESS`, Compliance & Auditor). While active it shows in the
 holder's `/me` (`emergencyAccess`) and as a banner in the workspace.
 
+### Access recertification (NS-SH11-007)
+
+`/admin/access-reviews` (Access → Access review): a holder of `REVIEW_ACCESS` (Super Admin, Compliance & Auditor)
+starts a review, which snapshots every enabled login holding access with its roles, then keeps or flags (with a reason)
+each one; nobody decides their own. The review closes only when every login is decided, and each flagged login is
+alerted to the `UPDATE_USER` holders, who remove the access through the four-eyes change. Every step is audit evidence.
+Audit evidence can be filtered by record, type, actor and dates and downloaded as CSV (`/audits/evidence/export`).
+
 ### Guards on the grant table (spec 04 §8)
 
 - A **protected role** (Policyholder / End User, Guest, All) never gets a permission, desk access or an approval limit,

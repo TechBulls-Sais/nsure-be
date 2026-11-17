@@ -1,0 +1,44 @@
+databaseChangeLog:
+  # Access recertification (NS-SH11-007, SH11 access-review screen): a reviewer confirms or flags every login that holds
+  # access; flagged access is alerted to the identity administrators, who remove it through the four-eyes change.
+  # REVIEW_ACCESS goes to the Super Admin role and to Compliance & Auditor (the independent reviewer, as for emergency
+  # access reviews).
+  - changeSet:
+      id: 097-access-review
+      author: nsure
+      changes:
+        - createTable:
+            tableName: acc_review
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_acc_review_ref}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: started_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: started_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: closed_by, type: varchar(100)}
+              - column: {name: closed_at, type: timestamp(6)}
+              - column: {name: summary, type: varchar(500)}
+        - createTable:
+            tableName: acc_review_item
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: review_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_acc_review_item_review, references: acc_review(id)}}
+              - column: {name: user_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: username, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: roles, type: varchar(1000), constraints: {nullable: false}}
+              - column: {name: permission_count, type: int, constraints: {nullable: false}}
+              - column: {name: desk_access, type: boolean, constraints: {nullable: false}}
+              - column: {name: decision, type: varchar(20)}
+              - column: {name: note, type: varchar(500)}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: timestamp(6)}
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT 'authorisation', 'REVIEW_ACCESS', 'ACCESS_REVIEW', 'REVIEW', FALSE, 'Recertify who holds access: keep or flag each login'
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = 'REVIEW_ACCESS');
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code = 'REVIEW_ACCESS'
+              WHERE r.name IN ('Super Admin', 'Compliance & Auditor')
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);

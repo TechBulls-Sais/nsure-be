@@ -42,6 +42,8 @@ public enum PermissionCatalog {
     // Emergency access (Nsure Life NS-SH11-003): time-limited, justified, alerted and reviewed.
     GRANT_EMERGENCY_ACCESS(null),
     REVIEW_EMERGENCY_ACCESS(null),
+    // Access recertification (NS-SH11-007): confirm or flag each login's access; changes stay with identity admins.
+    REVIEW_ACCESS(null),
 
     // IL02 underwriting (Nsure Life NS-IL02-001..006).
     READ_UNDERWRITING(null),

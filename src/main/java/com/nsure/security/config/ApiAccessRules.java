@@ -211,6 +211,12 @@ public final class ApiAccessRules {
             rule(POST, "/admin/emergency-access", anyOf("GRANT_EMERGENCY_ACCESS")),
             rule(POST, "/admin/emergency-access/*/revoke", anyOf("GRANT_EMERGENCY_ACCESS")),
             rule(POST, "/admin/emergency-access/*/review", anyOf("REVIEW_EMERGENCY_ACCESS")),
+            // Access recertification (NS-SH11-007): reviewers decide, auditors read.
+            rule(GET, "/admin/access-reviews", anyOf("REVIEW_ACCESS", "READ_AUDIT")),
+            rule(GET, "/admin/access-reviews/*", anyOf("REVIEW_ACCESS", "READ_AUDIT")),
+            rule(POST, "/admin/access-reviews", anyOf("REVIEW_ACCESS")),
+            rule(POST, "/admin/access-reviews/*/items/*/decision", anyOf("REVIEW_ACCESS")),
+            rule(POST, "/admin/access-reviews/*/close", anyOf("REVIEW_ACCESS")),
 
             // ── group administration GL01-GL05 (Group Administrator) ───────────────────────────────────
             rule(GET, "/group/schemes", anyOf("READ_SCHEME")),
