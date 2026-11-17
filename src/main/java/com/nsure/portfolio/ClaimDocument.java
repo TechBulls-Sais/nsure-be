@@ -9,8 +9,10 @@ import jakarta.persistence.Table;
 import java.time.LocalDateTime;
 
 /**
- * One file on a claim: uploaded evidence, or the generated claim summary. The bytes live on disk at
- * {@code storagePath}. Never updated; an old-layout summary is replaced, never edited.
+ * One file on a claim: uploaded evidence released from quarantine, or the generated claim summary. The bytes live on
+ * disk at {@code storagePath}. Never updated; an old-layout summary is replaced, never edited. An upload that is still
+ * in quarantine is a {@link QuarantinedUpload}, not a row here, so it can neither be opened through the normal download
+ * nor satisfy an evidence checklist (AT-SH09A-02).
  */
 @Entity
 @Table(name = "ins_claim_document")
@@ -66,6 +68,19 @@ public class ClaimDocument {
     @Column(name = "superseded_at")
     private LocalDateTime supersededAt;
 
+    // How the file came to be on record (DocumentIntake): GENERATED, CLEAN (a scanner passed it), RELEASED_UNSCANNED
+    // (a person released it with no scan), or NOT_SCANNED (stored before uploads were quarantined).
+    @Column(name = "scan_status", nullable = false, length = 30)
+    private String scanStatus = DocumentIntake.GENERATED;
+
+    // SYSTEM, STAFF or PORTAL; UPLOAD for files stored before the channel was recorded.
+    @Column(name = "source_channel", nullable = false, length = 20)
+    private String sourceChannel = DocumentIntake.SYSTEM;
+
+    // Who released the upload from quarantine ("scanner:<name>" for an automatic release).
+    @Column(name = "released_by", length = 100)
+    private String releasedBy;
+
     protected ClaimDocument() {
     }
 
@@ -120,6 +135,26 @@ public class ClaimDocument {
 
     public int getLayoutVersion() {
         return layoutVersion;
+    }
+
+    /** Records how a released upload came on record. */
+    void intake(String scanStatus, String sourceChannel, String releasedBy, LocalDateTime uploadedAt) {
+        this.scanStatus = scanStatus;
+        this.sourceChannel = sourceChannel;
+        this.releasedBy = releasedBy;
+        this.uploadedAt = uploadedAt;
+    }
+
+    public String getScanStatus() {
+        return scanStatus;
+    }
+
+    public String getSourceChannel() {
+        return sourceChannel;
+    }
+
+    public String getReleasedBy() {
+        return releasedBy;
     }
 
     /** Records the content hash of the stored file. */

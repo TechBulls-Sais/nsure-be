@@ -110,7 +110,7 @@ so a replay never posts, pays or messages twice. Only the roles in the Nsure rol
 reinsurance and integration modules are reached through the Super Admin role's explicit grants until their codes are granted to a spec role. Customer
 Support Representative (`support`) and Compliance & Auditor (`compliance`) come from migration 045; demo password `password`.
 
-Partner portal logins come from migration 077: `agent` (intermediary INT-00001), `employer` (scheme SCH-001) and `lender` (LND-0001), each with only `USE_PARTNER_PORTAL` and tied to that one partner through `portal_account`. The same migration adds the work queue (`/ops/queue`), workflow definitions and business calendar (`/ops/workflow`), the document register with retention and legal hold (`/ops/documents`; the upload scan result is fixed at Clean because no scanner is connected) and the combined benefit payouts list (`/ops/payouts`).
+Partner portal logins come from migration 077: `agent` (intermediary INT-00001), `employer` (scheme SCH-001) and `lender` (LND-0001), each with only `USE_PARTNER_PORTAL` and tied to that one partner through `portal_account`. The same migration adds the work queue (`/ops/queue`), workflow definitions and business calendar (`/ops/workflow`), the document register with retention and legal hold (`/ops/documents`) and the combined benefit payouts list (`/ops/payouts`).
 
 ### Adding an endpoint
 
@@ -130,3 +130,15 @@ Partner portal logins come from migration 077: `agent` (intermediary INT-00001),
 Rules that drive these modules are data, editable in the workspace: underwriting rule sets and authority limits,
 product benefit and servicing rules, and the credit product rule. The seeded values are starting points for the
 insurer's approved figures.
+
+## Uploads, quarantine and the document register (SH09A)
+
+Every uploaded file (claim evidence, from staff or the customer portal) is held in quarantine (`doc_quarantine`). It
+is stored and hashed but is not a document of record: no normal download serves it and it never satisfies an evidence
+checklist. No malware scanner ships, so the release is a person's decision: a holder of `RELEASE_DOCUMENT` (Super
+Admin and Claims Assessor by default) who is not the uploader inspects the file (`GET
+/portfolio/document-quarantine/{id}/file`, logged) and releases it with a note or rejects it with a reason the uploader
+sees. A release is recorded as `RELEASED_UNSCANNED` and in the evidence chain; nothing is ever labelled clean unless a
+scanner said so. An installation that connects a scanner registers one `UploadScanner` bean: a clean verdict then
+releases the file at once, an infected one rejects it, and a scanner failure leaves it waiting for a person.
+

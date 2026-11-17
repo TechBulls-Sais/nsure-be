@@ -1,0 +1,75 @@
+databaseChangeLog:
+  # SH09A upload quarantine (NS-SH09A-004, AT-SH09A-02). No malware scanner is connected, so every upload waits here
+  # until a person with RELEASE_DOCUMENT (not the uploader) releases it, recorded as not scanned, or rejects it.
+  - changeSet:
+      id: 101-document-quarantine
+      author: nsure
+      changes:
+        - createTable:
+            tableName: doc_quarantine
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_doc_quarantine}}
+              - column: {name: owner_kind, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: owner_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: owner_ref, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: document_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: file_name, type: varchar(255), constraints: {nullable: false}}
+              - column: {name: content_type, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: size_bytes, type: bigint, constraints: {nullable: false}}
+              - column: {name: storage_path, type: varchar(255), constraints: {nullable: false}}
+              - column: {name: sha256, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: uploaded_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: uploaded_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: scan_result, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: scan_detail, type: varchar(300)}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: timestamp(6)}
+              - column: {name: decision_reason, type: varchar(500)}
+              - column: {name: document_id, type: bigint}
+        - createIndex:
+            tableName: doc_quarantine
+            indexName: ix_doc_quarantine_owner
+            columns:
+              - column: {name: owner_kind}
+              - column: {name: owner_id}
+        - createIndex:
+            tableName: doc_quarantine
+            indexName: ix_doc_quarantine_status
+            columns:
+              - column: {name: status}
+  - changeSet:
+      id: 101-claim-document-intake
+      author: nsure
+      comment: >-
+        How each claim document came on record. Summaries are generated; files uploaded before this change were never
+        scanned and are labelled so (they were shown as "Clean" before, which no scan ever established).
+      changes:
+        - addColumn:
+            tableName: ins_claim_document
+            columns:
+              - column: {name: scan_status, type: varchar(30), defaultValue: GENERATED, constraints: {nullable: false}}
+              - column: {name: source_channel, type: varchar(20), defaultValue: SYSTEM, constraints: {nullable: false}}
+              - column: {name: released_by, type: varchar(100)}
+        - sql:
+            sql: |
+              UPDATE ins_claim_document SET scan_status = 'NOT_SCANNED', source_channel = 'UPLOAD'
+              WHERE document_type NOT IN ('Claim summary', 'Interim claim summary');
+  - changeSet:
+      id: 101-release-document-permission
+      author: nsure
+      comment: >-
+        RELEASE_DOCUMENT: release or reject an upload held in quarantine. Granted to the Super Admin (every code) and
+        the Claims Assessor, who reviews claim evidence; the uploader can never release their own file.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT 'documents', 'RELEASE_DOCUMENT', 'DOCUMENT', 'RELEASE', FALSE, 'Release or reject an uploaded file held in quarantine'
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = 'RELEASE_DOCUMENT');
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code = 'RELEASE_DOCUMENT'
+              WHERE r.name IN ('Super Admin', 'Claims Assessor')
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);

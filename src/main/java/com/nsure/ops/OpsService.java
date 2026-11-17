@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.nsure.audit.evidence.EvidenceChain;
 import com.nsure.common.exception.ConflictException;
 import com.nsure.common.exception.NotFoundException;
+import com.nsure.portfolio.DocumentIntake;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.service.PlatformSecurityContext;
@@ -354,11 +355,21 @@ public class OpsService {
             d.put("documentClass", "Policy document");
             docs.add(d);
         }
-        for (Map<String, Object> d : jdbc.query("select d.id, d.document_type, d.file_name, d.uploaded_at, d.uploaded_by,"
-                + " c.record_ref as owner_ref, c.customer_name from ins_claim_document d join ins_claim c on"
-                + " c.id = d.claim_id", ROW)) {
+        for (Map<String, Object> d : jdbc.query("select d.id, d.document_type, d.file_name, d.status, d.uploaded_at,"
+                + " d.uploaded_by, d.scan_status, c.record_ref as owner_ref, c.customer_name from ins_claim_document d"
+                + " join ins_claim c on c.id = d.claim_id", ROW)) {
             d.put("docKey", "C:" + d.get("id"));
             d.put("documentClass", "Claim evidence");
+            docs.add(d);
+        }
+        // Uploads still in quarantine, or refused: on record (and under retention) but not documents of the claim.
+        for (Map<String, Object> d : jdbc.query("select q.id, q.document_type, q.file_name, q.status, q.uploaded_at,"
+                + " q.uploaded_by, q.owner_ref, c.customer_name from doc_quarantine q join ins_claim c on c.id = q.owner_id"
+                + " where q.owner_kind = 'CLAIM' and q.status <> 'RELEASED'", ROW)) {
+            d.put("docKey", "U:" + d.get("id"));
+            d.put("documentClass", "Claim evidence");
+            d.put("scanStatus", "PENDING".equals(d.get("status")) ? DocumentIntake.QUARANTINED : DocumentIntake.REJECTED);
+            d.put("status", "PENDING".equals(d.get("status")) ? DocumentIntake.QUARANTINED : DocumentIntake.REJECTED);
             docs.add(d);
         }
         String term = q == null ? "" : q.trim().toLowerCase(Locale.ROOT);
@@ -373,8 +384,10 @@ public class OpsService {
             boolean hold = control != null && Boolean.TRUE.equals(control.get("legalHold"));
             LocalDate retainUntil = ((LocalDateTime) d.get("uploadedAt")).toLocalDate()
                     .plusYears(retention.getOrDefault((String) d.get("documentClass"), 7));
-            // Every stored file has passed the upload scan; a file that failed it is never stored.
-            d.put("scanStatus", "Clean");
+            // No malware scanner is connected: an upload is called clean only if a scanner said so (AT-SH09A-02).
+            String scan = d.get("scanStatus") == null ? DocumentIntake.GENERATED : (String) d.get("scanStatus");
+            d.put("scanStatus", scan);
+            d.put("scanLabel", DocumentIntake.scanLabel(scan));
             d.put("retainUntil", retainUntil);
             d.put("legalHold", hold);
             d.put("holdReason", control == null ? null : control.get("holdReason"));

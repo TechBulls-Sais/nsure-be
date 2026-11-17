@@ -141,7 +141,9 @@ public class PolicyDocumentService {
                         new PortfolioViews.DocumentView(d.getId(), d.getDocumentType(), d.getFileName(),
                                 d.getContentType(), d.getSizeBytes(), d.getUploadedBy(),
                                 d.getUploadedAt().withNano(0).toString(), d.getStatus(), d.getSha256(),
-                                d.getSupersededBy(), d.getSupersededReason())));
+                                d.getSupersededBy(), d.getSupersededReason(), DocumentIntake.GENERATED,
+                                DocumentIntake.sourceLabel(DocumentIntake.SYSTEM),
+                                DocumentIntake.classification(d.getDocumentType()), null, null)));
         return byPolicy;
     }
 

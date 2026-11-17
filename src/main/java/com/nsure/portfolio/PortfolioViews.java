@@ -235,6 +235,9 @@ public final class PortfolioViews {
     /**
      * One file on a policy or claim; download it from .../documents/{id}. {@code status} is CURRENT or SUPERSEDED (by
      * {@code supersededBy}, for {@code supersededReason}); {@code sha256} is the content hash checked on download.
+     * An upload still in quarantine is listed with status QUARANTINED, or REJECTED once refused, with no {@code id}
+     * (it cannot be downloaded) and its {@code uploadId}; {@code note} says why it is held or why it was refused.
+     * {@code scanStatus} is one of {@link DocumentIntake}'s states; {@code source} and {@code classification} are labels.
      */
     public record DocumentView(
             Long id,
@@ -247,7 +250,12 @@ public final class PortfolioViews {
             String status,
             String sha256,
             Long supersededBy,
-            String supersededReason
+            String supersededReason,
+            String scanStatus,
+            String source,
+            String classification,
+            String note,
+            Long uploadId
     ) {
     }
 

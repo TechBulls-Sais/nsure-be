@@ -151,6 +151,11 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/claims/*/documents", anyOf("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM")),
             rule(POST, "/portfolio/claims/*/documents/summary", anyOf("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM")),
             rule(GET, "/portfolio/claims/*/document-access", anyOf("READ_AUDIT")),
+            // The upload quarantine (AT-SH09A-02): the queue for claim staff, decisions for the document reviewer.
+            rule(GET, "/portfolio/document-quarantine", anyOf("READ_CLAIM")),
+            rule(GET, "/portfolio/document-quarantine/*/file", anyOf("RELEASE_DOCUMENT")),
+            rule(POST, "/portfolio/document-quarantine/*/release", anyOf("RELEASE_DOCUMENT")),
+            rule(POST, "/portfolio/document-quarantine/*/reject", anyOf("RELEASE_DOCUMENT")),
 
             // ── product catalogue (Product Configurator, Actuary) ──────────────────────────────────────
             // The catalogue is already public on the landing page; staff forms need it to pick a product.

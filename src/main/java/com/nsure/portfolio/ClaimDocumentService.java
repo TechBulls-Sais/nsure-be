@@ -21,7 +21,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 /**
  * Claim evidence files: PDF, JPG or PNG up to 10 MB, stored on local disk by {@link DocumentFiles}.
- * Staff need a claim permission; a customer may only touch claims on their own policies.
+ * Staff need a claim permission; a customer may only touch claims on their own policies. Every upload enters the
+ * {@link DocumentQuarantine} and becomes a claim document only once released (AT-SH09A-02).
  */
 @Service
 public class ClaimDocumentService {
@@ -50,11 +51,13 @@ public class ClaimDocumentService {
     private final PortfolioService portfolio;
     private final DocumentFiles files;
     private final DocumentCustody custody;
+    private final DocumentQuarantine quarantine;
 
     public ClaimDocumentService(EntityManager em, ClaimWorkflow claims, WorkflowHistory history,
             PlatformSecurityContext security, PortfolioService portfolio, DocumentFiles files,
-            DocumentCustody custody) {
+            DocumentCustody custody, DocumentQuarantine quarantine) {
         this.custody = custody;
+        this.quarantine = quarantine;
         this.em = em;
         this.claims = claims;
         this.history = history;
@@ -82,7 +85,7 @@ public class ClaimDocumentService {
             throw new NoAuthorizationException("User has no authority to add documents to a claim");
         }
         InsuranceClaim claim = claims.claim(ref);
-        store(claim, file, type, staff.getUsername());
+        store(claim, file, type, staff.getUsername(), DocumentCustody.STAFF);
         return views(em, claim.getId());
     }
 
@@ -207,7 +210,7 @@ public class ClaimDocumentService {
     @Transactional
     public PortfolioViews.ShopView shopUpload(String ref, MultipartFile file, String type) {
         CustomerAccount account = portfolio.customerForLogin();
-        store(ownClaim(account, ref), file, type, account.getLoginUsername());
+        store(ownClaim(account, ref), file, type, account.getLoginUsername(), DocumentCustody.PORTAL);
         return portfolio.shop();
     }
 
@@ -217,16 +220,34 @@ public class ClaimDocumentService {
         return open(ownClaim(account, ref), id, account.getLoginUsername(), DocumentCustody.PORTAL);
     }
 
-    /** The documents on one claim, oldest first. */
+    /**
+     * The documents on one claim, oldest first, then the uploads still in quarantine or refused (listed so the
+     * uploader sees their state, but with no id to download them by).
+     */
     static List<PortfolioViews.DocumentView> views(EntityManager em, Long claimId) {
-        return em.createQuery("select d from ClaimDocument d where d.claimId = :claim order by d.id", ClaimDocument.class)
+        List<PortfolioViews.DocumentView> views = new java.util.ArrayList<>(em.createQuery(
+                        "select d from ClaimDocument d where d.claimId = :claim order by d.id", ClaimDocument.class)
                 .setParameter("claim", claimId)
                 .getResultStream()
                 .map(d -> new PortfolioViews.DocumentView(
                         d.getId(), d.getDocumentType(), d.getFileName(), d.getContentType(), d.getSizeBytes(),
                         d.getUploadedBy(), d.getUploadedAt().withNano(0).toString(), d.getStatus(), d.getSha256(),
-                        d.getSupersededBy(), d.getSupersededReason()))
-                .toList();
+                        d.getSupersededBy(), d.getSupersededReason(), d.getScanStatus(),
+                        DocumentIntake.sourceLabel(d.getSourceChannel()),
+                        DocumentIntake.classification(d.getDocumentType()), intakeNote(d), null))
+                .toList());
+        views.addAll(DocumentQuarantine.heldViews(em, claimId));
+        return views;
+    }
+
+    private static String intakeNote(ClaimDocument d) {
+        return switch (d.getScanStatus()) {
+            case DocumentIntake.RELEASED_UNSCANNED -> "Released from quarantine by " + d.getReleasedBy()
+                    + " without a malware scan (no scanner is configured).";
+            case DocumentIntake.CLEAN -> "Passed the malware scan (" + d.getReleasedBy() + ").";
+            case DocumentIntake.NOT_SCANNED -> "Stored before uploads were quarantined; never scanned.";
+            default -> null;
+        };
     }
 
     private InsuranceClaim ownClaim(CustomerAccount account, String ref) {
@@ -238,7 +259,8 @@ public class ClaimDocumentService {
         return claim;
     }
 
-    private void store(InsuranceClaim claim, MultipartFile file, String type, String uploadedBy) {
+    /** Validates the upload and holds it in quarantine; it is not a claim document until released. */
+    private void store(InsuranceClaim claim, MultipartFile file, String type, String uploadedBy, String channel) {
         if (CLOSED.contains(claim.getStatus())) {
             throw new IllegalArgumentException("Documents can only be added while the claim is open.");
         }
@@ -264,8 +286,8 @@ public class ClaimDocumentService {
         if (contentType == null || !matches(contentType, extension)) {
             throw new IllegalArgumentException("Only PDF, JPG and PNG files can be uploaded.");
         }
-        save(claim, bytes, fileName, extension.equals("jpeg") ? "jpg" : extension, contentType, documentType,
-                uploadedBy, "Document Added", 0, null);
+        quarantine.receive(claim, bytes, fileName, extension.equals("jpeg") ? "jpg" : extension, contentType,
+                documentType, uploadedBy, channel);
     }
 
     /** Writes the bytes to disk, then the row and a history entry; the file is removed again if the row fails. */
