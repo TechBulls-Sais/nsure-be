@@ -381,6 +381,12 @@ public class GroupLifeService {
      */
     @Transactional(readOnly = true)
     public Map<String, Object> impact(String schemeRef, String eventType, String effectiveDate, String targetSchemeRef) {
+        return impact(schemeRef, eventType, effectiveDate, targetSchemeRef, null);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> impact(String schemeRef, String eventType, String effectiveDate, String targetSchemeRef,
+            String rateChangePercent) {
         user("READ_SCHEME");
         GroupScheme s = scheme(schemeRef);
         String type = eventType.toUpperCase(Locale.ROOT);
@@ -388,10 +394,12 @@ public class GroupLifeService {
             throw new IllegalArgumentException("eventType must be RENEWAL, SUSPENSION, CLOSURE, TRANSFER or REACTIVATION.");
         }
         return impactOf(s, type, effective(s, type, effectiveDate), targetSchemeRef == null || targetSchemeRef.isBlank()
-                ? null : scheme(targetSchemeRef.trim()));
+                ? null : scheme(targetSchemeRef.trim()), rateChangePercent == null || rateChangePercent.isBlank() ? null
+                : new BigDecimal(rateChangePercent.trim()));
     }
 
-    private Map<String, Object> impactOf(GroupScheme s, String type, LocalDate effective, GroupScheme target) {
+    private Map<String, Object> impactOf(GroupScheme s, String type, LocalDate effective, GroupScheme target,
+            BigDecimal rateChangePercent) {
         List<SchemeMember> members = em.createQuery("select m from SchemeMember m where m.scheme = :s",
                 SchemeMember.class).setParameter("s", s).getResultList();
         List<SchemeInvoice> unpaid = em.createQuery("select i from SchemeInvoice i where i.scheme = :s"
@@ -445,6 +453,8 @@ public class GroupLifeService {
         List<String> notes = new ArrayList<>();
         if ("RENEWAL".equals(type)) {
             impact.put("nextRenewalDate", s.getRenewalDate().plusYears(1));
+            impact.put("rateChangePercent", rateChangePercent == null ? BigDecimal.ZERO : rateChangePercent);
+            impact.put("comparison", lifecycle.renewalComparison(s, rateChangePercent));
             notes.add("Policy year " + s.getPolicyYear() + " ends " + s.getRenewalDate() + "; year "
                     + (s.getPolicyYear() + 1) + " follows with no gap or overlap.");
             notes.add("Approved income-protection claims in payment continue across the renewal.");
@@ -536,7 +546,9 @@ public class GroupLifeService {
         if ("TRANSFER".equals(type)) {
             target = scheme(required(body, "targetSchemeRef"));
         }
-        Map<String, Object> impact = impactOf(s, type, effective, target);
+        BigDecimal ratePercent = optional(body, "rateChangePercent") == null ? null
+                : new BigDecimal(optional(body, "rateChangePercent"));
+        Map<String, Object> impact = impactOf(s, type, effective, target, ratePercent);
         @SuppressWarnings("unchecked")
         List<String> blockers = (List<String>) impact.get("blockers");
         if (!blockers.isEmpty()) {
@@ -636,6 +648,138 @@ public class GroupLifeService {
         audit.record(actor, "Scheme " + e.eventType.toLowerCase(Locale.ROOT) + " approved", "Scheme",
                 s.getRef(), ref + ": " + e.decisionNote);
         return eventView(e);
+    }
+
+    // ── workspace views: master-policy timeline, resolved rules, bordereau history ─────────────────
+
+    /**
+     * The master-policy timeline (GL01 workspace): quote versions and their decisions, activation, plan approvals and
+     * every renewal, suspension, reactivation, transfer or closure request with its decision, in date order.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> timeline(String schemeRef) {
+        user("READ_SCHEME");
+        GroupScheme s = scheme(schemeRef);
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (s.getQuoteRef() != null) {
+            for (Quote q : em.createQuery("select q from SchemeQuote q where q.ref = :ref order by q.versionNo",
+                    Quote.class).setParameter("ref", s.getQuoteRef()).getResultList()) {
+                out.add(entry(q.createdAt, "QUOTE", q.ref + " v" + q.versionNo + " prepared", Money.text(q.annualPremium)
+                        + " a year at " + q.ratePerMille.stripTrailingZeros().toPlainString() + " per mille", q.createdBy));
+                if (q.decidedAt != null) {
+                    out.add(entry(q.decidedAt, "QUOTE", q.ref + " v" + q.versionNo + " "
+                            + ("DECLINED".equals(q.status) ? "declined" : "approved"), q.decisionNote, q.decidedBy));
+                }
+            }
+        }
+        em.createQuery("select e from OutboxEvent e where e.eventType = :t and e.aggregateRef = :ref order by e.id",
+                        com.nsure.integration.OutboxEvent.class)
+                .setParameter("t", Events.SCHEME_ACTIVATED).setParameter("ref", schemeRef).getResultList()
+                .forEach(e -> out.add(entry(e.getOccurredAt(), "ACTIVATION", "Master policy activated",
+                        "In force from " + s.getInceptionDate() + (s.getQuoteRef() == null ? "" : " on the accepted terms of "
+                                + s.getQuoteRef()), e.getPublishedBy())));
+        em.createQuery("select b from SchemeBenefit b where b.schemeRef = :ref and b.approvedAt is not null",
+                        Benefit.class).setParameter("ref", schemeRef).getResultList()
+                .forEach(b -> out.add(entry(b.approvedAt, "PLAN", label(b.benefitType) + " approved", b.terms,
+                        b.approvedBy)));
+        for (SchemeEvent e : em.createQuery("select e from SchemeEvent e where e.schemeRef = :ref order by e.id",
+                SchemeEvent.class).setParameter("ref", schemeRef).getResultList()) {
+            out.add(entry(e.requestedAt, e.eventType, label(e.eventType) + " requested (" + e.ref + ")",
+                    "Effective " + e.effectiveDate + ": " + e.reason, e.requestedBy));
+            if (e.decidedAt != null) {
+                out.add(entry(e.decidedAt, e.eventType, label(e.eventType) + " " + e.status.toLowerCase(Locale.ROOT)
+                        + " (" + e.ref + ")", e.decisionNote, e.decidedBy));
+            }
+        }
+        out.sort(java.util.Comparator.comparing(m -> (LocalDateTime) m.get("at"),
+                java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())));
+        return out;
+    }
+
+    private static Map<String, Object> entry(LocalDateTime at, String kind, String title, String detail, String actor) {
+        Map<String, Object> v = new LinkedHashMap<>();
+        v.put("at", at);
+        v.put("kind", kind);
+        v.put("title", title);
+        v.put("detail", detail);
+        v.put("actor", actor);
+        return v;
+    }
+
+    /**
+     * The resolved rule set (NS-GL02-002, GL02 workspace): for each category, the cover formula, free-cover limit, rate,
+     * entry ages and late-entry window it applies, and for each scheme benefit its definition against the product's
+     * non-overridable maximum, with where each value comes from.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> resolvedRules(String schemeRef) {
+        user("READ_SCHEME");
+        GroupScheme s = scheme(schemeRef);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("schemeRef", schemeRef);
+        out.put("policyYear", s.getPolicyYear());
+        out.put("acceptedTerms", s.getQuoteRef());
+        List<Map<String, Object>> categories = new ArrayList<>();
+        for (com.nsure.group.GroupViews.CategoryView c : schemes.scheme(schemeRef).categories()) {
+            Map<String, Object> v = new LinkedHashMap<>();
+            v.put("category", c.code());
+            v.put("name", c.name());
+            v.put("cover", "SALARY_MULTIPLE".equals(c.benefitBasis()) ? c.salaryMultiple().stripTrailingZeros()
+                    .toPlainString() + " x annual salary" : Money.text(c.fixedCover()) + " fixed");
+            v.put("freeCoverLimit", c.freeCoverLimit());
+            v.put("ratePerMille", c.ratePerMille());
+            v.put("entryAges", c.minEntryAge() + "-" + c.maxEntryAge());
+            v.put("lateEntryDays", c.lateEntryDays());
+            v.put("source", "Category terms (override the scheme and product defaults)");
+            v.put("members", c.activeMembers());
+            categories.add(v);
+        }
+        out.put("categories", categories);
+        List<Map<String, Object>> benefits = new ArrayList<>();
+        for (Benefit b : em.createQuery("select b from SchemeBenefit b where b.schemeRef = :ref order by b.benefitType",
+                Benefit.class).setParameter("ref", schemeRef).getResultList()) {
+            Map<String, Object> v = benefitView(b);
+            BigDecimal max = PRODUCT_MAXIMUM.get(b.benefitType);
+            v.put("source", max != null && b.fixedAmount != null && b.fixedAmount.compareTo(max) < 0
+                    ? "Scheme override below the product maximum" : b.terms != null && b.terms.equals(defaultTerms(
+                    b.benefitType)) ? "Product default terms" : "Scheme terms");
+            v.put("withinProductMaximum", max == null || b.fixedAmount == null || b.fixedAmount.compareTo(max) <= 0);
+            benefits.add(v);
+        }
+        out.put("benefits", benefits);
+        return out;
+    }
+
+    /** The lender's bordereau history (GL06 workspace): each loan file with its counts, premium and exceptions. */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> bordereaux(String schemeRef) {
+        user("READ_SCHEME");
+        Map<String, Map<String, Object>> byBatch = new LinkedHashMap<>();
+        for (CreditLoan l : em.createQuery("select l from GroupCreditLoan l where l.schemeRef = :ref order by l.id",
+                CreditLoan.class).setParameter("ref", schemeRef).getResultList()) {
+            Map<String, Object> v = byBatch.computeIfAbsent(l.batchRef, k -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("batchReference", k);
+                m.put("receivedAt", l.createdAt);
+                m.put("loans", 0);
+                m.put("active", 0);
+                m.put("referred", 0);
+                m.put("settled", 0);
+                m.put("coverAmount", BigDecimal.ZERO);
+                m.put("premium", BigDecimal.ZERO);
+                return m;
+            });
+            v.merge("loans", 1, (a, b) -> (Integer) a + (Integer) b);
+            String key = "ACTIVE".equals(l.status) ? "active" : "REFERRED".equals(l.status) ? "referred" : "settled";
+            v.merge(key, 1, (a, b) -> (Integer) a + (Integer) b);
+            v.merge("coverAmount", l.coverAmount, (a, b) -> ((BigDecimal) a).add((BigDecimal) b));
+            if (!"REFERRED".equals(l.status)) {
+                v.merge("premium", l.premium, (a, b) -> ((BigDecimal) a).add((BigDecimal) b));
+            }
+        }
+        List<Map<String, Object>> out = new ArrayList<>(byBatch.values());
+        java.util.Collections.reverse(out);
+        return out;
     }
 
     // ── certificates (NS-GL01-005) ────────────────────────────────────────────────────────────────

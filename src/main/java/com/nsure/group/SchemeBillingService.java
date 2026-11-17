@@ -89,6 +89,8 @@ public class SchemeBillingService {
 
         SchemeInvoice invoice = new SchemeInvoice(records.nextRef(SchemeInvoice.class, "GIN-", 5), scheme,
                 period.toString(), start, end, user.getUsername());
+        // Scheme years run from the inception anniversary (renewal moves the renewal date on by a year).
+        invoice.policyYear(Math.max(1, java.time.Period.between(scheme.getInceptionDate(), start).getYears() + 1));
         List<InvoiceLine> lines = new ArrayList<>();
         BigDecimal total = BigDecimal.ZERO.setScale(2);
         for (SchemeMember member : members) {
@@ -127,9 +129,42 @@ public class SchemeBillingService {
         data.put("schemeName", scheme.getName());
         data.put("invoiceRef", invoice.getRef());
         data.put("period", invoice.getPeriod());
+        data.put("policyYear", invoice.getPolicyYear());
         data.put("amount", total.toPlainString());
         outbox.publish(Events.SCHEME_INVOICE_ISSUED, invoice.getRef(), data, user.getUsername());
         return records.invoiceView(invoice);
+    }
+
+    /**
+     * The arrears queue (GL05 workspace): every scheme invoice still owed after its billing period ended, oldest
+     * first, with the days overdue and any amount the sponsor disputes.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> arrears() {
+        security.authenticatedUser().validateHasPermissionTo("READ_SCHEME");
+        LocalDate today = LocalDate.now();
+        List<SchemeInvoice> owed = em.createQuery("select i from SchemeInvoice i join fetch i.scheme"
+                        + " where i.outstanding > 0 and i.periodEnd < :today order by i.periodEnd, i.id", SchemeInvoice.class)
+                .setParameter("today", today).getResultList();
+        Map<String, GroupViews.InvoiceView> views = new java.util.HashMap<>();
+        records.invoiceViews(owed).forEach(v -> views.put(v.ref(), v));
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (SchemeInvoice i : owed) {
+            Map<String, Object> v = new LinkedHashMap<>();
+            v.put("invoiceRef", i.getRef());
+            v.put("schemeRef", i.getScheme().getRef());
+            v.put("schemeName", i.getScheme().getName());
+            v.put("schemeStatus", i.getScheme().getStatus());
+            v.put("period", i.getPeriod());
+            v.put("policyYear", i.getPolicyYear());
+            v.put("amount", i.getAmount());
+            v.put("outstanding", i.getOutstanding());
+            v.put("disputedAmount", views.get(i.getRef()).disputedAmount());
+            v.put("status", i.getStatus());
+            v.put("daysOverdue", ChronoUnit.DAYS.between(i.getPeriodEnd(), today));
+            out.add(v);
+        }
+        return out;
     }
 
     /**

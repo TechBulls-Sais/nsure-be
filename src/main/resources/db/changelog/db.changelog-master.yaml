@@ -245,3 +245,6 @@ databaseChangeLog:
   - include:
       file: changes/108-group-census-reconciliation.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/109-group-invoice-policy-year.yaml
+      relativeToChangelogFile: true

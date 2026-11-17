@@ -250,7 +250,7 @@ public class GroupRecords {
                 scheme.getColor(), scheme.getStatus(), scheme.getInceptionDate(), scheme.getRenewalDate(),
                 scheme.getRenewal(), scheme.getBillingFrequency(), activeMembers, pending,
                 premium.setScale(2, RoundingMode.HALF_UP), outstanding.setScale(2, RoundingMode.HALF_UP), categories,
-                scheme.getRowVersion());
+                scheme.getQuoteRef(), scheme.getPolicyYear(), scheme.getRowVersion());
     }
 
     static GroupViews.CategoryView categoryView(BenefitCategory c, int activeMembers) {
@@ -324,7 +324,7 @@ public class GroupRecords {
                         i.getPeriod(), i.getPeriodStart(), i.getPeriodEnd(), i.getAmount(), i.getPaidAmount(),
                         i.getOutstanding(), lines.getOrDefault(i.getId(), List.of()).stream()
                                 .filter(l -> "OPEN".equals(l.disputeStatus())).map(GroupViews.InvoiceLineView::premium)
-                                .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add), i.getStatus(), i.getMemberCount(), i.getIssuedBy(), i.getIssuedAt(),
+                                .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add), i.getStatus(), i.getPolicyYear(), i.getMemberCount(), i.getIssuedBy(), i.getIssuedAt(),
                         lines.getOrDefault(i.getId(), List.of()), receipts.getOrDefault(i.getId(), List.of())))
                 .toList();
     }

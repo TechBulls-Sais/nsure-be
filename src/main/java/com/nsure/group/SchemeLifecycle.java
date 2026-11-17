@@ -109,6 +109,39 @@ public class SchemeLifecycle {
                 }).toList();
     }
 
+    /**
+     * Renewal comparison (GL05 workspace): each category's expiring rate and monthly premium on the cover in force
+     * beside the proposed rate after the requested change. The comparison is a preview; approving the renewal records
+     * the change, and the new rates are set on the categories by the scheme administrator.
+     */
+    public List<Map<String, Object>> renewalComparison(GroupScheme scheme, BigDecimal ratePercent) {
+        BigDecimal factor = BigDecimal.ONE.add((ratePercent == null ? BigDecimal.ZERO : ratePercent)
+                .divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP));
+        Map<String, BigDecimal> cover = new HashMap<>();
+        Map<String, Integer> count = new HashMap<>();
+        for (SchemeMember m : members(scheme, "RENEWAL")) {
+            cover.merge(m.getCategory().getCode(), m.getAcceptedCover(), BigDecimal::add);
+            count.merge(m.getCategory().getCode(), 1, Integer::sum);
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (BenefitCategory c : records.categories(scheme)) {
+            BigDecimal inForce = cover.getOrDefault(c.getCode(), BigDecimal.ZERO);
+            BigDecimal proposedRate = c.getRatePerMille().multiply(factor).setScale(4, RoundingMode.HALF_UP);
+            Map<String, Object> v = new LinkedHashMap<>();
+            v.put("category", c.getCode());
+            v.put("name", c.getName());
+            v.put("members", count.getOrDefault(c.getCode(), 0));
+            v.put("coverInForce", inForce.setScale(2, RoundingMode.HALF_UP));
+            v.put("ratePerMille", c.getRatePerMille());
+            v.put("proposedRatePerMille", proposedRate);
+            v.put("monthlyPremium", c.monthlyPremium(inForce));
+            v.put("proposedMonthlyPremium", inForce.multiply(proposedRate).divide(BigDecimal.valueOf(1000), 2,
+                    RoundingMode.HALF_UP));
+            out.add(v);
+        }
+        return out;
+    }
+
     /** Why the members cannot move to the target scheme: categories it lacks, or keys already on cover there. */
     public List<String> transferBlockers(GroupScheme source, GroupScheme target) {
         List<String> blockers = new ArrayList<>();

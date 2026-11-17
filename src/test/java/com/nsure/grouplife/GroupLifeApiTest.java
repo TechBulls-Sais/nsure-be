@@ -40,7 +40,7 @@ class GroupLifeApiTest {
                 .andExpect(jsonPath("$.version").value(2))
                 .andExpect(jsonPath("$.annualPremium").value(86400.0));
         mockMvc.perform(get("/group-life/quotes").with(signedIn("admin", "password")))
-                .andExpect(jsonPath("$[?(@.version == 1)].status").value("SUPERSEDED"));
+                .andExpect(jsonPath("$[?(@.ref == '" + ref + "' && @.version == 1)].status").value("SUPERSEDED"));
         mockMvc.perform(json(post("/group-life/quotes/" + ref + "/progress"), "admin", "{\"action\":\"SUBMIT\"}"))
                 .andExpect(jsonPath("$.status").value("SUBMITTED"));
         mockMvc.perform(json(post("/group-life/quotes/" + ref + "/progress"), "admin", "{\"action\":\"APPROVE\"}"))

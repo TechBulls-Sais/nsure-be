@@ -81,6 +81,16 @@ public class GroupController {
         return census.commit(ref);
     }
 
+    @GetMapping("/underwriting-queue")
+    public List<java.util.Map<String, Object>> underwritingQueue() {
+        return schemes.underwritingQueue();
+    }
+
+    @GetMapping("/arrears")
+    public List<java.util.Map<String, Object>> arrears() {
+        return billing.arrears();
+    }
+
     @PostMapping("/members/{id}/underwriting")
     public GroupViews.MemberView underwrite(@PathVariable Long id, @RequestBody JsonNode body) {
         return schemes.underwrite(id, body);

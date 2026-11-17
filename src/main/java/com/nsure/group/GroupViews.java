@@ -28,6 +28,9 @@ public final class GroupViews {
             BigDecimal monthlyPremium,
             BigDecimal outstandingBalance,
             int categories,
+            // The quotation the master policy was activated from (accepted terms), if any.
+            String quoteRef,
+            Integer policyYear,
             // Send back in If-Match when changing the scheme (NS-TXN-001).
             long version) {
     }
@@ -150,6 +153,7 @@ public final class GroupViews {
             // Premium on lines the sponsor disputes; cover is not changed by a dispute (NS-GL05-003).
             BigDecimal disputedAmount,
             String status,
+            Integer policyYear,
             int memberCount,
             String issuedBy,
             LocalDateTime issuedAt,

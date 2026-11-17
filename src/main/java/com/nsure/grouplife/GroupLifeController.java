@@ -69,8 +69,9 @@ public class GroupLifeController {
     @GetMapping("/schemes/{ref}/impact")
     public Map<String, Object> impact(@PathVariable String ref, @RequestParam String eventType,
             @RequestParam(required = false) String effectiveDate,
-            @RequestParam(required = false) String targetSchemeRef) {
-        return groupLife.impact(ref, eventType, effectiveDate, targetSchemeRef);
+            @RequestParam(required = false) String targetSchemeRef,
+            @RequestParam(required = false) String rateChangePercent) {
+        return groupLife.impact(ref, eventType, effectiveDate, targetSchemeRef, rateChangePercent);
     }
 
     @GetMapping("/events")
@@ -88,6 +89,21 @@ public class GroupLifeController {
     @PostMapping("/events/{ref}/decision")
     public Map<String, Object> decideEvent(@PathVariable String ref, @RequestBody JsonNode body) {
         return groupLife.decideEvent(ref, body);
+    }
+
+    @GetMapping("/schemes/{ref}/timeline")
+    public List<Map<String, Object>> timeline(@PathVariable String ref) {
+        return groupLife.timeline(ref);
+    }
+
+    @GetMapping("/schemes/{ref}/resolved-rules")
+    public Map<String, Object> resolvedRules(@PathVariable String ref) {
+        return groupLife.resolvedRules(ref);
+    }
+
+    @GetMapping("/schemes/{ref}/bordereaux")
+    public List<Map<String, Object>> bordereaux(@PathVariable String ref) {
+        return groupLife.bordereaux(ref);
     }
 
     @GetMapping("/schemes/{ref}/certificates")

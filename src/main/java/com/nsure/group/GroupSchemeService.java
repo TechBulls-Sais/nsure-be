@@ -357,6 +357,52 @@ public class GroupSchemeService {
         category.lateEntry(lateEntryDays);
     }
 
+    /**
+     * The member underwriting queue across schemes (GL03 workspace): every member with cover pending underwriting,
+     * oldest first, with the free-cover comparison, the actively-at-work declaration and why it was referred, beside
+     * the scheme's aggregate exposure in force and pending.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> underwritingQueue() {
+        security.authenticatedUser().validateHasPermissionTo("READ_SCHEME");
+        Map<Long, BigDecimal[]> exposure = new HashMap<>();
+        for (Object[] row : em.createQuery("select m.scheme.id, sum(m.acceptedCover), sum(m.pendingCover)"
+                        + " from SchemeMember m where m.status in :statuses group by m.scheme.id", Object[].class)
+                .setParameter("statuses", SchemeMember.ON_COVER).getResultList()) {
+            exposure.put((Long) row[0], new BigDecimal[] {(BigDecimal) row[1], (BigDecimal) row[2]});
+        }
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (SchemeMember m : em.createQuery("select m from SchemeMember m join fetch m.category join fetch m.scheme"
+                        + " where m.status = :pending order by m.updatedAt, m.id", SchemeMember.class)
+                .setParameter("pending", SchemeMember.UNDERWRITING_PENDING).getResultList()) {
+            String reason = em.createQuery("select c.detail from MemberChange c where c.member = :m"
+                            + " and c.changeType in ('JOIN', 'SALARY', 'TRANSFER_IN') order by c.id desc", String.class)
+                    .setParameter("m", m).setMaxResults(1).getResultStream().findFirst().orElse(null);
+            BigDecimal[] scheme = exposure.getOrDefault(m.getScheme().getId(), new BigDecimal[] {BigDecimal.ZERO,
+                    BigDecimal.ZERO});
+            Map<String, Object> v = new java.util.LinkedHashMap<>();
+            v.put("memberId", m.getId());
+            v.put("schemeRef", m.getScheme().getRef());
+            v.put("schemeName", m.getScheme().getName());
+            v.put("schemeStatus", m.getScheme().getStatus());
+            v.put("memberKey", m.getMemberKey());
+            v.put("name", m.fullName());
+            v.put("category", m.getCategory().getCode());
+            v.put("requestedCover", m.getRequestedCover());
+            v.put("freeCoverLimit", m.getCategory().getFreeCoverLimit());
+            v.put("acceptedCover", m.getAcceptedCover());
+            v.put("pendingCover", m.getPendingCover());
+            v.put("activelyAtWork", m.getActivelyAtWork());
+            v.put("referredBecause", reason);
+            v.put("waitingSince", m.getUpdatedAt());
+            v.put("schemeCoverInForce", scheme[0]);
+            v.put("schemeCoverPending", scheme[1]);
+            v.put("version", m.getRowVersion());
+            out.add(v);
+        }
+        return out;
+    }
+
     // ── member underwriting (GL03-lite) ────────────────────────────────────────────────────────────
 
     /**

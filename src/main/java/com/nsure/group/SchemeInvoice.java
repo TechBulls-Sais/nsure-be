@@ -58,6 +58,18 @@ public class SchemeInvoice {
     @Column(name = "invoice_status", nullable = false, length = 20)
     private String status;
 
+    /** The scheme year the billing period falls in (GL05: policy-year references on every bill). */
+    @Column(name = "policy_year")
+    private Integer policyYear;
+
+    void policyYear(int year) {
+        this.policyYear = year;
+    }
+
+    public Integer getPolicyYear() {
+        return policyYear;
+    }
+
     @Column(name = "member_count", nullable = false)
     private int memberCount;
 
