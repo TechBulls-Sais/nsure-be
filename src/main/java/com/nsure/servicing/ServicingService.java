@@ -142,7 +142,13 @@ public class ServicingService {
                 em.createQuery("select r from LifeReview r where r.policyRef = :ref order by r.dueDate", LifeReview.class)
                         .setParameter("ref", policyRef).getResultList().stream().map(this::reviewView).toList(),
                 TYPES,
-                roster(policy));
+                roster(policy),
+                em.createQuery("select b from PolicyBeneficiary b where b.policy = :policy order by b.effectiveFrom,"
+                                + " b.id", com.nsure.portfolio.PolicyBeneficiary.class)
+                        .setParameter("policy", policy).getResultList().stream()
+                        .map(b -> new ServicingViews.BeneficiaryEpisode(b.getFullName(), b.getRelationship(),
+                                b.isPrimary(), b.getEffectiveFrom(), b.getRemovedFrom(), b.getRemovedBy()))
+                        .toList());
     }
 
     // ── the family roster (IL04 records and workspace) ────────────────────────────────────────────

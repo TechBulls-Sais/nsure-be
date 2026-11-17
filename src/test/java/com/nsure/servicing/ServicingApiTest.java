@@ -75,6 +75,22 @@ class ServicingApiTest {
                 .andExpect(jsonPath("$.policy.payerName").value("Kabelo Payer"));
         assertThat(events("PolicyChanged", policy)).isEqualTo(1);
 
+        // IL03 workspace: beneficiary history keeps a removed designation with its dates, not only current ones.
+        String added = mockMvc.perform(json(post("/portfolio/policies/" + policy + "/beneficiaries"), "admin",
+                        "{\"fullName\":\"Lesedi Beneficiary\",\"relationship\":\"Child\"}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Integer beneficiary = ((List<Integer>) JsonPath.read(added, "$..beneficiaries[?(@.fullName == 'Lesedi Beneficiary')].id"))
+                .get(0);
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .delete("/portfolio/policies/" + policy + "/beneficiaries/" + beneficiary)
+                        .with(signedIn("admin", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.beneficiaryHistory[?(@.fullName == 'Lesedi Beneficiary')].removedFrom")
+                        .value(LocalDate.now().toString()))
+                .andExpect(jsonPath("$.beneficiaryHistory[?(@.fullName == 'Lesedi Beneficiary')].removedBy").value("admin"));
+
         // A material increase in risk is decided by underwriting, by someone other than the requester.
         String increase = "{\"type\":\"SUM_ASSURED\",\"tier\":\"Silver\",\"reason\":\"Customer wants more cover\"}";
         mockMvc.perform(json(post(base + "/endorsements/preview"), "admin", increase))
