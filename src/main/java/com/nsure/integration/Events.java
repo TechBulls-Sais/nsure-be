@@ -51,6 +51,8 @@ public final class Events {
 
     // Individual new business (spec IL01).
     public static final String APPLICATION_SUBMITTED = "ApplicationSubmitted";
+    /** applicationRef, policyRef, customerRef, product, quoteRef, quoteVersion. Staff issued an application's offer. */
+    public static final String ISSUE_REQUESTED = "IssueRequested";
     // IL02 underwriting.
     public static final String EVIDENCE_REQUESTED = "EvidenceRequested";
     public static final String UNDERWRITING_DECIDED = "UnderwritingDecided";

@@ -102,6 +102,8 @@ class UnderwritingApiTest {
                         "{\"accept\":true,\"note\":\"Signed revised offer received\"}"))
                 .andExpect(status().isOk());
 
+        // IL01: each accepted underwriting offer raises OfferAccepted (alongside OfferAnswered).
+        assertThat(events("OfferAccepted", ref)).isEqualTo(2);
         // A-19: each accepted offer is a new version of the price trace, and the application shows that price.
         String application = mockMvc.perform(get("/portfolio/applications").with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString();

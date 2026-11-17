@@ -164,7 +164,7 @@ public class QuoteService {
                 + " (underwriting offer v" + offerVersion + " on " + caseRef + ")");
         next.accept(actor, clip("Underwriting offer v" + offerVersion + " accepted: " + note, 300));
         em.persist(next);
-        publishAccepted(next, actor);
+        // OfferAccepted for this acceptance is published by underwriting, with the case and this version.
         return next;
     }
 

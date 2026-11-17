@@ -686,6 +686,9 @@ public class PortfolioService {
                             "select p from InsurancePolicy p where p.issueKey = :key", InsurancePolicy.class)
                     .setParameter("key", key).getResultStream().findFirst();
             if (earlier.isPresent()) {
+                // A repeat of the same request gets the same policy; the key on a different request is a conflict,
+                // never silently the earlier policy (§10 issue contract).
+                requireSameIssue(earlier.get(), body, key);
                 return cover(earlier.get());
             }
         }
@@ -731,6 +734,7 @@ public class PortfolioService {
         // NS-SH03-003, AT-IL01-01: an application issues at its accepted, still-valid quote, never re-priced.
         Quote quote = application != null && application.getQuoteRef() != null
                 ? quotes.requireIssuable(application.getQuoteRef(), application.getQuoteVersion()) : null;
+        requireAcceptedOffer(body, application, quote);
         List<RateTableService.PricedLife> lives;
         if (quote != null) {
             applyQuote(row, quote);
@@ -759,9 +763,67 @@ public class PortfolioService {
         policyWorkflow.logOpened(row, staff.getUsername());
         if (application != null) {
             application.setStatus("Issued");
+            // IL01: the issue of an application is requested; cover itself follows the first premium (PolicyIssued).
+            Map<String, Object> requested = new java.util.LinkedHashMap<>();
+            requested.put("applicationRef", application.getRef());
+            requested.put("policyRef", row.getRef());
+            requested.put("customerRef", account.getRef());
+            requested.put("product", row.getProduct());
+            requested.put("quoteRef", quote == null ? "" : quote.getRef());
+            requested.put("quoteVersion", quote == null ? 0 : quote.getVersionNo());
+            outbox.publish(com.nsure.integration.Events.ISSUE_REQUESTED, application.getRef(), requested,
+                    staff.getUsername());
         }
         em.flush();
         return cover(row);
+    }
+
+    /** The same Idempotency-Key must carry the same request: application, customer, product and tier. */
+    private static void requireSameIssue(InsurancePolicy earlier, JsonNode body, String key) {
+        List<String> differs = new ArrayList<>();
+        String app = blank(optional(body, "applicationRef")).trim();
+        if (!app.equalsIgnoreCase(blank(earlier.getApplicationRef()))) {
+            differs.add("application");
+        }
+        String customerRef = blank(optional(body, "customerRef")).trim();
+        if (!customerRef.isEmpty() && !customerRef.equalsIgnoreCase(blank(earlier.getCustomerRef()))) {
+            differs.add("customer");
+        }
+        String product = blank(optional(body, "product")).trim();
+        if (!product.isEmpty() && !product.equals(earlier.getProduct())) {
+            differs.add("product");
+        }
+        String tier = blank(optional(body, "tier")).trim();
+        if (!tier.isEmpty() && !tier.equalsIgnoreCase(blank(earlier.getTier()))) {
+            differs.add("tier");
+        }
+        if (!differs.isEmpty()) {
+            throw new com.nsure.audit.exception.IdempotencyConflictException(null, "COMPLETED", "Idempotency-Key " + key
+                    + " was already used to issue " + earlier.getRef() + " for a different request ("
+                    + String.join(", ", differs) + "). Use a new key for a new request.", null);
+        }
+    }
+
+    /**
+     * {acceptedOfferId?, acceptedOfferVersion?}: when the caller names the offer the customer accepted, issue goes
+     * ahead only if it is still the application's accepted quote version (§10 issue contract).
+     */
+    private static void requireAcceptedOffer(JsonNode body, InsuranceApplication application, Quote quote) {
+        String offer = blank(optional(body, "acceptedOfferId")).trim();
+        boolean versionGiven = body.hasNonNull("acceptedOfferVersion");
+        if (offer.isEmpty() && !versionGiven) {
+            return;
+        }
+        if (application == null || quote == null) {
+            throw new IllegalArgumentException("An accepted offer can only be named when issuing from an application"
+                    + " priced on a quote.");
+        }
+        if ((!offer.isEmpty() && !offer.equalsIgnoreCase(quote.getRef()))
+                || (versionGiven && body.get("acceptedOfferVersion").asInt() != quote.getVersionNo())) {
+            throw new com.nsure.common.exception.ConflictException(application.getRef() + " now stands on offer "
+                    + quote.getRef() + " version " + quote.getVersionNo() + ", not the one named. Refresh and confirm"
+                    + " the customer accepted it.");
+        }
     }
 
     @Transactional(readOnly = true)

@@ -510,6 +510,16 @@ public class UnderwritingService {
                 }
                 app.setPremium(c.offerPremium);
             }
+            // IL01: the spec's OfferAccepted for an underwriting offer (OfferAnswered below stays for its handlers).
+            Map<String, Object> accepted = new LinkedHashMap<>();
+            accepted.put("caseRef", c.ref);
+            accepted.put("applicationRef", c.applicationRef);
+            accepted.put("customerRef", c.customerRef == null ? "" : c.customerRef);
+            accepted.put("offerVersion", c.offerVersion);
+            accepted.put("quoteRef", app.getQuoteRef() == null ? "" : app.getQuoteRef());
+            accepted.put("version", app.getQuoteVersion() == null ? 0 : app.getQuoteVersion());
+            accepted.put("premium", app.getPremium() == null ? "" : app.getPremium().toPlainString());
+            outbox.publish(Events.OFFER_ACCEPTED, c.ref, accepted, user.getUsername());
         } else {
             c.offerStatus = OFFER_REFUSED;
             c.status = DECLINED;
