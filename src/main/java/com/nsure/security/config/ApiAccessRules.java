@@ -69,6 +69,8 @@ public final class ApiAccessRules {
             rule(GET, "/portfolio/shop", customer()),
             rule(POST, "/portfolio/shop", customer()),
             rule(POST, "/portfolio/shop/quote", customer()),
+            rule(GET, "/portfolio/shop/identity-documents", customer()),
+            rule(POST, "/portfolio/shop/identity-documents", customer()),
             rule(POST, "/portfolio/shop/claims", customer()),
             rule(POST, "/portfolio/shop/claims/*/documents", customer()),
             rule(GET, "/portfolio/shop/claims/*/documents/*", customer()),
@@ -90,6 +92,9 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/customers", anyOf("CREATE_CUSTOMER")),
             rule(POST, "/portfolio/customers/*/kyc", anyOf("KYC_CUSTOMER")),
             rule(POST, "/portfolio/customers/*/edd", anyOf("EDD_CUSTOMER")),
+            // KYC evidence the customer uploaded (NS-SH01-004): staff who read customers see and open it.
+            rule(GET, "/portfolio/customers/*/identity-documents", anyOf("READ_CUSTOMER")),
+            rule(GET, "/portfolio/customers/*/identity-documents/*", anyOf("READ_CUSTOMER")),
             rule(GET, "/portfolio/history/kyc/*", anyOf("READ_CUSTOMER")),
             rule(GET, "/portfolio/history/edd/*", anyOf("READ_CUSTOMER")),
 

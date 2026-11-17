@@ -236,3 +236,6 @@ databaseChangeLog:
   - include:
       file: changes/080-party-identity.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/081-identity-documents.yaml
+      relativeToChangelogFile: true

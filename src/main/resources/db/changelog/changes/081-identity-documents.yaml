@@ -1,0 +1,26 @@
+# NS-SH01-004/005, Spec 04 (customer self-service): a customer whose identity is not yet verified uploads their
+# identity evidence from the portal; KYC reviewers see and open it from the customer record. Files are sealed with a
+# SHA-256 hash and every staff download is logged, as for policy and claim documents.
+databaseChangeLog:
+  - changeSet:
+      id: 081-identity-documents
+      author: nsure
+      changes:
+        - createTable:
+            tableName: pty_identity_document
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: customer_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: document_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: file_name, type: varchar(255), constraints: {nullable: false}}
+              - column: {name: content_type, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: size_bytes, type: bigint, constraints: {nullable: false}}
+              - column: {name: storage_path, type: varchar(255), constraints: {nullable: false}}
+              - column: {name: sha256, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: uploaded_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: uploaded_at, type: timestamp(6), constraints: {nullable: false}}
+        - createIndex:
+            tableName: pty_identity_document
+            indexName: ix_pty_identity_document_customer
+            columns:
+              - column: {name: customer_ref}
