@@ -191,5 +191,14 @@ public final class UnderwritingRecords {
         String decidedBy;
         @Column(name = "decided_at", nullable = false)
         LocalDateTime decidedAt;
+        // What the decision rested on (IL02): the life, the benefit and the evidence as it stood.
+        @Column(name = "life_ref", length = 20)
+        String lifeRef;
+        @Column(length = 200)
+        String benefit;
+        @Column(name = "sum_assured", precision = 19, scale = 2)
+        BigDecimal sumAssured;
+        @Column(name = "evidence_basis", length = 1000)
+        String evidenceBasis;
     }
 }

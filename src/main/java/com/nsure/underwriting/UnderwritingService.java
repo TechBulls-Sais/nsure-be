@@ -261,7 +261,8 @@ public class UnderwritingService {
                         "select d from UwDecision d where d.caseRef = :ref order by d.sequenceNo", Decision.class)
                 .setParameter("ref", c.ref).getResultList().stream()
                 .map(d -> new UnderwritingViews.DecisionView(d.sequenceNo, d.decision, d.loadingPercent, d.exclusion,
-                        d.postponeUntil, d.reason, d.offerVersion, d.offerPremium, d.decidedBy, d.decidedAt))
+                        d.postponeUntil, d.reason, d.offerVersion, d.offerPremium, d.decidedBy, d.decidedAt,
+                        d.lifeRef, d.benefit, d.sumAssured, d.evidenceBasis))
                 .toList();
         List<UnderwritingViews.ExposureLine> exposure = c.customerRef == null ? List.of()
                 : em.createQuery("select p from InsurancePolicy p where p.customerRef = :ref order by p.id desc",
@@ -789,6 +790,17 @@ public class UnderwritingService {
         d.offerPremium = c.offerPremium;
         d.decidedBy = c.decidedBy;
         d.decidedAt = now;
+        // IL02: the life, the benefit and the evidence (each item's id and status, never clinical notes) it rested on.
+        d.lifeRef = c.customerRef;
+        InsuranceApplication app = em.createQuery("select a from InsuranceApplication a where a.ref = :ref",
+                InsuranceApplication.class).setParameter("ref", c.applicationRef).getResultStream().findFirst().orElse(null);
+        d.benefit = clip(c.product + (app != null && app.getTier() != null ? " · " + app.getTier() : ""), 200);
+        d.sumAssured = c.sumAssured;
+        List<String> basis = em.createQuery("select e from UwEvidence e where e.caseRef = :ref order by e.id",
+                        Evidence.class).setParameter("ref", c.ref).getResultStream()
+                .map(e -> "#" + e.id + " " + e.requirement + ": " + e.status)
+                .toList();
+        d.evidenceBasis = basis.isEmpty() ? "No evidence requested" : clip(String.join("; ", basis), 1000);
         em.persist(d);
     }
 

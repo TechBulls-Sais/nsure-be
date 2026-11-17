@@ -1,0 +1,15 @@
+# IL02 workspace: each underwriting decision records what it was made on: the life (customer reference), the benefit
+# (product, tier and sum assured) and the evidence as it stood (each item and its status), so a later decision or
+# audit can tell which facts it rested on. Earlier decisions keep these empty.
+databaseChangeLog:
+  - changeSet:
+      id: 083-underwriting-decision-basis
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: uw_decision
+            columns:
+              - column: {name: life_ref, type: varchar(20)}
+              - column: {name: benefit, type: varchar(200)}
+              - column: {name: sum_assured, type: 'decimal(19,2)'}
+              - column: {name: evidence_basis, type: varchar(1000)}

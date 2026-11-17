@@ -95,7 +95,12 @@ class UnderwritingApiTest {
                 .andExpect(jsonPath("$.underwritingCase.offerVersion").value(2))
                 .andExpect(jsonPath("$.underwritingCase.offerStatus").value("PENDING"))
                 .andExpect(jsonPath("$.underwritingCase.offerPremium").value(345.0))
-                .andExpect(jsonPath("$.decisions.length()").value(2));
+                .andExpect(jsonPath("$.decisions.length()").value(2))
+                // IL02: each decision names the life, the benefit and the evidence it rested on.
+                .andExpect(jsonPath("$.decisions[1].lifeRef").value(customer))
+                .andExpect(jsonPath("$.decisions[1].benefit").value("Term Life · Bronze"))
+                .andExpect(jsonPath("$.decisions[1].sumAssured").value(250000.0))
+                .andExpect(jsonPath("$.decisions[1].evidenceBasis").isNotEmpty());
         mockMvc.perform(json(post("/portfolio/policies"), "admin", issue))
                 .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/underwriting/cases/" + ref + "/offer"), "admin",

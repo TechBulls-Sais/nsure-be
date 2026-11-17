@@ -242,3 +242,6 @@ databaseChangeLog:
   - include:
       file: changes/082-row-versions.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/083-underwriting-decision-basis.yaml
+      relativeToChangelogFile: true

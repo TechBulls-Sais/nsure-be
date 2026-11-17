@@ -72,7 +72,12 @@ public final class UnderwritingViews {
             int offerVersion,
             BigDecimal offerPremium,
             String decidedBy,
-            LocalDateTime decidedAt) {
+            LocalDateTime decidedAt,
+            // What it rested on: the life (customer reference), the benefit and the evidence as it stood.
+            String lifeRef,
+            String benefit,
+            BigDecimal sumAssured,
+            String evidenceBasis) {
     }
 
     /** One other contract the customer holds, counted in the aggregate exposure. */
