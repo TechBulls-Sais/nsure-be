@@ -2,7 +2,7 @@ package com.nsure.portfolio;
 
 import static com.nsure.portfolio.PolicyWorkflowApiTest.json;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -53,7 +53,7 @@ class ClaimDocumentApiTest {
                 .andExpect(jsonPath("$.claims[0].documents[0].contentType").value("application/pdf"))
                 .andExpect(jsonPath("$.claims[0].documents[0].uploadedBy").value("lerato"));
 
-        String list = mockMvc.perform(get("/portfolio/claims/" + claim + "/documents").with(httpBasic("assessor", "password")))
+        String list = mockMvc.perform(get("/portfolio/claims/" + claim + "/documents").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
                 .andReturn().getResponse().getContentAsString();
@@ -61,13 +61,13 @@ class ClaimDocumentApiTest {
 
         // Both sides open the same bytes, shown inline with the original file name.
         byte[] staffCopy = mockMvc.perform(get("/portfolio/claims/" + claim + "/documents/" + id)
-                        .with(httpBasic("assessor", "password")))
+                        .with(signedIn("assessor", "password")))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType("application/pdf"))
                 .andExpect(header().string("Content-Disposition", Matchers.containsString("certificate.pdf")))
                 .andReturn().getResponse().getContentAsByteArray();
         assertThat(staffCopy).isEqualTo(PDF);
-        mockMvc.perform(get("/portfolio/shop/claims/" + claim + "/documents/" + id).with(httpBasic("lerato", "password1")))
+        mockMvc.perform(get("/portfolio/shop/claims/" + claim + "/documents/" + id).with(signedIn("lerato", "password1")))
                 .andExpect(status().isOk())
                 .andExpect(content().bytes(PDF));
 
@@ -78,9 +78,9 @@ class ClaimDocumentApiTest {
                 .andExpect(jsonPath("$[1].contentType").value("image/png"))
                 .andExpect(jsonPath("$[1].uploadedBy").value("assessor"));
 
-        mockMvc.perform(get("/portfolio/claims").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].documents.length()").value(2));
-        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Document Added')].details").value(Matchers.hasItems(
                         "Death certificate: certificate.pdf", "Hospital bill: bill.png")));
     }
@@ -100,19 +100,19 @@ class ClaimDocumentApiTest {
         mockMvc.perform(upload("/portfolio/shop/claims/" + claim + "/documents", "onalenna", "password1",
                         file("id.pdf", PDF)))
                 .andExpect(status().isNotFound());
-        mockMvc.perform(get("/portfolio/shop/claims/" + claim + "/documents/" + id).with(httpBasic("onalenna", "password1")))
+        mockMvc.perform(get("/portfolio/shop/claims/" + claim + "/documents/" + id).with(signedIn("onalenna", "password1")))
                 .andExpect(status().isNotFound());
         // A customer never reaches the staff endpoints.
-        mockMvc.perform(get("/portfolio/claims/" + claim + "/documents/" + id).with(httpBasic("kabelo", "password1")))
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/documents/" + id).with(signedIn("kabelo", "password1")))
                 .andExpect(status().isForbidden());
         // Staff without claim permissions.
-        mockMvc.perform(get("/portfolio/claims/" + claim + "/documents").with(httpBasic("onboarding", "password")))
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/documents").with(signedIn("onboarding", "password")))
                 .andExpect(status().isForbidden());
         mockMvc.perform(upload("/portfolio/claims/" + claim + "/documents", "onboarding", "password", file("id.pdf", PDF)))
                 .andExpect(status().isForbidden());
         // A document id from another claim is not found on this one.
         String other = customerClaim("Masego Tau", "masego");
-        mockMvc.perform(get("/portfolio/claims/" + other + "/documents/" + id).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/claims/" + other + "/documents/" + id).with(signedIn("admin", "password")))
                 .andExpect(status().isNotFound());
     }
 
@@ -158,10 +158,10 @@ class ClaimDocumentApiTest {
                         file("certificate.pdf", PDF)).param("type", "Death certificate"))
                 .andExpect(status().isOk());
         // While the claim is open it is an interim summary; issuing again supersedes it (Blueprint §8: kept, not deleted).
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(httpBasic("assessor", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk());
         String interim = mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary")
-                        .with(httpBasic("assessor", "password")))
+                        .with(signedIn("assessor", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(3))
                 .andExpect(jsonPath("$[1].status").value("SUPERSEDED"))
@@ -172,7 +172,7 @@ class ClaimDocumentApiTest {
                 .andExpect(jsonPath("$[2].fileName").value(Matchers.startsWith(claim + "-interim-summary-")))
                 .andReturn().getResponse().getContentAsString();
         byte[] interimPdf = mockMvc.perform(get("/portfolio/claims/" + claim + "/documents/"
-                        + JsonPath.read(interim, "$[2].id")).with(httpBasic("assessor", "password")))
+                        + JsonPath.read(interim, "$[2].id")).with(signedIn("assessor", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsByteArray();
         try (org.apache.pdfbox.pdmodel.PDDocument doc = org.apache.pdfbox.Loader.loadPDF(interimPdf)) {
@@ -183,13 +183,13 @@ class ClaimDocumentApiTest {
                         "{\"reason\":\"Event before cover → not covered\"}"))
                 .andExpect(status().isOk());
 
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(httpBasic("onboarding", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(signedIn("onboarding", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(httpBasic("refilwe", "password1")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(signedIn("refilwe", "password1")))
                 .andExpect(status().isForbidden());
 
         String list = mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary")
-                        .with(httpBasic("assessor", "password")))
+                        .with(signedIn("assessor", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(4))
                 .andExpect(jsonPath("$[2].status").value("SUPERSEDED"))
@@ -205,7 +205,7 @@ class ClaimDocumentApiTest {
 
         // The customer sees the summary on their own claim too.
         byte[] pdf = mockMvc.perform(get("/portfolio/shop/claims/" + claim + "/documents/" + id)
-                        .with(httpBasic("refilwe", "password1")))
+                        .with(signedIn("refilwe", "password1")))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType("application/pdf"))
                 .andReturn().getResponse().getContentAsByteArray();
@@ -216,11 +216,11 @@ class ClaimDocumentApiTest {
                     "3. Checks", "The policy was active", "No payment was made, because the claim was rejected",
                     "7. Timeline", "If you disagree with this decision", "Page 1 of");
         }
-        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Summary Generated')].performedBy").value(Matchers.hasItem("assessor")));
 
         // Once per claim.
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(httpBasic("assessor", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(signedIn("assessor", "password")))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value(Matchers.containsString("already has its claim summary")));
     }
@@ -233,7 +233,7 @@ class ClaimDocumentApiTest {
                 .andExpect(status().isOk());
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reject"), "assessor", "{\"reason\":\"Not covered\"}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(httpBasic("assessor", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk());
         // As the old button left it: two summaries in the old layout, next to the uploaded bill.
         Long claimId = jdbc.queryForObject("select claim_id from ins_claim_document where document_type = 'Claim summary'"
@@ -252,7 +252,7 @@ class ClaimDocumentApiTest {
         assertThat(documents.replaceOldSummaries(claimId)).isZero();
         // The bill is untouched; the old summaries are kept as superseded (Blueprint §8), and one current summary is
         // credited to whoever issued the first.
-        mockMvc.perform(get("/portfolio/claims/" + claim + "/documents").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/documents").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.length()").value(4))
                 .andExpect(jsonPath("$[0].type").value("Hospital bill"))
                 .andExpect(jsonPath("$[0].status").value("CURRENT"))
@@ -261,7 +261,7 @@ class ClaimDocumentApiTest {
                 .andExpect(jsonPath("$[3].type").value("Claim summary"))
                 .andExpect(jsonPath("$[3].status").value("CURRENT"))
                 .andExpect(jsonPath("$[3].uploadedBy").value("assessor"));
-        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(httpBasic("assessor", "password")))
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(signedIn("assessor", "password")))
                 .andExpect(status().isConflict());
     }
 
@@ -273,7 +273,7 @@ class ClaimDocumentApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         mockMvc.perform(post("/portfolio/customers/" + JsonPath.read(customer, "$.id") + "/kyc")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         String policy = mockMvc.perform(json(post("/portfolio/policies"), "admin",
                         "{\"name\":\"" + name + "\",\"product\":\"Term Life\",\"amount\":50000,\"premium\":50}"))
@@ -294,7 +294,7 @@ class ClaimDocumentApiTest {
     private MockMultipartHttpServletRequestBuilder upload(String path, String username, String password,
             MockMultipartFile file) {
         MockMultipartHttpServletRequestBuilder request = multipart(path).file(file);
-        request.with(httpBasic(username, password));
+        request.with(signedIn(username, password));
         return request;
     }
 

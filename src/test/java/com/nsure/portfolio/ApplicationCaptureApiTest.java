@@ -1,7 +1,7 @@
 package com.nsure.portfolio;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -45,11 +45,11 @@ class ApplicationCaptureApiTest {
                         .andExpect(status().isOk())
                         .andExpect(jsonPath("$.status").value("Draft"))
                         .andReturn().getResponse().getContentAsString(), "$.id");
-        mockMvc.perform(get("/portfolio/applications/" + app + "/checklist").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/applications/" + app + "/checklist").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.disclosures[?(@.code == 'TOBACCO')].mandatory").value(true))
                 .andExpect(jsonPath("$.submissionProblems.length()").value(3));
 
-        mockMvc.perform(post("/portfolio/applications/" + app + "/submit").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/applications/" + app + "/submit").with(signedIn("admin", "password")))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.allOf(
                         org.hamcrest.Matchers.containsString("tobacco"),
@@ -61,7 +61,7 @@ class ApplicationCaptureApiTest {
                         + "\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},\"declarationAccepted\":true}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.submissionProblems.length()").value(3));
-        mockMvc.perform(post("/portfolio/applications/" + app + "/submit").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/applications/" + app + "/submit").with(signedIn("admin", "password")))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.allOf(
                         org.hamcrest.Matchers.containsString("how the payer Kabo Draft is related"),
@@ -74,7 +74,7 @@ class ApplicationCaptureApiTest {
                 .andExpect(jsonPath("$.mandateAccount").value("•••1234"))
                 .andExpect(jsonPath("$.payer").value("Kabo Draft (Spouse)"));
 
-        mockMvc.perform(post("/portfolio/applications/" + app + "/submit").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/applications/" + app + "/submit").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 // NS-IL01-005: inside every underwriting limit, the rules accept it and it is ready to issue.
                 .andExpect(jsonPath("$.status").value("Ready to issue"))
@@ -100,7 +100,7 @@ class ApplicationCaptureApiTest {
                     + " a.submittedAt = null, a.submittedBy = null where a.ref = :ref").setParameter("ref", app).executeUpdate();
             em.createQuery("delete from ApplicationAnswer a where a.applicationRef = :ref").setParameter("ref", app).executeUpdate();
         });
-        mockMvc.perform(get("/portfolio/applications/" + app + "/checklist").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/applications/" + app + "/checklist").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.preCapture").value(true))
                 .andExpect(jsonPath("$.submissionProblems").isEmpty());
     }
@@ -116,7 +116,7 @@ class ApplicationCaptureApiTest {
                         .andExpect(status().isOk())
                         .andExpect(jsonPath("$.status").value("Evidence needed"))
                         .andReturn().getResponse().getContentAsString(), "$.id");
-        mockMvc.perform(get("/portfolio/applications/" + app + "/checklist").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/applications/" + app + "/checklist").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.evidence[?(@.documentType == 'Identity verification')].received").value(true))
                 .andExpect(jsonPath("$.missingEvidence[0]").value("Signed debit order form"));
 
@@ -146,12 +146,12 @@ class ApplicationCaptureApiTest {
                                 + "\",\"email\":\"" + phone.replaceAll("\\D", "") + "@example.com\",\"phone\":\"" + phone
                                 + "\",\"dateOfBirth\":\"" + java.time.LocalDate.now().minusYears(36) + "\"}"))
                         .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         return ref;
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

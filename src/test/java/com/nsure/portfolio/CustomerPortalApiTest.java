@@ -1,6 +1,6 @@
 package com.nsure.portfolio;
 
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -22,35 +22,35 @@ class CustomerPortalApiTest {
 
     @Test
     void customerLoginsReachOnlyTheCustomerPortal() throws Exception {
-        mockMvc.perform(get("/me").with(httpBasic("customer", "password"))).andExpect(status().isOk());
-        mockMvc.perform(get("/portfolio/shop").with(httpBasic("customer", "password"))).andExpect(status().isOk());
+        mockMvc.perform(get("/me").with(signedIn("customer", "password"))).andExpect(status().isOk());
+        mockMvc.perform(get("/portfolio/shop").with(signedIn("customer", "password"))).andExpect(status().isOk());
 
         for (String staffPath : new String[] {"/portfolio/policies", "/portfolio/customers", "/portfolio/applications",
                 "/portfolio/products", "/admin/rate-tables"}) {
-            mockMvc.perform(get(staffPath).with(httpBasic("customer", "password")))
+            mockMvc.perform(get(staffPath).with(signedIn("customer", "password")))
                     .andExpect(status().isForbidden())
                     .andExpect(jsonPath("$.message").value("Customer accounts can only use the customer portal."));
-            mockMvc.perform(get(staffPath).with(httpBasic("admin", "password"))).andExpect(status().isOk());
+            mockMvc.perform(get(staffPath).with(signedIn("admin", "password"))).andExpect(status().isOk());
         }
         mockMvc.perform(get("/portfolio/policies")).andExpect(status().isUnauthorized());
     }
 
     @Test
     void customerBuysAPolicyAfterKycSuccess() throws Exception {
-        mockMvc.perform(get("/me").with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/me").with(signedIn("customer", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.customerPortal").value(true))
                 .andExpect(jsonPath("$.canReviewKyc").value(false))
                 .andExpect(jsonPath("$.roles[0]").value("Policyholder / End User"));
 
-        mockMvc.perform(get("/me").with(httpBasic("onboarding", "password")))
+        mockMvc.perform(get("/me").with(signedIn("onboarding", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.customerPortal").value(false))
                 .andExpect(jsonPath("$.canReviewKyc").value(true))
                 .andExpect(jsonPath("$.roles[0]").value("Onboarding Specialist"));
 
         mockMvc.perform(post("/portfolio/shop")
-                        .with(httpBasic("customer", "password"))
+                        .with(signedIn("customer", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"product\":\"Term Life\"}"))
                 .andExpect(status().isUnprocessableEntity())
@@ -58,20 +58,20 @@ class CustomerPortalApiTest {
 
         // Onboarding reviews customers; adding a policy needs CREATE_POLICY, which it does not hold.
         mockMvc.perform(post("/portfolio/policies")
-                        .with(httpBasic("onboarding", "password"))
+                        .with(signedIn("onboarding", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"Neo Modise\",\"product\":\"Term Life\",\"amount\":500000,\"premium\":420}"))
                 .andExpect(status().isForbidden());
 
         mockMvc.perform(post("/portfolio/policies")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"Neo Modise\",\"product\":\"Term Life\",\"amount\":500000,\"premium\":420}"))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("Mark KYC successful before adding a policy."));
 
         mockMvc.perform(post("/portfolio/customers")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"name":"Dineo Motsumi","email":"dineo@example.com","phone":"+267 71 111 222","username":"dineo","password":"password1"}
@@ -80,20 +80,20 @@ class CustomerPortalApiTest {
                 .andExpect(jsonPath("$.loginUsername").value("dineo"))
                 .andExpect(jsonPath("$.kycStatus").value("PENDING"));
 
-        mockMvc.perform(get("/me").with(httpBasic("dineo", "password1")))
+        mockMvc.perform(get("/me").with(signedIn("dineo", "password1")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.customerPortal").value(true));
 
-        mockMvc.perform(post("/portfolio/customers/CUS-1006/kyc").with(httpBasic("customer", "password")))
+        mockMvc.perform(post("/portfolio/customers/CUS-1006/kyc").with(signedIn("customer", "password")))
                 .andExpect(status().isForbidden());
 
-        mockMvc.perform(post("/portfolio/customers/CUS-1006/kyc").with(httpBasic("onboarding", "password")))
+        mockMvc.perform(post("/portfolio/customers/CUS-1006/kyc").with(signedIn("onboarding", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.kycStatus").value("VERIFIED"))
                 .andExpect(jsonPath("$.status").value("Verified"));
 
         mockMvc.perform(post("/portfolio/shop")
-                        .with(httpBasic("customer", "password"))
+                        .with(signedIn("customer", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"product\":\"Care Cash\"}"))
                 .andExpect(status().isOk())

@@ -1,0 +1,26 @@
+databaseChangeLog:
+  - changeSet:
+      id: 078-one-time-codes
+      author: nsure
+      comment: >-
+        One-time codes for customer sign-up and for the second factor of staff and partner sign-in (OneTimeCodes).
+        Each request gets its own challenge with an expiry and an attempt limit; only hashes are stored.
+      changes:
+        - createTable:
+            tableName: one_time_code
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: purpose, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: challenge_hash, type: varchar(64), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_one_time_code_challenge}}
+              - column: {name: subject, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: code_hash, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: expires_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: attempts, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: max_attempts, type: int, constraints: {nullable: false}}
+              - column: {name: used_at, type: datetime}
+        - createIndex:
+            tableName: one_time_code
+            indexName: ix_one_time_code_expires
+            columns:
+              - column: {name: expires_at}

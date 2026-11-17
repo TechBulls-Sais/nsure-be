@@ -1,6 +1,6 @@
 package com.nsure.portfolio;
 
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -40,7 +40,7 @@ class PolicyWorkflowApiTest {
     @Test
     void eddIsReviewedOnlyForAFlaggedCustomerAndARejectionNeedsAReason() throws Exception {
         String plain = customer("Onkemetse Pilane", "onkemetse", false);
-        mockMvc.perform(post("/portfolio/customers/" + plain + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + plain + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         mockMvc.perform(json(post("/portfolio/customers/" + plain + "/edd"), "onboarding", "{\"decision\":\"VERIFIED\"}"))
                 .andExpect(status().isUnprocessableEntity())
@@ -50,7 +50,7 @@ class PolicyWorkflowApiTest {
         mockMvc.perform(json(post("/portfolio/customers/" + pep + "/edd"), "onboarding", "{}"))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("Mark KYC successful before recording the EDD review."));
-        mockMvc.perform(post("/portfolio/customers/" + pep + "/kyc").with(httpBasic("admin", "password")));
+        mockMvc.perform(post("/portfolio/customers/" + pep + "/kyc").with(signedIn("admin", "password")));
 
         mockMvc.perform(json(post("/portfolio/customers/" + pep + "/edd"), "customer", "{}"))
                 .andExpect(status().isForbidden());
@@ -68,15 +68,15 @@ class PolicyWorkflowApiTest {
                 .andExpect(jsonPath("$.eddStatus").value("VERIFIED"))
                 .andExpect(jsonPath("$.eddRejectionReason").value(""));
 
-        mockMvc.perform(get("/portfolio/history/edd/" + pep).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/edd/" + pep).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.length()").value(2))
                 .andExpect(jsonPath("$[0].action").value("Rejected"))
                 .andExpect(jsonPath("$[1].newState").value("VERIFIED"));
 
-        mockMvc.perform(get("/me").with(httpBasic("onboarding", "password")))
+        mockMvc.perform(get("/me").with(signedIn("onboarding", "password")))
                 .andExpect(jsonPath("$.canReviewEdd").value(true))
                 .andExpect(jsonPath("$.canManagePolicies").value(false));
-        mockMvc.perform(get("/me").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/me").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.canManagePolicies").value(true));
     }
 
@@ -90,19 +90,19 @@ class PolicyWorkflowApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.kycStatus").value("FAILED"))
                 .andExpect(jsonPath("$.status").value("KYC failed"));
-        mockMvc.perform(get("/portfolio/shop").with(httpBasic("tebogo", "password1")))
+        mockMvc.perform(get("/portfolio/shop").with(signedIn("tebogo", "password1")))
                 .andExpect(jsonPath("$.customer.kycRejectionReason").value("Omang photo is unreadable"));
     }
 
     @Test
     void aPurchaseIsPendingPaymentUntilTheCustomerPaysThenActive() throws Exception {
         String ref = customer("Kefilwe Mogae", "kefilwe", false);
-        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(httpBasic("admin", "password")));
+        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(signedIn("admin", "password")));
 
         String policy = buy("kefilwe", "{\"product\":\"Term Life\",\"tier\":\"Silver\",\"beneficiaries\":["
                 + "{\"fullName\":\"Lesego Mogae\",\"relationship\":\"Spouse\",\"payoutMethod\":\"Bank Account\",\"accountRef\":\"62001234\"}]}");
         // Reserved, not cover: no cover dates until the first premium is collected.
-        mockMvc.perform(get("/portfolio/shop").with(httpBasic("kefilwe", "password1")))
+        mockMvc.perform(get("/portfolio/shop").with(signedIn("kefilwe", "password1")))
                 .andExpect(jsonPath("$.policies").isEmpty())
                 .andExpect(jsonPath("$.requests[0].status").value("Pending Payment"))
                 .andExpect(jsonPath("$.requests[0].paymentDueBy").isNotEmpty())
@@ -147,7 +147,7 @@ class PolicyWorkflowApiTest {
         mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/pay"), "customer", "{\"method\":\"Card\"}"))
                 .andExpect(status().isNotFound());
 
-        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[0].action").value("Created"))
                 .andExpect(jsonPath("$[0].newState").value("Pending Payment"))
                 .andExpect(jsonPath("$[?(@.action == 'Payment Received')].newState").value("Active"))
@@ -157,7 +157,7 @@ class PolicyWorkflowApiTest {
     @Test
     void anUnpaidPolicyExpiresOrIsCancelledAndAnUnpaidActiveOneLapses() throws Exception {
         String ref = customer("Gaone Seretse", "gaone", true);
-        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(httpBasic("admin", "password")));
+        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(signedIn("admin", "password")));
 
         // Spec 01 BR-25: no plan selection while EDD is not clear.
         mockMvc.perform(json(post("/portfolio/shop"), "gaone", "{\"product\":\"Term Life\",\"tier\":\"Silver\"}"))
@@ -190,7 +190,7 @@ class PolicyWorkflowApiTest {
                 .executeUpdate());
         mockMvc.perform(json(post("/portfolio/shop/policies/" + expired + "/pay"), "gaone", "{\"method\":\"Card\"}"))
                 .andExpect(status().isUnprocessableEntity());
-        mockMvc.perform(get("/portfolio/shop").with(httpBasic("gaone", "password1")))
+        mockMvc.perform(get("/portfolio/shop").with(signedIn("gaone", "password1")))
                 .andExpect(jsonPath("$.requests[?(@.id == '" + expired + "')].status").value("Expired"));
 
         // Lapse: Active, grace period over, nothing paid.
@@ -203,20 +203,20 @@ class PolicyWorkflowApiTest {
                 .setParameter("past", LocalDate.now().minusDays(1))
                 .setParameter("ref", lapsing)
                 .executeUpdate());
-        mockMvc.perform(post("/portfolio/policies/sweep").with(httpBasic("onboarding", "password")))
+        mockMvc.perform(post("/portfolio/policies/sweep").with(signedIn("onboarding", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/portfolio/policies/sweep").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/policies/sweep").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lapsed[?(@ == '" + lapsing + "')]").isNotEmpty());
         // Spec 10 W-5 / TC-18: grace over → in force without cover for 3 months (lapse comes after that window).
-        mockMvc.perform(get("/portfolio/shop").with(httpBasic("gaone", "password1")))
+        mockMvc.perform(get("/portfolio/shop").with(signedIn("gaone", "password1")))
                 .andExpect(jsonPath("$.policies[?(@.id == '" + lapsing + "')].status").value("Active - No Cover"));
     }
 
     @Test
     void beneficiariesAreLimitedToFiveAndOnlyThePolicyholderOrStaffChangeThem() throws Exception {
         String ref = customer("Naledi Phiri", "naledi", false);
-        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(httpBasic("admin", "password")));
+        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(signedIn("admin", "password")));
         String policy = buy("naledi", "{\"product\":\"Term Life\",\"tier\":\"Silver\"}");
 
         mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/beneficiaries"), "naledi", "{\"fullName\":\"\"}"))
@@ -235,10 +235,10 @@ class PolicyWorkflowApiTest {
 
         Integer first = JsonPath.read(body, "$.requests[0].beneficiaries[0].id");
         mockMvc.perform(delete("/portfolio/shop/policies/" + policy + "/beneficiaries/" + first)
-                        .with(httpBasic("customer", "password")))
+                        .with(signedIn("customer", "password")))
                 .andExpect(status().isNotFound());
         mockMvc.perform(delete("/portfolio/shop/policies/" + policy + "/beneficiaries/" + first)
-                        .with(httpBasic("naledi", "password1")))
+                        .with(signedIn("naledi", "password1")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requests[0].beneficiaries.length()").value(4))
                 // The first one was primary; the next takes over.
@@ -251,7 +251,7 @@ class PolicyWorkflowApiTest {
         String first = customer("Neo Twin Mosweu", "neotwin1", false);
         String second = customer("Neo Twin Mosweu", "neotwin2", false);
         for (String ref : new String[] {first, second}) {
-            mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(httpBasic("admin", "password")))
+            mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(signedIn("admin", "password")))
                     .andExpect(status().isOk());
         }
         mockMvc.perform(json(post("/portfolio/policies"), "admin",
@@ -279,7 +279,7 @@ class PolicyWorkflowApiTest {
         mockMvc.perform(json(post("/portfolio/policies"), "admin", issueBody))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString(policy)));
-        mockMvc.perform(get("/portfolio/applications").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/applications").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + app + "')].status").value(org.hamcrest.Matchers.hasItem("Issued")));
 
         // The first premium issues cover through the normal path, which raises PolicyIssued.
@@ -327,6 +327,6 @@ class PolicyWorkflowApiTest {
     static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
         String password = user.equals("admin") || user.equals("secadmin") || user.equals("onboarding") || user.equals("customer")
                 || user.equals("assessor") || user.equals("assessor2") ? "password" : "password1";
-        return request.with(httpBasic(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

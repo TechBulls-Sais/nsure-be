@@ -89,6 +89,14 @@ public class SessionTokenService {
         }
     }
 
+    /** Removes every session of a user who is being deleted, ended or not (sign-ins stay in the evidence chain). */
+    @Transactional
+    public void forget(AppUser user) {
+        em.createQuery("delete from AuthSession s where s.userId = :user")
+                .setParameter("user", user.getId())
+                .executeUpdate();
+    }
+
     private AuthSession find(String token) {
         if (token == null || token.isBlank() || token.length() > 200) {
             return null;

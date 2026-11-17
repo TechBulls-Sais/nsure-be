@@ -1,7 +1,7 @@
 package com.nsure.rating;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -70,18 +70,18 @@ class RateVersionWorkflowTest {
     @Test
     void aGapIsAWarningInDraftButAnErrorOnPublish() throws Exception {
         // V9 (E-22): the 60-64 adult bands are left out of a Gold draft.
-        String csv = mockMvc.perform(get("/admin/rate-tables/RT-00103/export").with(httpBasic("configurator", "password")))
+        String csv = mockMvc.perform(get("/admin/rate-tables/RT-00103/export").with(signedIn("configurator", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat(csv).startsWith("product_code,plan,life_type,age_from,age_to,cover_amount,monthly_premium\n")
                 .contains("Tap Cover,Gold,Main Insured,35,39,15000,14.45");
         String trimmed = String.join("\n", csv.lines().filter(line -> !line.contains(",60,64,")).toList());
         saveDraft("RT-00103", 1, trimmed, "configurator");
-        mockMvc.perform(get("/admin/rate-tables/RT-00103/versions/2/grid").with(httpBasic("configurator", "password")))
+        mockMvc.perform(get("/admin/rate-tables/RT-00103/versions/2/grid").with(signedIn("configurator", "password")))
                 .andExpect(jsonPath("$.version.issues").value(Matchers.hasItem("Main Insured: no band covers ages 60–64.")));
-        mockMvc.perform(post("/admin/rate-tables/RT-00103/versions/2/submit").with(httpBasic("configurator", "password")))
+        mockMvc.perform(post("/admin/rate-tables/RT-00103/versions/2/submit").with(signedIn("configurator", "password")))
                 .andExpect(status().isOk());
-        mockMvc.perform(post("/admin/rate-tables/RT-00103/versions/2/approve").with(httpBasic("actuary", "password"))
+        mockMvc.perform(post("/admin/rate-tables/RT-00103/versions/2/approve").with(signedIn("actuary", "password"))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"overrideReason\":\"Board-approved re-rate\"}"))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(Matchers.startsWith("A version with gaps cannot be published")));
@@ -89,11 +89,11 @@ class RateVersionWorkflowTest {
 
     @Test
     void anImportIsADryRunWithTheMovementBeforeItBecomesADraft() throws Exception {
-        String csv = mockMvc.perform(get("/admin/rate-tables/RT-00104/export").with(httpBasic("actuary", "password")))
+        String csv = mockMvc.perform(get("/admin/rate-tables/RT-00104/export").with(signedIn("actuary", "password")))
                 .andReturn().getResponse().getContentAsString();
         String raised = csv.replace("Tap Cover,Platinum,Main Insured,40,44,20000,25.90",
                 "Tap Cover,Platinum,Main Insured,40,44,20000,26.81");
-        String dryRun = mockMvc.perform(post("/admin/rate-tables/RT-00104/import").with(httpBasic("actuary", "password"))
+        String dryRun = mockMvc.perform(post("/admin/rate-tables/RT-00104/import").with(signedIn("actuary", "password"))
                         .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of("csv", raised))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.changedRows").value(1))
@@ -101,28 +101,28 @@ class RateVersionWorkflowTest {
                 .andExpect(jsonPath("$.diff[0]").value("Main Insured 40–44: P25.90 → P26.81 (+3.5 %)"))
                 .andReturn().getResponse().getContentAsString();
         // E-18: nothing was written by the dry run.
-        mockMvc.perform(get("/admin/rate-tables/RT-00104").with(httpBasic("actuary", "password")))
+        mockMvc.perform(get("/admin/rate-tables/RT-00104").with(signedIn("actuary", "password")))
                 .andExpect(jsonPath("$.versions.length()").value(1));
         // A changed file is refused against the old token.
-        mockMvc.perform(post("/admin/rate-tables/RT-00104/import/confirm").with(httpBasic("actuary", "password"))
+        mockMvc.perform(post("/admin/rate-tables/RT-00104/import/confirm").with(signedIn("actuary", "password"))
                         .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of(
                                 "csv", raised + "\n", "dryRunToken", "nope"))))
                 .andExpect(status().isConflict());
-        mockMvc.perform(post("/admin/rate-tables/RT-00104/import/confirm").with(httpBasic("actuary", "password"))
+        mockMvc.perform(post("/admin/rate-tables/RT-00104/import/confirm").with(signedIn("actuary", "password"))
                         .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of(
                                 "csv", raised, "dryRunToken", JsonPath.read(dryRun, "$.dryRunToken")))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.versions[0].status").value("DRAFT"))
                 .andExpect(jsonPath("$.versions[0].source").value("IMPORT"));
-        mockMvc.perform(get("/admin/rate-tables/RT-00104/versions/1/diff/2").with(httpBasic("compliance", "password")))
+        mockMvc.perform(get("/admin/rate-tables/RT-00104/versions/1/diff/2").with(signedIn("compliance", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.changed").value(1));
-        mockMvc.perform(get("/admin/rate-tables/RT-00104/versions/2/impact").with(httpBasic("actuary", "password")))
+        mockMvc.perform(get("/admin/rate-tables/RT-00104/versions/2/impact").with(signedIn("actuary", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.version").value("RT-00104-v2"))
                 .andExpect(jsonPath("$.policiesAffected").isNumber());
         // A rejected or bad file never becomes a draft: issues come back with line numbers.
-        mockMvc.perform(post("/admin/rate-tables/RT-00104/import").with(httpBasic("actuary", "password"))
+        mockMvc.perform(post("/admin/rate-tables/RT-00104/import").with(signedIn("actuary", "password"))
                         .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of(
                                 "csv", "product_code,plan,life_type,age_from,age_to,cover_amount,monthly_premium\nx,y,z"))))
                 .andExpect(jsonPath("$.issues[0]").value(Matchers.startsWith("Line 2: expected 7 columns")))
@@ -131,23 +131,23 @@ class RateVersionWorkflowTest {
 
     @Test
     void aStaleCellPatchIsAConflictNotASilentOverwrite() throws Exception {
-        mockMvc.perform(post("/admin/rate-tables/RT-00102/scale").with(httpBasic("configurator", "password"))
+        mockMvc.perform(post("/admin/rate-tables/RT-00102/scale").with(signedIn("configurator", "password"))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"factor\":1.05,\"lifeType\":\"Child\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.versions[0].status").value("DRAFT"))
                 .andExpect(jsonPath("$.version.bands[?(@.ageFrom == 0)].premiums.Child").value(1.10));
         String detail = mockMvc.perform(get("/admin/rate-tables/RT-00102/versions/2/grid")
-                        .with(httpBasic("configurator", "password")))
+                        .with(signedIn("configurator", "password")))
                 .andReturn().getResponse().getContentAsString();
         String token = JsonPath.read(detail, "$.versions[0].updatedAt");
         String cell = "{\"lifeType\":\"Spouse\",\"ageFrom\":30,\"ageTo\":34,\"monthlyPremium\":5.75}";
-        mockMvc.perform(patch("/admin/rate-tables/RT-00102/versions/2/cells").with(httpBasic("configurator", "password"))
+        mockMvc.perform(patch("/admin/rate-tables/RT-00102/versions/2/cells").with(signedIn("configurator", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"baseVersionUpdatedAt\":\"" + token + "\",\"cells\":[" + cell + "]}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.version.bands[?(@.ageFrom == 30)].premiums.Spouse").value(5.75));
         // Same token again: someone (this editor) changed the version since, so the patch is refused.
-        mockMvc.perform(patch("/admin/rate-tables/RT-00102/versions/2/cells").with(httpBasic("configurator", "password"))
+        mockMvc.perform(patch("/admin/rate-tables/RT-00102/versions/2/cells").with(signedIn("configurator", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"baseVersionUpdatedAt\":\"1999-01-01T00:00\",\"cells\":[" + cell + "]}"))
                 .andExpect(status().isConflict());
@@ -170,7 +170,7 @@ class RateVersionWorkflowTest {
                     .append(",\"ageTo\":").append(cells[4]).append(",\"coverAmount\":").append(cells[5])
                     .append(",\"monthlyPremium\":").append(cells[6]).append('}');
         }
-        mockMvc.perform(put("/admin/rate-tables/" + ref + "/grid").with(httpBasic(user, "password"))
+        mockMvc.perform(put("/admin/rate-tables/" + ref + "/grid").with(signedIn(user, "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"baseVersion\":" + baseVersion + ",\"rows\":[" + rows + "]}"))
                 .andExpect(status().isOk());

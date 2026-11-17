@@ -1,6 +1,6 @@
 package com.nsure.portfolio;
 
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -22,7 +22,7 @@ class CoverTierApiTest {
 
     @Test
     void productsListTheirTiersAndSeededPoliciesAreBackfilled() throws Exception {
-        mockMvc.perform(get("/portfolio/products").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/products").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.name == 'Term Life')].tiers[*].name")
                         .value(org.hamcrest.Matchers.contains("Bronze", "Silver", "Gold")))
@@ -30,7 +30,7 @@ class CoverTierApiTest {
                 .andExpect(jsonPath("$[?(@.name == 'Care Cash')].tiers[?(@.name == 'Gold')].cover").value(2000));
 
         // Cover matches the Silver tier exactly -> backfilled; 350,000 matches no tier -> left blank.
-        mockMvc.perform(get("/portfolio/policies").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.id == 'POL-10841')].tier").value("Silver"))
                 .andExpect(jsonPath("$[?(@.id == 'POL-10839')].tier").value(""));
@@ -39,7 +39,7 @@ class CoverTierApiTest {
     @Test
     void tierSetsCoverAndPremiumAndShowsOnTheCustomer() throws Exception {
         mockMvc.perform(post("/portfolio/policies")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"name":"Amara Dube","product":"Term Life","tier":"Gold","amount":1,"premium":1}
@@ -50,7 +50,7 @@ class CoverTierApiTest {
                 .andExpect(jsonPath("$.premium").value(780));
 
         mockMvc.perform(post("/portfolio/applications")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"declarationAccepted":true,"disclosures":{"TOBACCO":"NO","TREATMENT":"NO"},"name":"Naledi Kgosi","product":"Family Funeral","tier":"Bronze"}
@@ -63,7 +63,7 @@ class CoverTierApiTest {
                 .andExpect(jsonPath("$.premium").value(org.hamcrest.Matchers.lessThan(105.0)));
 
         // Newest policy first, so the Gold Term Life just issued leads Amara's tiers.
-        mockMvc.perform(get("/portfolio/customers").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/customers").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.id == 'CUS-1001')].tiers[0].tier").value("Gold"))
                 .andExpect(jsonPath("$[?(@.id == 'CUS-1001')].tiers[0].product").value("Term Life"));
@@ -72,7 +72,7 @@ class CoverTierApiTest {
     @Test
     void rejectsATierThatTheProductDoesNotOffer() throws Exception {
         mockMvc.perform(post("/portfolio/policies")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"name":"Amara Dube","product":"Term Life","tier":"Platinum"}

@@ -2,7 +2,7 @@ package com.nsure.payment;
 
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -64,7 +64,7 @@ class PaymentSettlementTest {
         // S-8: a double-clicked Pay resumes the same attempt.
         assertThat(((Number) JsonPath.read(pay("onalenna", policy, "Card"), "$.transactionId")).longValue()).isEqualTo(id);
 
-        mockMvc.perform(get("/checkout/transactions/" + id).with(httpBasic("onalenna", "password1")))
+        mockMvc.perform(get("/checkout/transactions/" + id).with(signedIn("onalenna", "password1")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("REDIRECTED"))
                 .andExpect(jsonPath("$.terminal").value(false));
@@ -83,7 +83,7 @@ class PaymentSettlementTest {
                         .isEqualTo("http://localhost/#/buy/confirmation?policy=" + policy + "&tx=" + id));
         assertThat(policyStatus(policy)).isEqualTo("Active");
         assertThat(count("select count(p) from PremiumPayment p where p.policyRef = '" + policy + "'")).isEqualTo(1);
-        mockMvc.perform(get("/checkout/transactions/" + id).with(httpBasic("onalenna", "password1")))
+        mockMvc.perform(get("/checkout/transactions/" + id).with(signedIn("onalenna", "password1")))
                 .andExpect(jsonPath("$.status").value("SETTLED"))
                 .andExpect(jsonPath("$.policyNumber").value(policy))
                 .andExpect(jsonPath("$.settledVia").value("RETURN"));
@@ -159,7 +159,7 @@ class PaymentSettlementTest {
         assertThat(failed.getStatus()).isEqualTo("FAILED");
         assertThat(failed.getFailureReason()).startsWith("Amount or currency mismatch");
         assertThat(policyStatus(policy)).isEqualTo("Pending Payment");
-        mockMvc.perform(get("/me/alerts").with(httpBasic("support", "password")))
+        mockMvc.perform(get("/me/alerts").with(signedIn("support", "password")))
                 .andExpect(jsonPath("$[?(@.type == 'PAYMENT_TAMPER')]").isNotEmpty());
     }
 
@@ -182,13 +182,13 @@ class PaymentSettlementTest {
     void aCustomerSeesOnlyTheirOwnPaymentAndStaffNeedReadPayment() throws Exception {
         String policy = pendingPolicy("Neo Ditshwanelo", "neoditsh");
         long id = ((Number) JsonPath.read(pay("neoditsh", policy, "Card"), "$.transactionId")).longValue();
-        mockMvc.perform(get("/checkout/transactions/" + id).with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/checkout/transactions/" + id).with(signedIn("customer", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get("/checkout/transactions/" + id).with(httpBasic("onboarding", "password")))
+        mockMvc.perform(get("/checkout/transactions/" + id).with(signedIn("onboarding", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get("/checkout/transactions/" + id).with(httpBasic("support", "password")))
+        mockMvc.perform(get("/checkout/transactions/" + id).with(signedIn("support", "password")))
                 .andExpect(status().isOk());
-        mockMvc.perform(get("/payments/transactions/" + id + "/log").with(httpBasic("compliance", "password")))
+        mockMvc.perform(get("/payments/transactions/" + id + "/log").with(signedIn("compliance", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].operation").value("createToken.request"));
         // Staff cannot start a customer checkout: staff record payments through the policy workflow.
@@ -227,7 +227,7 @@ class PaymentSettlementTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         mockMvc.perform(post("/portfolio/customers/" + JsonPath.read(customer, "$.id") + "/kyc")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         String shop = mockMvc.perform(json(post("/portfolio/shop"), username, "{\"product\":\"Term Life\",\"tier\":\"Silver\"}"))
                 .andExpect(status().isOk())
@@ -253,7 +253,7 @@ class PaymentSettlementTest {
     private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder json(
             org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request, String user, String body) {
         String password = user.equals("admin") ? "password" : "password1";
-        return request.with(httpBasic(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 
     private String token(long id) {

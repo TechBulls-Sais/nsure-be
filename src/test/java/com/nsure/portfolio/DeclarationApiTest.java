@@ -2,7 +2,7 @@ package com.nsure.portfolio;
 
 import static com.nsure.portfolio.PolicyWorkflowApiTest.json;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -40,11 +40,11 @@ class DeclarationApiTest {
                 .andExpect(jsonPath("$.accuracy").value(true))
                 .andExpect(jsonPath("$.falseInformation").value(true));
         // The consent log is evidence: audit.read only (spec 04 §7).
-        mockMvc.perform(get("/portfolio/policies/" + policy + "/declarations").with(httpBasic("compliance", "password")))
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/declarations").with(signedIn("compliance", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].policyRef").value(policy))
                 .andExpect(jsonPath("$[0].recordedBy").value("bontle"));
-        mockMvc.perform(get("/portfolio/policies/" + policy + "/declarations").with(httpBasic("support", "password")))
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/declarations").with(signedIn("support", "password")))
                 .andExpect(status().isForbidden());
         mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/pay"), "bontle", "{\"method\":\"MyZaka\"}"))
                 .andExpect(status().isOk())
@@ -72,7 +72,7 @@ class DeclarationApiTest {
                 .andExpect(status().isForbidden());
         mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/pay"), "oratile", "{\"method\":\"MyZaka\"}"))
                 .andExpect(status().isForbidden());
-        String lock = mockMvc.perform(get("/portfolio/shop/declaration").with(httpBasic("oratile", "password1")))
+        String lock = mockMvc.perform(get("/portfolio/shop/declaration").with(signedIn("oratile", "password1")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat(JsonPath.<Boolean>read(lock, "$.locked")).isTrue();
@@ -93,7 +93,7 @@ class DeclarationApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         mockMvc.perform(post("/portfolio/customers/" + JsonPath.read(customer, "$.id") + "/kyc")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         String shop = mockMvc.perform(json(post("/portfolio/shop"), username, "{\"product\":\"Term Life\",\"tier\":\"Silver\"}"))
                 .andExpect(status().isOk())

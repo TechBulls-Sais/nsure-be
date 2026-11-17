@@ -1,7 +1,7 @@
 package com.nsure.portfolio;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -59,7 +59,7 @@ class ProductTermsApiTest {
     @Test
     void aPolicyKeepsTheTermsItWasSoldUnderAndAChangeReachesNewBusinessOnly() throws Exception {
         String before = pendingPolicy("Thato Molefe", "thato");
-        String terms = mockMvc.perform(get("/portfolio/policies/" + before + "/terms").with(httpBasic("admin", "password")))
+        String terms = mockMvc.perform(get("/portfolio/policies/" + before + "/terms").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.version").value(1))
                 .andExpect(jsonPath("$.approvalStatus").value("APPROVED"))
@@ -82,12 +82,12 @@ class ProductTermsApiTest {
                 .andExpect(jsonPath("$.inForce").value(false));
         // Proposed is not approved: new business still gets v1.
         String meanwhile = pendingPolicy("Kabo Sello", "kabo");
-        mockMvc.perform(get("/portfolio/policies/" + meanwhile + "/terms").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies/" + meanwhile + "/terms").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.version").value(1));
         // The maker cannot approve; another user can.
-        mockMvc.perform(post(TERM_LIFE + "/2/approve").with(httpBasic("distribution", "password")))
+        mockMvc.perform(post(TERM_LIFE + "/2/approve").with(signedIn("distribution", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post(TERM_LIFE + "/2/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post(TERM_LIFE + "/2/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.approvalStatus").value("APPROVED"))
                 .andExpect(jsonPath("$.inForce").value(true));
@@ -99,19 +99,19 @@ class ProductTermsApiTest {
                 .andReturn().getResponse().getContentAsString();
         LocalDate due = LocalDate.parse(JsonPath.read(paid, "$.nextPremiumDue"));
         assertThat(LocalDate.parse((String) JsonPath.read(paid, "$.gracePeriodEnd"))).isEqualTo(due.plusDays(grace));
-        mockMvc.perform(get("/portfolio/policies/" + before + "/terms").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies/" + before + "/terms").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.version").value(1))
                 .andExpect(jsonPath("$.waitingPeriodDays").value(waiting));
 
         // New business from today is sold under v2.
         String after = pendingPolicy("Neo Dube", "neo");
-        mockMvc.perform(get("/portfolio/policies/" + after + "/terms").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies/" + after + "/terms").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.version").value(2))
                 .andExpect(jsonPath("$.waitingPeriodDays").value(waiting + 150))
                 .andExpect(jsonPath("$.wordingRef").value("Term Life wording v2.0"));
 
         // Both versions stay readable; v1 now ends yesterday for new business.
-        String versions = mockMvc.perform(get(TERM_LIFE).with(httpBasic("distribution", "password")))
+        String versions = mockMvc.perform(get(TERM_LIFE).with(signedIn("distribution", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat((List<String>) JsonPath.read(versions, "$[?(@.version == 1)].effectiveTo"))
@@ -126,7 +126,7 @@ class ProductTermsApiTest {
                 .andExpect(status().isOk());
         mockMvc.perform(json(post(TERM_LIFE), "distribution", "{\"maxBeneficiaries\":4,\"reason\":\"Another\"}"))
                 .andExpect(status().isConflict());
-        mockMvc.perform(post(TERM_LIFE + "/3/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post(TERM_LIFE + "/3/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isForbidden());
         mockMvc.perform(json(post(TERM_LIFE + "/3/reject"), "admin", "{\"reason\":\"No\"}"))
                 .andExpect(status().isForbidden());
@@ -140,9 +140,9 @@ class ProductTermsApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String customer = JsonPath.read(body, "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
-        String shop = mockMvc.perform(post("/portfolio/shop").with(httpBasic(username, "password1"))
+        String shop = mockMvc.perform(post("/portfolio/shop").with(signedIn(username, "password1"))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"product\":\"Term Life\",\"tier\":\"Silver\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -150,6 +150,6 @@ class ProductTermsApiTest {
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

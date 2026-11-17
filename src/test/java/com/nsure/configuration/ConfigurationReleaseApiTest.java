@@ -1,6 +1,6 @@
 package com.nsure.configuration;
 
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -53,13 +53,13 @@ class ConfigurationReleaseApiTest {
                 .andExpect(jsonPath("$.environment").value("test"))
                 .andExpect(jsonPath("$.currency").value("BWP"))
                 .andExpect(jsonPath("$.bindOnFirstStart").doesNotExist());
-        mockMvc.perform(get("/admin/deployment").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/admin/deployment").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.insurerCode").value("test-insurer"))
                 .andExpect(jsonPath("$.installationUuid").isNotEmpty())
                 .andExpect(jsonPath("$.schema.changesets").value(Matchers.greaterThan(10)))
                 .andExpect(jsonPath("$.activeConfigReleases[0]").value("DEMO-R1"));
-        mockMvc.perform(get("/admin/deployment").with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/admin/deployment").with(signedIn("customer", "password")))
                 .andExpect(status().isForbidden());
     }
 
@@ -85,7 +85,7 @@ class ConfigurationReleaseApiTest {
         act(r1, "activate", "ops", v, 200);
 
         String form = mockMvc.perform(get("/configuration/forms/policy?product=Term Life")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.versionNo").value(1))
                 .andExpect(jsonPath("$.fields[0].key").value("employerReference"))
                 .andExpect(jsonPath("$.fields[0].required").value(true))
@@ -108,7 +108,7 @@ class ConfigurationReleaseApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String oldPolicy = JsonPath.read(issued, "$.id");
-        mockMvc.perform(get("/portfolio/policies/" + oldPolicy + "/attributes").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies/" + oldPolicy + "/attributes").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.form.formVersionId").value(formV1))
                 .andExpect(jsonPath("$.values.employerReference").value("EMP-1024"))
                 .andExpect(jsonPath("$.currentForm").value(true));
@@ -119,7 +119,7 @@ class ConfigurationReleaseApiTest {
         v = act(r2, "submit", "configurator", draft2[1], 200);
         v = act(r2, "approve", "actuary", v, 200);
         act(r2, "activate", "ops", v, 200);
-        mockMvc.perform(get("/admin/config-releases/" + r1).with(httpBasic("ops", "password")))
+        mockMvc.perform(get("/admin/config-releases/" + r1).with(signedIn("ops", "password")))
                 .andExpect(jsonPath("$.status").value("RETIRED"));
 
         // A client still holding version 1 is told to reload; new business needs the new field.
@@ -133,7 +133,7 @@ class ConfigurationReleaseApiTest {
 
         // The old policy is still edited against its own form: no payroll number needed.
         String view = mockMvc.perform(get("/portfolio/policies/" + oldPolicy + "/attributes")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.currentForm").value(false))
                 .andReturn().getResponse().getContentAsString();
         int rowVersion = JsonPath.read(view, "$.rowVersion");
@@ -215,7 +215,7 @@ class ConfigurationReleaseApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         mockMvc.perform(post("/portfolio/customers/" + JsonPath.read(body, "$.id") + "/kyc")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         return name;
     }
@@ -227,6 +227,6 @@ class ConfigurationReleaseApiTest {
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

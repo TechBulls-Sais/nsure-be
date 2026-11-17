@@ -6,7 +6,7 @@ import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -80,7 +80,7 @@ class ServiceDeskApiTest {
 
         // ServiceCaseOpened → the communications handler acknowledges the case with its reference (NS-UX-005).
         outbox.dispatch();
-        mockMvc.perform(get("/communications/messages").with(httpBasic("service", "password")))
+        mockMvc.perform(get("/communications/messages").with(signedIn("service", "password")))
                 .andExpect(jsonPath("$[?(@.businessRef == '" + complaint + "')].templateCode")
                         .value("SERVICE_CASE_OPENED_EMAIL"))
                 .andExpect(jsonPath("$[?(@.businessRef == '" + complaint + "')].status").value("QUEUED"))
@@ -97,7 +97,7 @@ class ServiceDeskApiTest {
         mockMvc.perform(json(post("/service/cases"), "ops",
                         "{\"customerRef\":\"" + NEO + "\",\"caseType\":\"COMPLAINT\",\"category\":\"x\",\"subject\":\"y\"}"))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get("/service/cases").with(httpBasic("ops", "password"))).andExpect(status().isOk());
+        mockMvc.perform(get("/service/cases").with(signedIn("ops", "password"))).andExpect(status().isOk());
     }
 
     @Test
@@ -123,12 +123,12 @@ class ServiceDeskApiTest {
                 .andExpect(jsonPath("$.case.owner").value("admin"))
                 .andExpect(jsonPath("$.history[?(@.action == 'Assigned')].details", hasItem("Taken over from service by admin")));
 
-        mockMvc.perform(get("/service/cases?mine=true").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/service/cases?mine=true").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[*].ref", hasItem(ref)))
                 .andExpect(jsonPath("$[*].owner", everyItem(is("admin"))));
-        mockMvc.perform(get("/service/cases?mine=true").with(httpBasic("service", "password")))
+        mockMvc.perform(get("/service/cases?mine=true").with(signedIn("service", "password")))
                 .andExpect(jsonPath("$[*].ref", not(hasItem(ref))));
-        mockMvc.perform(get("/service/cases?type=SERVICE_REQUEST&status=IN_PROGRESS").with(httpBasic("service", "password")))
+        mockMvc.perform(get("/service/cases?type=SERVICE_REQUEST&status=IN_PROGRESS").with(signedIn("service", "password")))
                 .andExpect(jsonPath("$[*].ref", hasItem(ref)))
                 .andExpect(jsonPath("$[*].caseType", everyItem(is("SERVICE_REQUEST"))));
     }
@@ -178,7 +178,7 @@ class ServiceDeskApiTest {
                 .setParameter("due", LocalDateTime.now().minusHours(1))
                 .setParameter("ref", ref)
                 .executeUpdate());
-        mockMvc.perform(get("/service/cases").with(httpBasic("service", "password")))
+        mockMvc.perform(get("/service/cases").with(signedIn("service", "password")))
                 .andExpect(jsonPath("$[?(@.ref == '" + ref + "')].breached").value(true));
     }
 
@@ -235,21 +235,21 @@ class ServiceDeskApiTest {
                         "{\"caseType\":\"SERVICE_REQUEST\",\"category\":\"Policy\",\"subject\":\"Change\",\"linkedRef\":\"POL-99999\"}"))
                 .andExpect(status().isUnprocessableEntity());
 
-        mockMvc.perform(get("/portfolio/shop/cases").with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/portfolio/shop/cases").with(signedIn("customer", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].ref", hasItem(mine)))
                 .andExpect(jsonPath("$[*].ref", not(hasItem(otherCase))))
                 .andExpect(jsonPath("$[0].owner").doesNotExist());
-        mockMvc.perform(get("/portfolio/shop/cases").with(httpBasic("kagiso", "password1")))
+        mockMvc.perform(get("/portfolio/shop/cases").with(signedIn("kagiso", "password1")))
                 .andExpect(jsonPath("$[*].ref", hasItem(otherCase)))
                 .andExpect(jsonPath("$[*].ref", not(hasItem(mine))));
 
         // Customers never reach the staff queue; staff see the portal case there.
-        mockMvc.perform(get("/service/cases").with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/service/cases").with(signedIn("customer", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get("/service/cases/" + mine).with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/service/cases/" + mine).with(signedIn("customer", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get("/service/cases/" + mine).with(httpBasic("service", "password")))
+        mockMvc.perform(get("/service/cases/" + mine).with(signedIn("service", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.case.customerRef").value(NEO))
                 .andExpect(jsonPath("$.case.openedBy").value("customer"));
@@ -269,7 +269,7 @@ class ServiceDeskApiTest {
     }
 
     private String detail(String ref) throws Exception {
-        return mockMvc.perform(get("/service/cases/" + ref).with(httpBasic("service", "password")))
+        return mockMvc.perform(get("/service/cases/" + ref).with(signedIn("service", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
     }
@@ -289,6 +289,6 @@ class ServiceDeskApiTest {
 
     static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
         String password = List.of("admin", "service", "ops", "customer").contains(user) ? "password" : "password1";
-        return request.with(httpBasic(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

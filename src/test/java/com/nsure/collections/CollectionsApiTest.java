@@ -1,7 +1,7 @@
 package com.nsure.collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -68,12 +68,12 @@ class CollectionsApiTest {
         LocalDate due = LocalDate.now().minusDays(5);
         tx.executeWithoutResult(s -> em.createQuery("update InsurancePolicy p set p.nextPremiumDue = :due"
                 + " where p.ref = :ref").setParameter("due", due).setParameter("ref", policy).executeUpdate());
-        mockMvc.perform(post("/collections/billing-run").with(httpBasic("ops", "password")))
+        mockMvc.perform(post("/collections/billing-run").with(signedIn("ops", "password")))
                 .andExpect(status().isForbidden());
-        String run = mockMvc.perform(post("/collections/billing-run").with(httpBasic("finance", "password")))
+        String run = mockMvc.perform(post("/collections/billing-run").with(signedIn("finance", "password")))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         assertThat((Integer) JsonPath.read(run, "$.issued")).isGreaterThanOrEqualTo(1);
-        mockMvc.perform(post("/collections/billing-run").with(httpBasic("finance", "password")))
+        mockMvc.perform(post("/collections/billing-run").with(signedIn("finance", "password")))
                 .andExpect(jsonPath("$.instalments").value(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.hasItem((String) JsonPath.read(run, "$.instalments[0]")))));
         account = account(policy);
@@ -118,14 +118,14 @@ class CollectionsApiTest {
         assertThat((String) JsonPath.read(account, "$.receipts[0].reversalKind")).isEqualTo("RETURNED");
         assertThat((String) JsonPath.read(account, "$.instalments[0].status")).isEqualTo("DUE");
         assertThat(amount(account, "$.instalments[0].outstanding")).isEqualByComparingTo(premium);
-        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Cover Review')].details").value(
                         org.hamcrest.Matchers.hasItem(org.hamcrest.Matchers.containsString("cover ended"))));
 
         // The subledger reverses the premium income: Dr premium income, Cr bank.
         outbox.dispatch();
         String journals = mockMvc.perform(get("/finance/journals").param("eventType", "PaymentReturned")
-                        .with(httpBasic("finance", "password")))
+                        .with(signedIn("finance", "password")))
                 .andReturn().getResponse().getContentAsString();
         String own = "$[?(@.sourceRef == '" + policy + "')]";
         assertThat(new BigDecimal(((List<?>) JsonPath.read(journals, own + ".amount")).get(0).toString()))
@@ -159,7 +159,7 @@ class CollectionsApiTest {
                         + "\"reason\":\"Payer paid two policies at once\",\"allocations\":[{\"policyRef\":\"" + first
                         + "\",\"amount\":\"" + premium + "\"},{\"policyRef\":\"" + second + "\",\"amount\":\"" + part + "\"}]}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(post("/finance/suspense/" + receipt + "/clearance/approve").with(httpBasic("secadmin", "password")))
+        mockMvc.perform(post("/finance/suspense/" + receipt + "/clearance/approve").with(signedIn("secadmin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPLIED"))
                 .andExpect(jsonPath("$.unapplied").value(0));
@@ -174,7 +174,7 @@ class CollectionsApiTest {
         mockMvc.perform(json(post("/finance/suspense/" + rest + "/clearance"), "finance", "{\"action\":\"ALLOCATE\","
                         + "\"policyRef\":\"" + second + "\",\"reason\":\"The rest of the first premium\"}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(post("/finance/suspense/" + rest + "/clearance/approve").with(httpBasic("secadmin", "password")))
+        mockMvc.perform(post("/finance/suspense/" + rest + "/clearance/approve").with(signedIn("secadmin", "password")))
                 .andExpect(jsonPath("$.status").value("APPLIED"));
         assertThat(policyStatus(second)).isEqualTo("Active");
         assertThat((String) JsonPath.read(account(second), "$.instalments[0].status")).isEqualTo("PAID");
@@ -186,7 +186,7 @@ class CollectionsApiTest {
                         + "\"reason\":\"Part belongs to this policy\",\"allocations\":[{\"policyRef\":\"" + third
                         + "\",\"amount\":\"10.00\"}]}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(post("/finance/suspense/" + big + "/clearance/approve").with(httpBasic("secadmin", "password")))
+        mockMvc.perform(post("/finance/suspense/" + big + "/clearance/approve").with(signedIn("secadmin", "password")))
                 .andExpect(jsonPath("$.status").value("SUSPENSE"))
                 .andExpect(jsonPath("$.unapplied").value(490.0))
                 .andExpect(jsonPath("$.clearanceAction").doesNotExist());
@@ -210,7 +210,7 @@ class CollectionsApiTest {
                 .andExpect(jsonPath("$.openExceptions").value(4))
                 .andReturn().getResponse().getContentAsString();
         String ref = JsonPath.read(statement, "$.ref");
-        String items = mockMvc.perform(get("/collections/statements/" + ref + "/items").with(httpBasic("finance", "password")))
+        String items = mockMvc.perform(get("/collections/statements/" + ref + "/items").with(signedIn("finance", "password")))
                 .andReturn().getResponse().getContentAsString();
         assertThat((List<String>) JsonPath.read(items, "$[*].status")).containsExactlyInAnyOrder("MATCHED",
                 "AMOUNT_MISMATCH", "MISSING_RECEIPT", "DUPLICATE", "NOT_ON_STATEMENT");
@@ -219,7 +219,7 @@ class CollectionsApiTest {
         assertThat((List<Object>) JsonPath.read(items, "$[?(@.status == 'AMOUNT_MISMATCH')].expectedAmount"))
                 .hasSize(1);
 
-        String open = mockMvc.perform(get("/collections/reconciliation").with(httpBasic("finance", "password")))
+        String open = mockMvc.perform(get("/collections/reconciliation").with(signedIn("finance", "password")))
                 .andReturn().getResponse().getContentAsString();
         Integer mismatch = JsonPath.<List<Integer>>read(open, "$[?(@.status == 'AMOUNT_MISMATCH')].id").get(0);
         assertThat((List<String>) JsonPath.read(open, "$[?(@.id == " + mismatch + ")].owner")).containsExactly("finance");
@@ -232,9 +232,9 @@ class CollectionsApiTest {
         mockMvc.perform(json(post("/collections/reconciliation/" + mismatch + "/resolve"), "finance",
                         "{\"resolution\":\"Bank charged a 5.00 fee; journal raised\"}"))
                 .andExpect(status().isConflict());
-        mockMvc.perform(get("/collections/reconciliation").with(httpBasic("finance", "password")))
+        mockMvc.perform(get("/collections/reconciliation").with(signedIn("finance", "password")))
                 .andExpect(jsonPath("$[?(@.id == " + mismatch + ")]").isEmpty());
-        mockMvc.perform(get("/collections/reconciliation").with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/collections/reconciliation").with(signedIn("customer", "password")))
                 .andExpect(status().isForbidden());
     }
 
@@ -253,7 +253,7 @@ class CollectionsApiTest {
                                 "{\"name\":\"" + name + "\",\"email\":\"" + phone.replaceAll("\\D", "") + "@example.com\","
                                         + "\"phone\":\"" + phone + "\"}"))
                         .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         return JsonPath.read(mockMvc.perform(json(post("/portfolio/policies"), "admin", "{\"customerRef\":\"" + customer
                                 + "\",\"product\":\"Term Life\",\"amount\":20000,\"premium\":50}"))
@@ -274,7 +274,7 @@ class CollectionsApiTest {
     }
 
     private String account(String policy) throws Exception {
-        return mockMvc.perform(get("/collections/policies/" + policy).with(httpBasic("admin", "password")))
+        return mockMvc.perform(get("/collections/policies/" + policy).with(signedIn("admin", "password")))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
     }
 
@@ -293,6 +293,6 @@ class CollectionsApiTest {
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

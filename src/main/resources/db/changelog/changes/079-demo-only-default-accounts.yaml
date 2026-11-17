@@ -1,0 +1,36 @@
+# The default logins with the published password "password" belong to demo installations only.
+#
+# Migrations 004 (admin, made Super Admin by 043), 013 (customer, onboarding) and 026 (assessor) create them without a
+# demo context, so production (contexts "!demo") got them too. Those changesets are applied and are left unchanged.
+# Instead, 079-lock-default-accounts runs in every installation and locks every account still on the published hash:
+# disabled, with a password value no password can match. 079-default-accounts-demo-only then gives them back, as they
+# were, in demo installations only. (A changeset marked "!demo" would not do: Liquibase runs every changeset when no
+# context is given, which is how local and demo installations run.)
+#
+# A production installation's first administrator comes from NSURE_BOOTSTRAP_ADMIN_USERNAME and
+# NSURE_BOOTSTRAP_ADMIN_PASSWORD (InstallationGuard), which applies once no enabled Super Admin is left.
+databaseChangeLog:
+  - changeSet:
+      id: 079-lock-default-accounts
+      author: nsure
+      comment: Lock every account on the published password "password"; whether it was enabled is kept in the marker.
+      changes:
+        - sql:
+            sql: |
+              UPDATE app_user SET password = '!demo-only:disabled'
+              WHERE password = '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG' AND enabled = FALSE;
+              UPDATE app_user SET password = '!demo-only', enabled = FALSE
+              WHERE password = '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG';
+  - changeSet:
+      id: 079-default-accounts-demo-only
+      author: nsure
+      # Demonstration data: production installs run with contexts "!demo" and skip it.
+      context: demo
+      comment: Demo installations keep their default logins (password "password") exactly as before.
+      changes:
+        - sql:
+            sql: |
+              UPDATE app_user SET password = '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG', enabled = TRUE
+              WHERE password = '!demo-only';
+              UPDATE app_user SET password = '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG'
+              WHERE password = '!demo-only:disabled';

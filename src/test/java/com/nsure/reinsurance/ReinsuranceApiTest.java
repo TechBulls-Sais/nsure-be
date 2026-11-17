@@ -1,7 +1,7 @@
 package com.nsure.reinsurance;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -139,7 +139,7 @@ class ReinsuranceApiTest {
         String surplus = JsonPath.read(body, "$.ref");
 
         // Four eyes: the drafter cannot approve, the administrator included (Nsure Life NS-UX-004).
-        mockMvc.perform(post("/reinsurance/treaties/" + surplus + "/approve").with(httpBasic("reinsurance", "password")))
+        mockMvc.perform(post("/reinsurance/treaties/" + surplus + "/approve").with(signedIn("reinsurance", "password")))
                 .andExpect(status().isForbidden());
         String own = JsonPath.read(mockMvc.perform(json(post("/reinsurance/treaties"), "admin", treaty(
                         "Family Funeral quota share", "QUOTA_SHARE", "\"Family Funeral\"", "\"cededPercent\":10",
@@ -147,20 +147,20 @@ class ReinsuranceApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.createdBy").value("admin"))
                 .andReturn().getResponse().getContentAsString(), "$.ref");
-        mockMvc.perform(post("/reinsurance/treaties/" + own + "/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/reinsurance/treaties/" + own + "/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/reinsurance/treaties/" + own + "/approve").with(httpBasic("secadmin", "password")))
+        mockMvc.perform(post("/reinsurance/treaties/" + own + "/approve").with(signedIn("secadmin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPROVED"))
                 .andExpect(jsonPath("$.approvedBy").value("secadmin"));
-        mockMvc.perform(post("/reinsurance/treaties/" + surplus + "/approve").with(httpBasic("finance", "password")))
+        mockMvc.perform(post("/reinsurance/treaties/" + surplus + "/approve").with(signedIn("finance", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/reinsurance/treaties/" + surplus + "/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/reinsurance/treaties/" + surplus + "/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPROVED"))
                 .andExpect(jsonPath("$.approvedBy").value("admin"))
                 .andExpect(jsonPath("$.ceding").value(true));
-        mockMvc.perform(post("/reinsurance/treaties/" + surplus + "/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/reinsurance/treaties/" + surplus + "/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isConflict());
 
         // At the retention nothing is ceded; above it, the surplus share.
@@ -183,17 +183,17 @@ class ReinsuranceApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.products.length()").value(2))
                 .andReturn().getResponse().getContentAsString(), "$.ref");
-        mockMvc.perform(post("/reinsurance/treaties/" + overlapping + "/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/reinsurance/treaties/" + overlapping + "/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isConflict());
         String later = JsonPath.read(mockMvc.perform(json(post("/reinsurance/treaties"), "reinsurance",
                         treaty("WoL 2031 QS", "QUOTA_SHARE", "[\"Whole of Life\"]", "\"cededPercent\":30",
                                 LocalDate.of(2031, 1, 1), LocalDate.of(2031, 12, 31))))
                 .andReturn().getResponse().getContentAsString(), "$.ref");
-        mockMvc.perform(post("/reinsurance/treaties/" + later + "/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/reinsurance/treaties/" + later + "/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.ceding").value(false));
 
-        mockMvc.perform(get("/reinsurance/treaties").with(httpBasic("reinsurance", "password")))
+        mockMvc.perform(get("/reinsurance/treaties").with(signedIn("reinsurance", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.ref == '" + overlapping + "')].status").value("DRAFT"))
                 .andExpect(jsonPath("$[?(@.ref == '" + surplus + "')].cessionCount").value(1));
@@ -219,12 +219,12 @@ class ReinsuranceApiTest {
         mockMvc.perform(json(post("/reinsurance/treaties"), "finance",
                         treaty("Finance draft", "QUOTA_SHARE", "\"Care Cash\"", "\"cededPercent\":20", from, to)))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get("/reinsurance/treaties").with(httpBasic("finance", "password")))
+        mockMvc.perform(get("/reinsurance/treaties").with(signedIn("finance", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.ref == 'TRT-00002')].status").value("DRAFT"));
-        mockMvc.perform(get("/reinsurance/treaties").with(httpBasic("distribution", "password")))
+        mockMvc.perform(get("/reinsurance/treaties").with(signedIn("distribution", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/reinsurance/treaties/TRT-99999/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/reinsurance/treaties/TRT-99999/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isNotFound());
     }
 
@@ -262,7 +262,7 @@ class ReinsuranceApiTest {
         pay(policy);
         dispatcher.dispatch();
 
-        String all = mockMvc.perform(get("/reinsurance/cessions?treatyRef=TRT-00001").with(httpBasic("reinsurance", "password")))
+        String all = mockMvc.perform(get("/reinsurance/cessions?treatyRef=TRT-00001").with(signedIn("reinsurance", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         List<Map<String, Object>> unreported = ((List<Map<String, Object>>) JsonPath.read(all, "$")).stream()
@@ -297,7 +297,7 @@ class ReinsuranceApiTest {
         List<Map<String, Object>> cessions = cessions(policy);
         assertThat(cessions).hasSize(2);
         assertThat(cessions.get(0).get("bordereauRef")).isNull();
-        mockMvc.perform(get("/reinsurance/bordereaux").with(httpBasic("reinsurance", "password")))
+        mockMvc.perform(get("/reinsurance/bordereaux").with(signedIn("reinsurance", "password")))
                 .andExpect(jsonPath("$[?(@.ref == '" + ref + "')].treatyRef").value("TRT-00001"));
 
         mockMvc.perform(json(post("/reinsurance/bordereaux"), "reinsurance",
@@ -333,9 +333,9 @@ class ReinsuranceApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String customer = JsonPath.read(body, "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
-        String shop = mockMvc.perform(post("/portfolio/shop").with(httpBasic(username, "password1"))
+        String shop = mockMvc.perform(post("/portfolio/shop").with(signedIn(username, "password1"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"product\":\"" + product + "\",\"tier\":\"" + tier + "\"}"))
                 .andExpect(status().isOk())
@@ -371,14 +371,14 @@ class ReinsuranceApiTest {
 
     private List<Map<String, Object>> cessions(String policy) throws Exception {
         String body = mockMvc.perform(get("/reinsurance/cessions?policyRef=" + policy)
-                        .with(httpBasic("reinsurance", "password")))
+                        .with(signedIn("reinsurance", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return JsonPath.read(body, "$");
     }
 
     private List<Map<String, Object>> recoveries(String claim) throws Exception {
-        String body = mockMvc.perform(get("/reinsurance/recoveries").with(httpBasic("reinsurance", "password")))
+        String body = mockMvc.perform(get("/reinsurance/recoveries").with(signedIn("reinsurance", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return ((List<Map<String, Object>>) JsonPath.read(body, "$")).stream()
@@ -408,6 +408,6 @@ class ReinsuranceApiTest {
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

@@ -1,7 +1,7 @@
 package com.nsure.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -110,7 +110,7 @@ class EmergencyAccessApiTest {
 
     private MockHttpServletResponse call(MockHttpServletRequestBuilder request, String user, String json)
             throws Exception {
-        request.with(httpBasic(user, "password"));
+        request.with(signedIn(user, "password"));
         if (json != null) {
             request.contentType(MediaType.APPLICATION_JSON).content(json);
         }

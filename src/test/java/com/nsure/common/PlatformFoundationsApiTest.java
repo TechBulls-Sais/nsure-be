@@ -1,7 +1,7 @@
 package com.nsure.common;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -106,14 +106,14 @@ class PlatformFoundationsApiTest {
                         .andExpect(status().isOk())
                         .andReturn().getResponse().getContentAsString(), "$.id");
 
-        mockMvc.perform(get("/audits/evidence").param("entityRef", policy).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/audits/evidence").param("entityRef", policy).with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].entityType").value("Policy"))
                 .andExpect(jsonPath("$[0].actor").value("admin"))
                 .andExpect(jsonPath("$[0].correlationId").isNotEmpty());
-        mockMvc.perform(get("/audits/evidence/verify").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/audits/evidence/verify").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.intact").value(true));
-        mockMvc.perform(get("/audits/evidence/verify").with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/audits/evidence/verify").with(signedIn("customer", "password")))
                 .andExpect(status().isForbidden());
 
         // Someone with database access edits a record: the chain names it.
@@ -122,7 +122,7 @@ class PlatformFoundationsApiTest {
         String original = jdbc.queryForObject("select reason from audit_evidence where sequence_no = ?", String.class,
                 target);
         jdbc.update("update audit_evidence set reason = 'quietly edited' where sequence_no = ?", target);
-        String broken = mockMvc.perform(get("/audits/evidence/verify").with(httpBasic("admin", "password")))
+        String broken = mockMvc.perform(get("/audits/evidence/verify").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.intact").value(false))
                 .andReturn().getResponse().getContentAsString();
         assertThat(((Number) JsonPath.read(broken, "$.brokenAt")).longValue()).isEqualTo(target);
@@ -130,11 +130,11 @@ class PlatformFoundationsApiTest {
 
         // Put it back, then remove the newest record instead: the head shows the tail is gone.
         jdbc.update("update audit_evidence set reason = ? where sequence_no = ?", original, target);
-        mockMvc.perform(get("/audits/evidence/verify").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/audits/evidence/verify").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.intact").value(true));
         Long last = jdbc.queryForObject("select max(sequence_no) from audit_evidence", Long.class);
         jdbc.update("delete from audit_evidence where sequence_no = ?", last);
-        mockMvc.perform(get("/audits/evidence/verify").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/audits/evidence/verify").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.intact").value(false))
                 .andExpect(jsonPath("$.problem").value(org.hamcrest.Matchers.containsString("newest records were removed")));
     }
@@ -174,7 +174,7 @@ class PlatformFoundationsApiTest {
 
     private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder json(
             org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+        return request.with(signedIn(user, "password")).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                 .content(body);
     }
 
@@ -191,7 +191,7 @@ class PlatformFoundationsApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String ref = JsonPath.read(body, "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         return ref;
     }

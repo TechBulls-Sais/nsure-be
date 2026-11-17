@@ -1,7 +1,7 @@
 package com.nsure.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -45,9 +45,9 @@ class ApiAccessIntegrationTest {
 
     @Test
     void thereIsOneTopRoleAndItHoldsEveryPermission() throws Exception {
-        JsonNode roles = json.readTree(mockMvc.perform(get("/roles").with(httpBasic("admin", "password")))
+        JsonNode roles = json.readTree(mockMvc.perform(get("/roles").with(signedIn("admin", "password")))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
-        JsonNode permissions = json.readTree(mockMvc.perform(get("/permissions").with(httpBasic("admin", "password")))
+        JsonNode permissions = json.readTree(mockMvc.perform(get("/permissions").with(signedIn("admin", "password")))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         JsonNode superAdmin = null;
         for (JsonNode role : roles) {
@@ -68,7 +68,7 @@ class ApiAccessIntegrationTest {
 
     @Test
     void onlyTheRolesInTheNsureSpecAreShipped() throws Exception {
-        JsonNode roles = json.readTree(mockMvc.perform(get("/roles").with(httpBasic("admin", "password")))
+        JsonNode roles = json.readTree(mockMvc.perform(get("/roles").with(signedIn("admin", "password")))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         java.util.List<String> names = new java.util.ArrayList<>();
         roles.forEach(role -> names.add(role.get("name").asText()));
@@ -197,7 +197,7 @@ class ApiAccessIntegrationTest {
 
     private JsonNode send(String username, MockHttpServletRequestBuilder request, int expectedStatus) throws Exception {
         MvcResult result = mockMvc.perform(request
-                        .with(httpBasic(username, "password"))
+                        .with(signedIn(username, "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().is(expectedStatus))

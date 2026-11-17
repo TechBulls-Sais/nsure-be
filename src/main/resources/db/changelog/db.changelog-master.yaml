@@ -227,3 +227,9 @@ databaseChangeLog:
   - include:
       file: changes/077-operations.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/078-one-time-codes.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/079-demo-only-default-accounts.yaml
+      relativeToChangelogFile: true

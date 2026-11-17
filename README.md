@@ -41,9 +41,29 @@ How a request is decided:
 | Credit Life Administrator | lenders, loans, disbursements, balances, credit claims and early settlements | `credit` |
 | Policyholder / End User | **none** — protected role, access by ownership only | `customer` |
 
-Demo passwords are `password`. Break-glass codes — `UPDATE_CONTROL` (controls.write), `OVERRIDE_CLAIM_FOUR_EYES`
+Demo passwords are `password`. These logins exist in demo installations only: migration 079 locks every account on
+that published password, and gives them back only in the `demo` Liquibase context (and when no context is given, as
+locally). A production migration (`!demo`) leaves no account that accepts `password`; its first administrator comes
+from `NSURE_BOOTSTRAP_ADMIN_USERNAME` / `NSURE_BOOTSTRAP_ADMIN_PASSWORD` (12+ characters, used once while no enabled
+Super Admin exists; pick a name other than a locked demo login such as `admin`). Break-glass codes — `UPDATE_CONTROL` (controls.write), `OVERRIDE_CLAIM_FOUR_EYES`
 (claim.approve.override), `PUBLISH_OWN_RATE_TABLE` (rate.publish.self) — are granted to **no role**, the administrator
 included; using one needs a written reason that is recorded.
+
+### Sign-in and one-time codes (NS-SH11-001)
+
+- `POST /auth/session` with HTTP Basic: a portal customer gets the session token at once. **Staff and partners** (any
+  role with desk access) get a challenge instead and no token; `POST /auth/session/verify` with
+  `{challenge, code}` issues the token once the code is right. Their password is refused (401) everywhere else, so no
+  API client can skip the code (`SecondFactorRequiredFilter`).
+- Customer sign-up (`POST /public/signup/otp`, then `POST /public/signup` with `challenge` and `otp`) uses the same
+  codes, bound to the phone they were sent to.
+- Codes (`OneTimeCodes`): one per request, valid `nsure.one-time-codes.ttl-minutes` (5) for
+  `nsure.one-time-codes.max-attempts` (5) answers, accepted once, stored only as hashes. In the `dev` profile (the
+  default when no profile is chosen) or `demo`, and never together with `prod`, the code is the fixed `123456` and is
+  returned with the challenge. Everywhere else it is random and sent through a `OneTimeCodeSender` bean (the messaging
+  provider); **without one, sign-up and staff/partner sign-in are refused**, never answered with the fixed code. No
+  provider ships yet, and staff accounts hold no phone or e-mail, so a `prod` installation cannot sign staff in until
+  both exist.
 
 ### Emergency access (NS-SH11-003)
 

@@ -1,7 +1,7 @@
 package com.nsure.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -122,7 +122,7 @@ class RoleGuardsTest {
                 "{\"permissions\":{\"MAKE_COFFEE\":true}}");
         assertThat(unknown.getStatus()).isEqualTo(422);
         // Relabelling is allowed; renaming the code is not.
-        String permissions = mockMvc.perform(get("/permissions").with(httpBasic("admin", "password")))
+        String permissions = mockMvc.perform(get("/permissions").with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString();
         Integer readClaim = JsonPath.<List<Integer>>read(permissions, "$[?(@.code == 'READ_CLAIM')].id").get(0);
         assertThat(call(put("/permissions/" + readClaim), "admin", "{\"code\":\"READ_CLAIMS\"}").getStatus())
@@ -140,7 +140,7 @@ class RoleGuardsTest {
                 "{\"maxPayoutAmount\":0}");
         assertThat(zero.getStatus()).isEqualTo(422);
         assertThat(zero.getContentAsString()).contains("Delete the row to remove the limit.");
-        String list = mockMvc.perform(get("/admin/approval-authorities").with(httpBasic("admin", "password")))
+        String list = mockMvc.perform(get("/admin/approval-authorities").with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString();
         assertThat(JsonPath.<List<Double>>read(list, "$[?(@.roleName == 'Claims Assessor')].maxPayoutAmount"))
                 .containsExactly(50000.0);
@@ -171,13 +171,13 @@ class RoleGuardsTest {
     }
 
     private long roleId(String name) throws Exception {
-        String roles = mockMvc.perform(get("/roles").with(httpBasic("admin", "password")))
+        String roles = mockMvc.perform(get("/roles").with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString();
         return ((Number) JsonPath.<List<Object>>read(roles, "$[?(@.name == '" + name + "')].id").get(0)).longValue();
     }
 
     private long userId(String username) throws Exception {
-        String users = mockMvc.perform(get("/users").with(httpBasic("admin", "password")))
+        String users = mockMvc.perform(get("/users").with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString();
         return ((Number) JsonPath.<List<Object>>read(users, "$[?(@.username == '" + username + "')].id").get(0))
                 .longValue();
@@ -196,12 +196,12 @@ class RoleGuardsTest {
 
     private int statusOf(String user, String path) throws Exception {
         return mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)
-                .with(httpBasic(user, "password"))).andReturn().getResponse().getStatus();
+                .with(signedIn(user, "password"))).andReturn().getResponse().getStatus();
     }
 
     private MockHttpServletResponse call(MockHttpServletRequestBuilder request, String user, String json)
             throws Exception {
-        request.with(httpBasic(user, "password"));
+        request.with(signedIn(user, "password"));
         if (json != null) {
             request.contentType(MediaType.APPLICATION_JSON).content(json);
         }

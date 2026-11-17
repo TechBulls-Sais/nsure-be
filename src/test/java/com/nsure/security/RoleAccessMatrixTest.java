@@ -1,7 +1,7 @@
 package com.nsure.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
@@ -94,14 +94,14 @@ class RoleAccessMatrixTest {
     @Test
     void controlsWriteIsHeldByNoRoleNotEvenTheAdministrator() throws Exception {
         for (String user : STAFF) {
-            int status = mockMvc.perform(put("/admin/controls/claim.four_eyes").with(httpBasic(user, "password"))
+            int status = mockMvc.perform(put("/admin/controls/claim.four_eyes").with(signedIn(user, "password"))
                             .contentType(MediaType.APPLICATION_JSON).content("{\"enabled\":false}"))
                     .andReturn().getResponse().getStatus();
             assertThat(status).as(user + " PUT /admin/controls/claim.four_eyes").isEqualTo(403);
         }
         // Deny by default (Nsure Life NS-SH11-002): the administrator does not pass by role name. Break-glass codes
         // come only through time-limited emergency access (EmergencyAccessApiTest).
-        int admin = mockMvc.perform(put("/admin/controls/claim.four_eyes").with(httpBasic("admin", "password"))
+        int admin = mockMvc.perform(put("/admin/controls/claim.four_eyes").with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"enabled\":false}"))
                 .andReturn().getResponse().getStatus();
         assertThat(admin).isEqualTo(403);
@@ -109,16 +109,16 @@ class RoleAccessMatrixTest {
 
     @Test
     void meListsExactlyTheEffectivePermissions() throws Exception {
-        String actuary = mockMvc.perform(get("/me").with(httpBasic("actuary", "password")))
+        String actuary = mockMvc.perform(get("/me").with(signedIn("actuary", "password")))
                 .andReturn().getResponse().getContentAsString();
         assertThat(actuary).contains("\"PUBLISH_RATE_TABLE\"", "\"READ_CLAIM\"", "\"READ_CONTROL\"")
                 .doesNotContain("\"APPROVE_CLAIM\"", "\"UPDATE_CONTROL\"", "\"READ_CUSTOMER\"");
-        String customer = mockMvc.perform(get("/me").with(httpBasic("customer", "password")))
+        String customer = mockMvc.perform(get("/me").with(signedIn("customer", "password")))
                 .andReturn().getResponse().getContentAsString();
         assertThat(customer).contains("\"customerPortal\":true", "\"permissions\":[]");
     }
 
     private int status(String user, String path) throws Exception {
-        return mockMvc.perform(get(path).with(httpBasic(user, "password"))).andReturn().getResponse().getStatus();
+        return mockMvc.perform(get(path).with(signedIn(user, "password"))).andReturn().getResponse().getStatus();
     }
 }

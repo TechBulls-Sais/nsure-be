@@ -5,6 +5,10 @@
 spring:
   application:
     name: nsure-be
+  profiles:
+    # A run with no profile chosen is "dev". Shared environments choose "prod" (application-prod.yml). The fixed
+    # one-time code 123456 is accepted only in the dev or demo profile, and never when prod is active (OneTimeCodes).
+    default: dev
   datasource:
     url: ${NSURE_DB_URL:jdbc:mysql://127.0.0.1:3306/nsure?sslMode=REQUIRED&serverTimezone=UTC&characterEncoding=UTF-8}
     username: ${NSURE_DB_USER:nsure}
@@ -70,7 +74,13 @@ nsure:
     logo-url: ${NSURE_LOGO_URL:}
     # First start on an empty database records this identity. Production provisions it explicitly (false).
     bind-on-first-start: ${NSURE_BIND_ON_FIRST_START:true}
-  # Optional first administrator for a clean installation, created only while no enabled Super Admin exists.
+  # One-time codes for customer sign-up and staff/partner sign-in: one per request, expiring, attempt-limited.
+  # Outside dev/demo they are random and need a messaging provider (OneTimeCodeSender); without one, both are refused.
+  one-time-codes:
+    ttl-minutes: ${NSURE_ONE_TIME_CODE_TTL_MINUTES:5}
+    max-attempts: ${NSURE_ONE_TIME_CODE_MAX_ATTEMPTS:5}
+  # Optional first administrator for a clean installation, created only while no enabled Super Admin exists. A
+  # production installation has no default administrator (migration 079), so it needs these on first start.
   bootstrap:
     admin-username: ${NSURE_BOOTSTRAP_ADMIN_USERNAME:}
     admin-password: ${NSURE_BOOTSTRAP_ADMIN_PASSWORD:}

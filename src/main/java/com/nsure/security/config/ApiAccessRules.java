@@ -58,6 +58,8 @@ public final class ApiAccessRules {
 
             // ── every signed-in user ───────────────────────────────────────────────────────────────────
             rule(POST, "/auth/session", authenticated()),
+            // Second sign-in step for staff and partners: the challenge from POST /auth/session and its one-time code.
+            rule(POST, "/auth/session/verify", publicAccess()),
             rule(DELETE, "/auth/session", authenticated()),
             rule(GET, "/me", authenticated()),
             // Staff alerts; each user sees only alerts whose permission they hold.

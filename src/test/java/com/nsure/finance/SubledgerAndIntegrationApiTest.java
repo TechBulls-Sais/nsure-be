@@ -1,7 +1,7 @@
 package com.nsure.finance;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -63,7 +63,7 @@ class SubledgerAndIntegrationApiTest {
                         + "\"providerReference\":\"OM-0998\",\"policyRef\":\"" + ref + "\",\"amount\":\"" + premium + "\"}"))
                 .andExpect(jsonPath("$.status").value("SUSPENSE"))
                 .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("confirmed BWP 1.00")));
-        mockMvc.perform(get("/portfolio/policies").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + ref + "')].status").value("Pending Payment"));
         mockMvc.perform(json(post("/integration/simulator/provider-receipts"), "finance",
                         "{\"provider\":\"OrangeMoney\",\"providerReference\":\"OM-1001\",\"amount\":\"" + premium + "\"}"))
@@ -86,13 +86,13 @@ class SubledgerAndIntegrationApiTest {
         // The same reference with different details is a conflict, not a second payment.
         mockMvc.perform(json(post("/integration/payment-notifications"), "ops", notification.replace(premium, "1.00")))
                 .andExpect(status().isConflict());
-        mockMvc.perform(get("/integration/inbound").with(httpBasic("ops", "password")))
+        mockMvc.perform(get("/integration/inbound").with(signedIn("ops", "password")))
                 .andExpect(jsonPath("$[?(@.providerRef == 'OM-1001')]").value(org.hamcrest.Matchers.hasSize(1)));
 
         dispatch();
         dispatch();
         String journals = mockMvc.perform(get("/finance/journals?eventType=PremiumReceived")
-                        .with(httpBasic("finance", "password")))
+                        .with(signedIn("finance", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String own = "$[?(@.sourceRef == '" + ref + "')]";
@@ -101,9 +101,9 @@ class SubledgerAndIntegrationApiTest {
         assertThat(new BigDecimal(amounts.get(0).toString())).isEqualByComparingTo(premium);
         assertThat((List<String>) JsonPath.read(journals, own + ".lines[*].accountCode")).containsExactly("1000", "4000");
 
-        mockMvc.perform(get("/finance/trial-balance").with(httpBasic("finance", "password")))
+        mockMvc.perform(get("/finance/trial-balance").with(signedIn("finance", "password")))
                 .andExpect(jsonPath("$.balanced").value(true));
-        mockMvc.perform(get("/integration/events?eventType=PremiumReceived").with(httpBasic("ops", "password")))
+        mockMvc.perform(get("/integration/events?eventType=PremiumReceived").with(signedIn("ops", "password")))
                 .andExpect(jsonPath("$[0].aggregateRef").value(ref))
                 .andExpect(jsonPath("$[0].status").value("DELIVERED"));
     }
@@ -116,18 +116,18 @@ class SubledgerAndIntegrationApiTest {
                                 + "\",\"amount\":\"3.00\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("SUSPENSE"));
-        mockMvc.perform(get("/portfolio/policies").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + ref + "')].status").value("Pending Payment"));
         dispatch();
         String journals = mockMvc.perform(get("/finance/journals?eventType=UnmatchedReceipt")
-                        .with(httpBasic("finance", "password")))
+                        .with(signedIn("finance", "password")))
                 .andReturn().getResponse().getContentAsString();
         assertThat((List<String>) JsonPath.read(journals, "$[0].lines[*].accountCode")).containsExactly("1000", "2000");
 
         // Finance-only users cannot inject payments; customers cannot read the ledger.
         mockMvc.perform(json(post("/integration/payment-notifications"), "finance", "{}"))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get("/finance/journals").with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/finance/journals").with(signedIn("customer", "password")))
                 .andExpect(status().isForbidden());
     }
 
@@ -141,14 +141,14 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(jsonPath("$.version").value(2))
                 .andExpect(jsonPath("$.approvalStatus").value("PENDING_APPROVAL"));
         mockMvc.perform(post("/finance/posting-rules/PremiumReceived/versions/2/approve")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.inForce").value(true));
         String[] policy = pendingPolicy("Boipelo Rre", "boipelo");
         mockMvc.perform(json(post("/portfolio/policies/" + policy[0] + "/payments"), "admin", "{\"method\":\"Card\"}"))
                 .andExpect(status().isOk());
         dispatch();
-        String exceptions = mockMvc.perform(get("/finance/exceptions").with(httpBasic("finance", "password")))
+        String exceptions = mockMvc.perform(get("/finance/exceptions").with(signedIn("finance", "password")))
                 .andReturn().getResponse().getContentAsString();
         Integer id = ((List<Integer>) JsonPath.read(exceptions, "$[?(@.sourceRef == '" + policy[0] + "')].id")).get(0);
         mockMvc.perform(json(put("/finance/posting-rules/PremiumReceived"), "finance",
@@ -157,19 +157,19 @@ class SubledgerAndIntegrationApiTest {
                                 + "\"reason\":\"Resume premium postings\"}"))
                 .andExpect(jsonPath("$.version").value(3));
         // Proposed but not yet approved, the fix changes nothing: the retry still fails.
-        mockMvc.perform(post("/finance/exceptions/" + id + "/retry").with(httpBasic("finance", "password")))
+        mockMvc.perform(post("/finance/exceptions/" + id + "/retry").with(signedIn("finance", "password")))
                 .andExpect(jsonPath("$.status").value("OPEN"));
         mockMvc.perform(post("/finance/posting-rules/PremiumReceived/versions/3/approve")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
-        String resolved = mockMvc.perform(post("/finance/exceptions/" + id + "/retry").with(httpBasic("finance", "password")))
+        String resolved = mockMvc.perform(post("/finance/exceptions/" + id + "/retry").with(signedIn("finance", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("RESOLVED"))
                 .andExpect(jsonPath("$.journalRef").isNotEmpty())
                 .andReturn().getResponse().getContentAsString();
-        mockMvc.perform(get("/finance/journals/" + JsonPath.read(resolved, "$.journalRef")).with(httpBasic("finance", "password")))
+        mockMvc.perform(get("/finance/journals/" + JsonPath.read(resolved, "$.journalRef")).with(signedIn("finance", "password")))
                 .andExpect(jsonPath("$.ruleVersion").value(3));
-        mockMvc.perform(post("/finance/exceptions/" + id + "/retry").with(httpBasic("finance", "password")))
+        mockMvc.perform(post("/finance/exceptions/" + id + "/retry").with(signedIn("finance", "password")))
                 .andExpect(status().isConflict());
     }
 
@@ -179,14 +179,14 @@ class SubledgerAndIntegrationApiTest {
      */
     @Test
     void aRuleChangeIsANewApprovedVersionAndPostedJournalsKeepTheirs() throws Exception {
-        String rules = mockMvc.perform(get("/finance/posting-rules").with(httpBasic("finance", "password")))
+        String rules = mockMvc.perform(get("/finance/posting-rules").with(signedIn("finance", "password")))
                 .andReturn().getResponse().getContentAsString();
         String inForce = "$[?(@.eventType == 'UnmatchedReceipt' && @.inForce == true)]";
         Integer before = ((List<Integer>) JsonPath.read(rules, inForce + ".version")).get(0);
         Integer beforeId = ((List<Integer>) JsonPath.read(rules, inForce + ".id")).get(0);
 
         String first = unmatchedReceipt("FNB-301");
-        mockMvc.perform(get("/finance/journals/" + first).with(httpBasic("finance", "password")))
+        mockMvc.perform(get("/finance/journals/" + first).with(signedIn("finance", "password")))
                 .andExpect(jsonPath("$.postingRuleId").value(beforeId))
                 .andExpect(jsonPath("$.lines[1].accountCode").value("2000"));
 
@@ -216,10 +216,10 @@ class SubledgerAndIntegrationApiTest {
         mockMvc.perform(json(put("/finance/posting-rules/UnmatchedReceipt"), "finance", change))
                 .andExpect(status().isConflict());
         mockMvc.perform(post("/finance/posting-rules/UnmatchedReceipt/versions/" + (before + 1) + "/approve")
-                        .with(httpBasic("finance", "password")))
+                        .with(signedIn("finance", "password")))
                 .andExpect(status().isForbidden());
         mockMvc.perform(post("/finance/posting-rules/UnmatchedReceipt/versions/" + (before + 1) + "/approve")
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.approvalStatus").value("APPROVED"))
                 .andExpect(jsonPath("$.effectiveFrom").value(tomorrow))
@@ -227,11 +227,11 @@ class SubledgerAndIntegrationApiTest {
 
         // Today's events still post under the version in force today; the old version is kept, ending today.
         String second = unmatchedReceipt("FNB-302");
-        mockMvc.perform(get("/finance/journals/" + second).with(httpBasic("finance", "password")))
+        mockMvc.perform(get("/finance/journals/" + second).with(signedIn("finance", "password")))
                 .andExpect(jsonPath("$.ruleVersion").value(before))
                 .andExpect(jsonPath("$.postingRuleId").value(beforeId))
                 .andExpect(jsonPath("$.lines[1].accountCode").value("2000"));
-        rules = mockMvc.perform(get("/finance/posting-rules").with(httpBasic("finance", "password")))
+        rules = mockMvc.perform(get("/finance/posting-rules").with(signedIn("finance", "password")))
                 .andReturn().getResponse().getContentAsString();
         String old = "$[?(@.eventType == 'UnmatchedReceipt' && @.version == " + before + ")]";
         assertThat((List<String>) JsonPath.read(rules, old + ".creditAccount")).containsExactly("2000");
@@ -240,7 +240,7 @@ class SubledgerAndIntegrationApiTest {
 
         // The proposal and approval are in the tamper-evident evidence, with the before and after mapping.
         String evidence = mockMvc.perform(get("/audits/evidence").param("entityType", "PostingRule")
-                        .param("entityRef", "UnmatchedReceipt v" + (before + 1)).with(httpBasic("admin", "password")))
+                        .param("entityRef", "UnmatchedReceipt v" + (before + 1)).with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString();
         assertThat((List<String>) JsonPath.read(evidence, "$[*].action"))
                 .contains("Proposed posting rule", "Approved posting rule");
@@ -257,7 +257,7 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(jsonPath("$.status").value("SUSPENSE"));
         dispatch();
         String journals = mockMvc.perform(get("/finance/journals?eventType=UnmatchedReceipt")
-                        .with(httpBasic("finance", "password")))
+                        .with(signedIn("finance", "password")))
                 .andReturn().getResponse().getContentAsString();
         return ((List<String>) JsonPath.read(journals, "$[?(@.sourceRef == '" + reference + "')].ref")).get(0);
     }
@@ -269,7 +269,7 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(status().isOk());
         dispatch();
         String journals = mockMvc.perform(get("/finance/journals?eventType=PremiumReceived")
-                        .with(httpBasic("finance", "password")))
+                        .with(signedIn("finance", "password")))
                 .andReturn().getResponse().getContentAsString();
         String journal = ((List<String>) JsonPath.read(journals, "$[?(@.sourceRef == '" + policy[0] + "')].ref")).get(0);
 
@@ -293,7 +293,7 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(status().isConflict());
 
         // Blueprint §7: prepared → submitted → accepted or rejected → reconciled.
-        String batch = mockMvc.perform(post("/finance/gl-batches").with(httpBasic("finance", "password")))
+        String batch = mockMvc.perform(post("/finance/gl-batches").with(signedIn("finance", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PREPARED"))
                 .andReturn().getResponse().getContentAsString();
@@ -301,7 +301,7 @@ class SubledgerAndIntegrationApiTest {
         mockMvc.perform(json(post("/finance/gl-batches/" + batchRef + "/acknowledge"), "finance",
                         "{\"status\":\"ACCEPTED\"}"))
                 .andExpect(status().isConflict());
-        mockMvc.perform(post("/finance/gl-batches/" + batchRef + "/submit").with(httpBasic("finance", "password")))
+        mockMvc.perform(post("/finance/gl-batches/" + batchRef + "/submit").with(signedIn("finance", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("SUBMITTED"))
                 .andExpect(jsonPath("$.submittedBy").value("finance"));
@@ -342,7 +342,7 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(status().isOk());
         dispatch();
         String posted = mockMvc.perform(get("/finance/journals?eventType=PremiumReceived")
-                        .with(httpBasic("finance", "password")))
+                        .with(signedIn("finance", "password")))
                 .andReturn().getResponse().getContentAsString();
         assertThat((List<String>) JsonPath.read(posted, "$[?(@.sourceRef == '" + later[0] + "')].periodCode"))
                 .containsExactly(YearMonth.now().plusMonths(1).toString());
@@ -371,18 +371,18 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(jsonPath("$.journalRef").doesNotExist())
                 .andReturn().getResponse().getContentAsString();
         String manualRef = JsonPath.read(manual, "$.ref");
-        mockMvc.perform(post("/finance/manual-journals/" + manualRef + "/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/finance/manual-journals/" + manualRef + "/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isForbidden());
         String approved = mockMvc.perform(post("/finance/manual-journals/" + manualRef + "/approve")
-                        .with(httpBasic("secadmin", "password")))
+                        .with(signedIn("secadmin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("POSTED"))
                 .andExpect(jsonPath("$.checkedBy").value("secadmin"))
                 .andReturn().getResponse().getContentAsString();
-        mockMvc.perform(get("/finance/journals/" + JsonPath.read(approved, "$.journalRef")).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/finance/journals/" + JsonPath.read(approved, "$.journalRef")).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.eventType").value("ManualJournal"))
                 .andExpect(jsonPath("$.lines.length()").value(2));
-        mockMvc.perform(post("/finance/manual-journals/" + manualRef + "/approve").with(httpBasic("secadmin", "password")))
+        mockMvc.perform(post("/finance/manual-journals/" + manualRef + "/approve").with(signedIn("secadmin", "password")))
                 .andExpect(status().isConflict());
 
         // Suspense: a receipt that does not match goes to suspense; refunding it needs a second person.
@@ -399,9 +399,9 @@ class SubledgerAndIntegrationApiTest {
                         "{\"action\":\"REFUND\",\"reason\":\"Short payment returned to the payer\"}"))
                 .andExpect(jsonPath("$.clearanceAction").value("REFUND"))
                 .andExpect(jsonPath("$.requestedBy").value("admin"));
-        mockMvc.perform(post("/finance/suspense/" + wrongAmount + "/clearance/approve").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/finance/suspense/" + wrongAmount + "/clearance/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/finance/suspense/" + wrongAmount + "/clearance/approve").with(httpBasic("secadmin", "password")))
+        mockMvc.perform(post("/finance/suspense/" + wrongAmount + "/clearance/approve").with(signedIn("secadmin", "password")))
                 .andExpect(jsonPath("$.status").value("REFUNDED"))
                 .andExpect(jsonPath("$.clearedBy").value("secadmin"));
 
@@ -413,21 +413,21 @@ class SubledgerAndIntegrationApiTest {
         mockMvc.perform(json(post("/finance/suspense/" + unknownPolicy + "/clearance"), "admin",
                         "{\"action\":\"ALLOCATE\",\"policyRef\":\"" + policy[0] + "\",\"reason\":\"Payer quoted an old reference\"}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(post("/finance/suspense/" + unknownPolicy + "/clearance/approve").with(httpBasic("secadmin", "password")))
+        mockMvc.perform(post("/finance/suspense/" + unknownPolicy + "/clearance/approve").with(signedIn("secadmin", "password")))
                 .andExpect(jsonPath("$.status").value("APPLIED"))
                 .andExpect(jsonPath("$.policyRef").value("POL-NOPE"));
-        mockMvc.perform(get("/portfolio/policies").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + policy[0] + "')].status").value(org.hamcrest.Matchers.hasItem("Active")));
 
         // Clearing posts Dr suspense / Cr bank, so the cash is counted once.
         dispatch();
-        String cleared = mockMvc.perform(get("/finance/journals?eventType=SuspenseCleared").with(httpBasic("admin", "password")))
+        String cleared = mockMvc.perform(get("/finance/journals?eventType=SuspenseCleared").with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString();
         assertThat((List<String>) JsonPath.read(cleared, "$[*].sourceRef")).contains("BF-77", "BF-78");
     }
 
     private Integer suspenseId(String providerRef) throws Exception {
-        String suspense = mockMvc.perform(get("/finance/suspense").with(httpBasic("admin", "password")))
+        String suspense = mockMvc.perform(get("/finance/suspense").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return JsonPath.<List<Integer>>read(suspense, "$[?(@.providerRef == '" + providerRef + "')].id").get(0);
@@ -435,22 +435,22 @@ class SubledgerAndIntegrationApiTest {
 
     @Test
     void meListsModulePermissionsAndTheReportHasSections() throws Exception {
-        mockMvc.perform(get("/me").with(httpBasic("finance", "password")))
+        mockMvc.perform(get("/me").with(signedIn("finance", "password")))
                 .andExpect(jsonPath("$.permissions[?(@ == 'READ_FINANCE')]").exists())
                 .andExpect(jsonPath("$.permissions[?(@ == 'MANAGE_INTEGRATION')]").isEmpty());
-        mockMvc.perform(get("/reports/management").with(httpBasic("ops", "password")))
+        mockMvc.perform(get("/reports/management").with(signedIn("ops", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sections[?(@.key == 'individual')].metrics").exists())
                 .andExpect(jsonPath("$.sections[?(@.key == 'finance')]").exists())
                 // Every module reports, and none of them failed to load.
                 .andExpect(jsonPath("$.sections.length()").value(8))
                 .andExpect(jsonPath("$.sections[?(@.error != null)]").isEmpty());
-        mockMvc.perform(get("/reports/management").with(httpBasic("service", "password")))
+        mockMvc.perform(get("/reports/management").with(signedIn("service", "password")))
                 .andExpect(status().isForbidden());
     }
 
     private void dispatch() throws Exception {
-        mockMvc.perform(post("/integration/outbox/dispatch").with(httpBasic("ops", "password")))
+        mockMvc.perform(post("/integration/outbox/dispatch").with(signedIn("ops", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.failed").value(0));
     }
@@ -463,9 +463,9 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String customer = JsonPath.read(body, "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
-        String shop = mockMvc.perform(post("/portfolio/shop").with(httpBasic(username, "password1"))
+        String shop = mockMvc.perform(post("/portfolio/shop").with(signedIn(username, "password1"))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"product\":\"Term Life\",\"tier\":\"Silver\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -474,6 +474,6 @@ class SubledgerAndIntegrationApiTest {
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

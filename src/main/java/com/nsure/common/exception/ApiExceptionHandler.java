@@ -85,6 +85,15 @@ public class ApiExceptionHandler {
         return problem(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage());
     }
 
+    /**
+     * A one-time code cannot be delivered on this installation (no messaging provider): the step is refused with 422,
+     * not 503, so the screen shows the reason instead of "server not responding".
+     */
+    @ExceptionHandler(com.nsure.security.otp.CodeDeliveryUnavailableException.class)
+    public ResponseEntity<ApiError> codeDeliveryUnavailable(com.nsure.security.otp.CodeDeliveryUnavailableException ex) {
+        return problem(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage());
+    }
+
     /** Someone else changed the record since the caller read it (NS-TXN-001): refresh and try again. */
     @ExceptionHandler(StaleVersionException.class)
     public ResponseEntity<ApiError> stale(StaleVersionException ex) {

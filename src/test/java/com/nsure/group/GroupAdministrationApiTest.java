@@ -2,7 +2,7 @@ package com.nsure.group;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -104,7 +104,7 @@ class GroupAdministrationApiTest {
         String batch = JsonPath.read(batchBody, "$.ref");
 
         // Staging does not touch live membership.
-        mockMvc.perform(get("/group/schemes/" + scheme).with(httpBasic("grpadmin", "password")))
+        mockMvc.perform(get("/group/schemes/" + scheme).with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$.scheme.activeMembers").value(0))
                 .andExpect(jsonPath("$.censusBatches[0].ref").value(batch));
 
@@ -117,9 +117,9 @@ class GroupAdministrationApiTest {
                                 "csv", HEADER + "\nX1,A,B,1990-01-01,STAFF,1000,JOIN,2026-01-01"))))
                 .andExpect(status().isConflict());
 
-        mockMvc.perform(post("/group/census-batches/" + batch + "/commit").with(httpBasic("customer", "password")))
+        mockMvc.perform(post("/group/census-batches/" + batch + "/commit").with(signedIn("customer", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/group/census-batches/" + batch + "/commit").with(httpBasic("grpadmin", "password")))
+        mockMvc.perform(post("/group/census-batches/" + batch + "/commit").with(signedIn("grpadmin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("COMMITTED"))
                 .andExpect(jsonPath("$.acceptedRows").value(97))
@@ -128,12 +128,12 @@ class GroupAdministrationApiTest {
                 .andExpect(jsonPath("$.rows[0].memberId").isNumber())
                 .andExpect(jsonPath("$.rows[19].status").value("REJECTED"));
         // Committing again changes nothing (AT-GL04-02).
-        mockMvc.perform(post("/group/census-batches/" + batch + "/commit").with(httpBasic("grpadmin", "password")))
+        mockMvc.perform(post("/group/census-batches/" + batch + "/commit").with(signedIn("grpadmin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.acceptedRows").value(97));
         assertThat(memberCount(scheme)).isEqualTo(97L);
 
-        String detail = mockMvc.perform(get("/group/schemes/" + scheme).with(httpBasic("grpadmin", "password")))
+        String detail = mockMvc.perform(get("/group/schemes/" + scheme).with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$.scheme.activeMembers").value(97))
                 .andExpect(jsonPath("$.scheme.pendingUnderwriting").value(1))
                 .andExpect(jsonPath("$.categories[0].activeMembers").value(97))
@@ -198,7 +198,7 @@ class GroupAdministrationApiTest {
                 "A1,Ana,One,1990-01-01,STAFF,,JOIN,2026-01-01\n"
                         + "A2,Ben,Two,1940-01-01,STAFF,,JOIN,2026-01-01\n"
                         + "Z9,,,,,,LEAVE,2026-01-31");
-        String staged = mockMvc.perform(get("/group/census-batches/" + batch).with(httpBasic("grpadmin", "password")))
+        String staged = mockMvc.perform(get("/group/census-batches/" + batch).with(signedIn("grpadmin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.mode").value("ATOMIC"))
                 .andExpect(jsonPath("$.invalidRows").value(2))
@@ -207,9 +207,9 @@ class GroupAdministrationApiTest {
                 .andReturn().getResponse().getContentAsString();
         assertThat((String) JsonPath.read(staged, "$.rows[0].status")).isEqualTo("VALID");
 
-        mockMvc.perform(post("/group/census-batches/" + batch + "/commit").with(httpBasic("grpadmin", "password")))
+        mockMvc.perform(post("/group/census-batches/" + batch + "/commit").with(signedIn("grpadmin", "password")))
                 .andExpect(status().isUnprocessableEntity());
-        mockMvc.perform(get("/group/census-batches/" + batch).with(httpBasic("grpadmin", "password")))
+        mockMvc.perform(get("/group/census-batches/" + batch).with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$.status").value("VALIDATED"));
         assertThat(memberCount(scheme)).isZero();
     }
@@ -268,7 +268,7 @@ class GroupAdministrationApiTest {
         mockMvc.perform(json(post("/group/invoices/" + invoice + "/receipts"), "grpadmin",
                         "{\"amount\":60,\"reference\":\"EFT-2\"}"))
                 .andExpect(status().isUnprocessableEntity());
-        mockMvc.perform(get("/group/schemes").with(httpBasic("grpadmin", "password")))
+        mockMvc.perform(get("/group/schemes").with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$[?(@.ref == '" + scheme + "')].outstandingBalance").value(51.61));
         mockMvc.perform(json(post("/group/invoices/" + invoice + "/receipts"), "grpadmin",
                         "{\"amount\":51.61,\"reference\":\"EFT-2\"}"))
@@ -288,12 +288,12 @@ class GroupAdministrationApiTest {
 
     @Test
     void schemeAdministrationNeedsTheGroupPermissions() throws Exception {
-        mockMvc.perform(get("/group/schemes").with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/group/schemes").with(signedIn("customer", "password")))
                 .andExpect(status().isForbidden());
         mockMvc.perform(json(post("/group/schemes"), "customer", schemeBody("Customer Scheme")))
                 .andExpect(status().isForbidden());
         // Finance may read schemes but not create them.
-        mockMvc.perform(get("/group/schemes").with(httpBasic("finance", "password")))
+        mockMvc.perform(get("/group/schemes").with(signedIn("finance", "password")))
                 .andExpect(status().isOk());
         mockMvc.perform(json(post("/group/schemes"), "finance", schemeBody("Finance Scheme")))
                 .andExpect(status().isForbidden());
@@ -302,12 +302,12 @@ class GroupAdministrationApiTest {
                 .andExpect(status().isForbidden());
 
         // The seeded schemes carry live categories and members.
-        mockMvc.perform(get("/group/schemes").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/group/schemes").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.ref == 'SCH-001')].activeMembers").value(5))
                 .andExpect(jsonPath("$[?(@.ref == 'SCH-001')].pendingUnderwriting").value(1))
                 .andExpect(jsonPath("$[?(@.ref == 'SCH-001')].monthlyPremium").value(956.0));
-        mockMvc.perform(get("/group/schemes/SCH-404").with(httpBasic("grpadmin", "password")))
+        mockMvc.perform(get("/group/schemes/SCH-404").with(signedIn("grpadmin", "password")))
                 .andExpect(status().isNotFound());
     }
 
@@ -324,12 +324,12 @@ class GroupAdministrationApiTest {
                 .andExpect(jsonPath("$.salaryMultiple").value(3.0))
                 .andExpect(jsonPath("$.activeMembers").value(1));
         commit(upload(scheme, "C-2", "PARTIAL", "S2,Sam,New,1990-01-01,STAFF,100000,JOIN,2026-02-01"));
-        mockMvc.perform(get("/group/schemes/" + scheme).with(httpBasic("grpadmin", "password")))
+        mockMvc.perform(get("/group/schemes/" + scheme).with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$.members[?(@.memberKey == 'S1')].acceptedCover").value(200000.0))
                 .andExpect(jsonPath("$.members[?(@.memberKey == 'S2')].acceptedCover").value(300000.0));
         // A salary change recalculates S1 from its effective date with the category formula now in force.
         commit(upload(scheme, "C-3", "PARTIAL", "S1,,,,,120000,SALARY,2026-03-01"));
-        mockMvc.perform(get("/group/schemes/" + scheme).with(httpBasic("grpadmin", "password")))
+        mockMvc.perform(get("/group/schemes/" + scheme).with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$.members[?(@.memberKey == 'S1')].salary").value(120000.0))
                 .andExpect(jsonPath("$.members[?(@.memberKey == 'S1')].acceptedCover").value(360000.0));
     }
@@ -376,7 +376,7 @@ class GroupAdministrationApiTest {
     }
 
     private String commit(String batch) throws Exception {
-        return mockMvc.perform(post("/group/census-batches/" + batch + "/commit").with(httpBasic("grpadmin", "password")))
+        return mockMvc.perform(post("/group/census-batches/" + batch + "/commit").with(signedIn("grpadmin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("COMMITTED"))
                 .andReturn().getResponse().getContentAsString();
@@ -408,6 +408,6 @@ class GroupAdministrationApiTest {
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        return request.with(httpBasic(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, "password")).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

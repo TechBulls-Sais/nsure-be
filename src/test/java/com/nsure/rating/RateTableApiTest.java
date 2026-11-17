@@ -1,6 +1,6 @@
 package com.nsure.rating;
 
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -24,7 +24,7 @@ class RateTableApiTest {
 
     @Test
     void seededTablesFollowTheDemoServerFormat() throws Exception {
-        mockMvc.perform(get("/admin/rate-tables").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/admin/rate-tables").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(8)) // 4 demo tables + the 4 Tap Cover plans (spec 02 §6.4)
                 .andExpect(jsonPath("$[0].ref").value("RT-00001"))
@@ -40,7 +40,7 @@ class RateTableApiTest {
     @Test
     void gridIsTheDemoCurveScaledToTheTierCover() throws Exception {
         // Silver is BWP 50,000: five times the demo's per-BWP-10,000 Boikanyo Standard rates.
-        mockMvc.perform(get("/admin/rate-tables/RT-00002").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/admin/rate-tables/RT-00002").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.plan").value("Silver"))
                 .andExpect(jsonPath("$.rules.length()").value(6))
@@ -57,7 +57,7 @@ class RateTableApiTest {
     void aChangeIsADraftUntilASecondPersonApprovesItWithNotice() throws Exception {
         // Spec 11 E-13: saving never changes the live price; it writes a DRAFT (Product Configurator: rate.write).
         mockMvc.perform(put("/admin/rate-tables/RT-00004/grid")
-                        .with(httpBasic("configurator", "password"))
+                        .with(signedIn("configurator", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"baseVersion":1,"rows":[
@@ -76,18 +76,18 @@ class RateTableApiTest {
                         .value(Matchers.containsString("Added Main Insured 18–39: cover P90,000, P60")))
                 .andExpect(jsonPath("$.versions[1].status").value("PUBLISHED"));
 
-        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/2/submit").with(httpBasic("configurator", "password")))
+        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/2/submit").with(signedIn("configurator", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.versions[0].status").value("PENDING_APPROVAL"));
         // E-11: only the Actuary holds rate.publish.
-        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/2/approve").with(httpBasic("configurator", "password")))
+        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/2/approve").with(signedIn("configurator", "password")))
                 .andExpect(status().isForbidden());
         // E-26 / TC-29: a re-rate needs 90 days' written notice, or an override reason.
-        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/2/approve").with(httpBasic("actuary", "password")))
+        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/2/approve").with(signedIn("actuary", "password")))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value(Matchers.startsWith("A re-rate needs 90 days' written notice")));
         mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/2/approve")
-                        .with(httpBasic("actuary", "password"))
+                        .with(signedIn("actuary", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"noticeIssuedAt\":\"" + java.time.LocalDate.now().minusDays(91) + "\"}"))
                 .andExpect(status().isOk())
@@ -97,14 +97,14 @@ class RateTableApiTest {
                 .andExpect(jsonPath("$.versions[1].validTo").value(Matchers.not("")));
 
         // The superseded version is still readable, unchanged.
-        mockMvc.perform(get("/admin/rate-tables/RT-00004?version=1").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/admin/rate-tables/RT-00004?version=1").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.version.current").value(false))
                 .andExpect(jsonPath("$.version.bands.length()").value(10));
 
         // Saving from the old version is refused rather than silently overwriting v2.
         mockMvc.perform(put("/admin/rate-tables/RT-00004/grid")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"baseVersion":1,"rows":[
@@ -115,7 +115,7 @@ class RateTableApiTest {
 
         // Four-eyes (E-24): the actuary authors v3 and cannot also publish it.
         mockMvc.perform(put("/admin/rate-tables/RT-00004/grid")
-                        .with(httpBasic("actuary", "password"))
+                        .with(signedIn("actuary", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"baseVersion":2,"rows":[
@@ -124,19 +124,19 @@ class RateTableApiTest {
                                 ]}
                                 """))
                 .andExpect(status().isOk());
-        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/3/submit").with(httpBasic("actuary", "password")))
+        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/3/submit").with(signedIn("actuary", "password")))
                 .andExpect(status().isOk());
         mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/3/approve")
-                        .with(httpBasic("actuary", "password"))
+                        .with(signedIn("actuary", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"noticeIssuedAt\":\"" + java.time.LocalDate.now().minusDays(91) + "\"}"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.message").value("You authored this rate version, so you cannot also publish it. "
                         + "A second approver must action it."));
-        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/3/reject").with(httpBasic("actuary", "password")))
+        mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/3/reject").with(signedIn("actuary", "password")))
                 .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(post("/admin/rate-tables/RT-00004/versions/3/reject")
-                        .with(httpBasic("actuary", "password"))
+                        .with(signedIn("actuary", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"Withdrawn\"}"))
                 .andExpect(status().isOk())
@@ -147,7 +147,7 @@ class RateTableApiTest {
     @Test
     void invalidGridsAreRefusedWithEveryReason() throws Exception {
         mockMvc.perform(put("/admin/rate-tables/RT-00004/grid")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"rows":[
@@ -166,7 +166,7 @@ class RateTableApiTest {
 
     @Test
     void ratedPlansPriceTheMainInsuredByAgeAndStampTheVersion() throws Exception {
-        mockMvc.perform(get("/portfolio/products").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/products").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.name == 'Family Funeral')].productType").value("Funeral"))
                 .andExpect(jsonPath("$[?(@.name == 'Family Funeral')].tiers[?(@.name == 'Bronze')].priceIsFrom").value(true))
@@ -176,7 +176,7 @@ class RateTableApiTest {
 
         // Naledi Kgosi (born 1985) is in the 40-44 or 45-49 band; flat Bronze would have been BWP 105. Bronze is 2.5x the per-BWP-10,000 rates, kept to the thebe.
         mockMvc.perform(post("/portfolio/applications")
-                        .with(httpBasic("admin", "password"))
+                        .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"declarationAccepted":true,"disclosures":{"TOBACCO":"NO","TREATMENT":"NO"},"name":"Naledi Kgosi","product":"Family Funeral","tier":"Bronze","premium":1}
@@ -189,7 +189,7 @@ class RateTableApiTest {
     @Test
     void readingNeedsTheRateCapability() throws Exception {
         mockMvc.perform(get("/admin/rate-tables")).andExpect(status().isUnauthorized());
-        mockMvc.perform(get("/admin/rate-tables").with(httpBasic("customer", "password")))
+        mockMvc.perform(get("/admin/rate-tables").with(signedIn("customer", "password")))
                 .andExpect(status().isForbidden());
     }
 }

@@ -1,7 +1,7 @@
 package com.nsure.portfolio;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -59,11 +59,11 @@ class QuoteApiTest {
         String ref = JsonPath.read(quote, "$.ref");
 
         // NS-SH03-005: priced again from the stored inputs under the stored version, the amount is the same.
-        mockMvc.perform(get("/portfolio/quotes/" + ref + "/replay").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/quotes/" + ref + "/replay").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.reproduced").value(true))
                 .andExpect(jsonPath("$.replayed").value(34.13));
         // A quote is not cover, and a customer cannot make staff quotes.
-        mockMvc.perform(get("/portfolio/policies").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/policies").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.name == 'Kagiso Quote')]").isEmpty());
         mockMvc.perform(json(post("/portfolio/quotes"), "customer", "{\"customerRef\":\"" + customer
                         + "\",\"product\":\"Family Funeral\",\"tier\":\"Bronze\"}"))
@@ -80,7 +80,7 @@ class QuoteApiTest {
                 .andReturn().getResponse().getContentAsString();
         String app = JsonPath.read(application, "$.id");
         String ref = JsonPath.read(application, "$.quoteRef");
-        mockMvc.perform(get("/portfolio/quotes/" + ref).with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/quotes/" + ref).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[0].status").value("ACCEPTED"))
                 .andExpect(jsonPath("$[0].applicationRef").value(app));
 
@@ -97,7 +97,7 @@ class QuoteApiTest {
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("expired")));
 
-        String revised = mockMvc.perform(post("/portfolio/quotes/" + ref + "/requote").with(httpBasic("admin", "password")))
+        String revised = mockMvc.perform(post("/portfolio/quotes/" + ref + "/requote").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.version").value(2))
                 .andExpect(jsonPath("$.status").value("QUOTED"))
@@ -115,7 +115,7 @@ class QuoteApiTest {
                         "{\"version\":2,\"note\":\"Customer accepted the new premium by phone\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACCEPTED"));
-        mockMvc.perform(get("/portfolio/applications").with(httpBasic("admin", "password")))
+        mockMvc.perform(get("/portfolio/applications").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + app + "')].quoteVersion").value(2))
                 .andExpect(jsonPath("$[?(@.id == '" + app + "')].premium").value(revisedPremium));
 
@@ -126,7 +126,7 @@ class QuoteApiTest {
                 .andExpect(jsonPath("$.quoteRef").value(ref))
                 .andExpect(jsonPath("$.quoteVersion").value(2))
                 .andExpect(jsonPath("$.premium").value(revisedPremium));
-        String versions = mockMvc.perform(get("/portfolio/quotes/" + ref).with(httpBasic("admin", "password")))
+        String versions = mockMvc.perform(get("/portfolio/quotes/" + ref).with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString();
         assertThat((List<Integer>) JsonPath.read(versions, "$[*].version")).containsExactly(2, 1);
         assertThat((List<Boolean>) JsonPath.read(versions, "$[*].expired")).containsExactly(false, true);
@@ -144,7 +144,7 @@ class QuoteApiTest {
                 .andReturn().getResponse().getContentAsString();
         String policy = JsonPath.read(shop, "$.requests[0].id");
         String quotes = mockMvc.perform(get("/portfolio/quotes").param("customerRef", customer)
-                        .with(httpBasic("admin", "password")))
+                        .with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString();
         assertThat((List<String>) JsonPath.read(quotes, "$[*].status")).containsExactly("ACCEPTED");
         assertThat((List<String>) JsonPath.read(quotes, "$[*].policyRef")).containsExactly(policy);
@@ -159,7 +159,7 @@ class QuoteApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String ref = JsonPath.read(body, "$.id");
-        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(httpBasic("admin", "password")))
+        mockMvc.perform(post("/portfolio/customers/" + ref + "/kyc").with(signedIn("admin", "password")))
                 .andExpect(status().isOk());
         return ref;
     }
@@ -170,6 +170,6 @@ class QuoteApiTest {
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
         String password = "admin".equals(user) || "customer".equals(user) ? "password" : "password1";
-        return request.with(httpBasic(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(signedIn(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

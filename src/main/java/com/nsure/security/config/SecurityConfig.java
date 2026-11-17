@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.session.BearerTokenFilter;
+import com.nsure.security.session.SecondFactorRequiredFilter;
 import com.nsure.security.session.SessionTokenService;
 import org.springframework.http.MediaType;
 import org.springframework.security.authorization.AuthorizationDecision;
@@ -59,8 +60,10 @@ public class SecurityConfig {
                     // Fail closed: an endpoint without a rule is reachable by nobody.
                     auth.anyRequest().denyAll();
                 })
-                // The browser holds a session token (NS-SH11-001); HTTP Basic remains for API clients.
+                // The browser holds a session token (NS-SH11-001). HTTP Basic opens a session; for staff and partners
+                // it is good for nothing else until the one-time code is verified (SecondFactorRequiredFilter).
                 .addFilterBefore(new BearerTokenFilter(sessions, objectMapper), BasicAuthenticationFilter.class)
+                .addFilterAfter(new SecondFactorRequiredFilter(objectMapper), BasicAuthenticationFilter.class)
                 .httpBasic(Customizer.withDefaults())
                 .exceptionHandling(errors -> errors
                         .authenticationEntryPoint((request, response, authException) ->
