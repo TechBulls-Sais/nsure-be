@@ -57,6 +57,8 @@ public class CreditService {
     static final String SETTLED = "SETTLED";
     static final String CLAIMED = "CLAIMED";
     static final String CANCELLED = "CANCELLED";
+    /** The loan term ran out with the cover still in force: the credit cover ended at term (IL05). */
+    static final String EXPIRED = "EXPIRED";
     static final String APPLIED = "APPLIED";
     static final String CONFLICT = "CONFLICT";
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
@@ -453,7 +455,15 @@ public class CreditService {
         return assess(l, policyOf(l), productRule(), eventDate == null ? LocalDate.now() : eventDate);
     }
 
-    /** {eventDate, claimRef, payeeVerified}: fixes who the claim pays. Refused without a current balance. */
+    /** Benefits a credit claim can be for; the loan must carry the one claimed (NS-IL05-003). */
+    static final List<String> CLAIM_CAUSES = List.of("DEATH", "PERMANENT_DISABILITY", "TEMPORARY_DISABILITY",
+            "CRITICAL_ILLNESS");
+
+    /**
+     * {eventDate, claimRef, payeeVerified, cause?, accidental?}: fixes who the claim pays and closes the credit policy.
+     * Refused without a current balance, for a benefit the loan does not carry, and within the product's waiting
+     * period unless the event was accidental (the product rule: only accidental events are covered while waiting).
+     */
     @Transactional(noRollbackFor = CreditManualResolutionException.class)
     public CreditViews.LoanDetail recordClaim(String ref, JsonNode body) {
         AppUser user = user("MANAGE_CREDIT");
@@ -472,6 +482,17 @@ public class CreditService {
             throw new CreditManualResolutionException(ref + " cannot be settled automatically: " + why
                     + " It has been routed for manual resolution.");
         }
+        String cause = optional(body, "cause") == null ? "DEATH" : optional(body, "cause").toUpperCase(Locale.ROOT);
+        if (!CLAIM_CAUSES.contains(cause) || !carries(l, cause)) {
+            throw new IllegalArgumentException(ref + " does not cover " + causeLabel(cause) + ". It covers "
+                    + CLAIM_CAUSES.stream().filter(c -> carries(l, c)).map(CreditService::causeLabel)
+                            .collect(java.util.stream.Collectors.joining(", ")) + ".");
+        }
+        if (a.inWaitingPeriod() && !body.path("accidental").asBoolean(false)) {
+            throw new IllegalArgumentException("The event on " + eventDate + " is within the " + l.waitingMonths
+                    + "-month waiting period, when only accidental events are covered. Confirm the event was"
+                    + " accidental, or the claim is not covered.");
+        }
         if (!body.path("payeeVerified").asBoolean(false)) {
             throw new IllegalArgumentException("Confirm the lender's payment details have been verified.");
         }
@@ -482,13 +503,37 @@ public class CreditService {
         l.status = CLAIMED;
         Map<String, Object> data = base(l);
         data.put("reason", "CLAIM");
+        data.put("cause", cause);
         data.put("eventDate", eventDate.toString());
         data.put("lenderAmount", a.lenderAmount());
         data.put("estateAmount", a.estateAmount());
         outbox.publish(Events.CREDIT_COVER_TERMINATED, l.ref, data, user.getUsername());
+        // The claim closes the credit policy too, so no further premium is due on it (test C-28). A death claim ends
+        // it for DEATH; any other benefit claim ends it for OTHER, the benefit named in the note.
+        InsurancePolicy policy = policyOf(l);
+        if (policy != null && Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.ACTIVE_NO_COVER,
+                PolicyWorkflow.REINSTATEMENT_PENDING).contains(policy.getStatus())) {
+            workflow.terminate(policy.getRef(), "DEATH".equals(cause) ? "DEATH" : "OTHER", "Credit claim"
+                    + (l.claimRef == null ? "" : " " + l.claimRef) + " on loan " + l.lenderLoanId + " for "
+                    + causeLabel(cause) + " on " + eventDate, eventDate, user.getUsername());
+        }
         audit.record(user.getUsername(), "Credit claim allocated", "Loan", ref, "Lender " + Money.text(a.lenderAmount())
                 + ", estate " + Money.text(a.estateAmount()));
         return detail(l);
+    }
+
+    private static boolean carries(Loan l, String cause) {
+        return switch (cause) {
+            case "DEATH" -> true;
+            case "PERMANENT_DISABILITY" -> l.permanentDisability;
+            case "TEMPORARY_DISABILITY" -> l.temporaryDisability;
+            case "CRITICAL_ILLNESS" -> l.criticalIllness;
+            default -> false;
+        };
+    }
+
+    private static String causeLabel(String cause) {
+        return cause.toLowerCase(Locale.ROOT).replace('_', ' ');
     }
 
     private CreditViews.ClaimAssessment assess(Loan l, InsurancePolicy policy, Rule rule, LocalDate eventDate) {
@@ -531,6 +576,68 @@ public class CreditService {
                 ? sumAssured.subtract(lender) : Money.of(BigDecimal.ZERO);
         return new CreditViews.ClaimAssessment(eventDate, covered, waiting, sumAssured, balance,
                 at == null ? null : at.effectiveDate, manual, lender, estate, notes);
+    }
+
+    // ── cover ending without a claim or settlement (IL05 events) ──────────────────────────────────
+
+    /**
+     * The credit policy ended for another reason (cancellation, lapse or another termination): the loan's cover ends
+     * with it and CreditCoverTerminated is published once. A loan already closed by its claim or settlement, which
+     * published its own event, is left alone, so a redelivered event changes nothing.
+     */
+    @Transactional
+    public void coverEndedWithPolicy(String policyRef, String reason, String endedOn, String correlationId) {
+        Loan l = loanForPolicy(policyRef);
+        if (l == null || !OPEN.equals(l.status)) {
+            return;
+        }
+        InsurancePolicy policy = policyOf(l);
+        if (policy == null || !Set.of(PolicyWorkflow.CANCELLED, PolicyWorkflow.EXPIRED, PolicyWorkflow.LAPSED,
+                PolicyWorkflow.TERMINATED).contains(policy.getStatus())) {
+            return;
+        }
+        l.status = CANCELLED;
+        Map<String, Object> data = base(l);
+        data.put("reason", reason == null ? "OTHER" : reason);
+        data.put("endedOn", endedOn);
+        outbox.publish(Events.CREDIT_COVER_TERMINATED, l.ref, data, WorkflowHistory.SYSTEM, correlationId);
+        audit.record(WorkflowHistory.SYSTEM, "Credit cover ended with its policy", "Loan", l.ref,
+                "Policy " + policyRef + " " + policy.getStatus() + " (" + data.get("reason") + ")");
+    }
+
+    /**
+     * Daily: a loan whose term has run out with its cover still in force ends at term. Its policy is terminated for
+     * EXPIRY from the day after the last day of cover, and CreditCoverTerminated is published (reason TERM_EXPIRY).
+     */
+    @Transactional
+    public List<String> endExpiredTerms() {
+        LocalDate today = LocalDate.now();
+        List<String> ended = new ArrayList<>();
+        for (Loan l : em.createQuery("select l from Loan l where l.status = :open order by l.id", Loan.class)
+                .setParameter("open", OPEN).getResultList()) {
+            InsurancePolicy policy = policyOf(l);
+            LocalDate start = coverStart(l, policy);
+            if (start == null || !Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.ACTIVE_NO_COVER,
+                    PolicyWorkflow.REINSTATEMENT_PENDING).contains(policy.getStatus())) {
+                continue;
+            }
+            // Cover runs through the last day of the term (as the claim assessment reads it).
+            LocalDate lastDay = start.plusMonths(l.termMonths);
+            if (!lastDay.isBefore(today)) {
+                continue;
+            }
+            l.status = EXPIRED;
+            workflow.terminate(policy.getRef(), "EXPIRY", "Loan " + l.lenderLoanId + " term of " + l.termMonths
+                    + " months ended on " + lastDay, lastDay.plusDays(1), WorkflowHistory.SYSTEM);
+            Map<String, Object> data = base(l);
+            data.put("reason", "TERM_EXPIRY");
+            data.put("endedOn", lastDay.plusDays(1).toString());
+            outbox.publish(Events.CREDIT_COVER_TERMINATED, l.ref, data, WorkflowHistory.SYSTEM);
+            audit.record(WorkflowHistory.SYSTEM, "Credit cover ended at loan term", "Loan", l.ref,
+                    "Term of " + l.termMonths + " months ended on " + lastDay);
+            ended.add(l.ref);
+        }
+        return ended;
     }
 
     // ── early settlement and refunds (NS-IL05-006) ────────────────────────────────────────────────
@@ -870,10 +977,22 @@ public class CreditService {
         return user;
     }
 
+    /** Plain-language names for request fields, so a refusal never shows an API field name (test C-42). */
+    private static final Map<String, String> FIELD_LABELS = Map.ofEntries(Map.entry("balance", "the balance"),
+            Map.entry("batchReference", "the file reference"), Map.entry("customerRef", "the borrower"),
+            Map.entry("disbursementDate", "the disbursement date"), Map.entry("effectiveDate", "the date of the balance"),
+            Map.entry("eventDate", "the date of the event"), Map.entry("lenderLoanId", "the lender's loan id"),
+            Map.entry("lenderRef", "the lender"), Map.entry("name", "a name"),
+            Map.entry("newLenderLoanId", "the new loan id at the lender"), Map.entry("note", "a note"),
+            Map.entry("paymentReference", "the payment reference"), Map.entry("principal", "the principal"),
+            Map.entry("reference", "the lender's reference"), Map.entry("settlementDate", "the settlement date"),
+            Map.entry("settlementReference", "the settlement reference"),
+            Map.entry("sourceReference", "the lender's reference"), Map.entry("termMonths", "the term in months"));
+
     private static String required(JsonNode body, String field, int max) {
         String value = optional(body, field);
         if (value == null) {
-            throw new IllegalArgumentException(field + " is required.");
+            throw new IllegalArgumentException("Enter " + FIELD_LABELS.getOrDefault(field, field) + ".");
         }
         return clip(value, max);
     }

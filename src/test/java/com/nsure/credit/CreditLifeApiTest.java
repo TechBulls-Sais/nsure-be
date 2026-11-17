@@ -30,6 +30,12 @@ class CreditLifeApiTest {
     @Autowired
     private JdbcTemplate jdbc;
 
+    @Autowired
+    private com.nsure.integration.OutboxDispatcher dispatcher;
+
+    @Autowired
+    private CreditService credit;
+
     @Test
     void coverNeedsBothTheDisbursementAndTheFirstPremium() throws Exception {
         String borrower = customer("Kefilwe Borrower", 40);
@@ -147,13 +153,36 @@ class CreditLifeApiTest {
         mockMvc.perform(json(post("/credit/loans/" + ref + "/balances"), "credit", "{\"sourceReference\":\"STMT-CLAIM\","
                         + "\"effectiveDate\":\"" + LocalDate.now().minusDays(2) + "\",\"balance\":90000}"))
                 .andExpect(status().isOk());
-        mockMvc.perform(json(post("/credit/loans/" + ref + "/claim"), "credit", claim.replace("true", "false")))
-                .andExpect(status().isUnprocessableEntity());
+        // Test C-28: cover started today, so the event is inside the product's waiting period, when only accidental
+        // events are covered. The claim is refused unless the event is confirmed accidental.
         mockMvc.perform(json(post("/credit/loans/" + ref + "/claim"), "credit", claim))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("waiting period")));
+        String accidental = claim.replace("}", ",\"accidental\":true}");
+        mockMvc.perform(json(post("/credit/loans/" + ref + "/claim"), "credit",
+                        accidental.replace("\"payeeVerified\":true", "\"payeeVerified\":false")))
+                .andExpect(status().isUnprocessableEntity());
+        // Only a benefit the loan carries can be claimed.
+        mockMvc.perform(json(post("/credit/loans/" + ref + "/claim"), "credit",
+                        accidental.replace("}", ",\"cause\":\"CRITICAL_ILLNESS\"}")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("does not cover critical illness")));
+        mockMvc.perform(json(post("/credit/loans/" + ref + "/claim"), "credit", accidental))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.loan.status").value("CLAIMED"))
+                .andExpect(jsonPath("$.loan.policyStatus").value("Terminated"))
                 .andExpect(jsonPath("$.loan.lenderAmount").value(90000.0))
                 .andExpect(jsonPath("$.loan.estateAmount").value(30000.0));
+        // The claim closes the credit policy, for death, so no further premium is due on it.
+        mockMvc.perform(get("/servicing/policies/" + active[1]).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.policy.contractStatus").value("Terminated"))
+                .andExpect(jsonPath("$.policy.terminationReason").value("DEATH"))
+                .andExpect(jsonPath("$.policy.nextPremiumDue").doesNotExist());
+        assertThat(events("CreditCoverTerminated", ref)).isEqualTo(1);
+        assertThat(events("PolicyTerminated", active[1])).isEqualTo(1);
+        // The PolicyTerminated it raised finds the loan already closed: no second CreditCoverTerminated.
+        dispatcher.dispatch();
+        assertThat(events("CreditCoverTerminated", ref)).isEqualTo(1);
     }
 
     @Test
@@ -204,6 +233,39 @@ class CreditLifeApiTest {
                 .andExpect(jsonPath("$.status").value("QUOTED"));
         mockMvc.perform(get("/credit/loans/" + old[0]).with(signedIn("credit", "password")))
                 .andExpect(jsonPath("$.loan.status").value("SETTLED"));
+    }
+
+    @Test
+    void creditCoverEndsWhenThePolicyIsCancelledOrTheLoanTermRunsOut() throws Exception {
+        // IL05 events: a cancelled credit policy ends the loan's cover, published once however often it is delivered.
+        String[] cancelled = activeLoan("Boitumelo Cancel", "LSH-6001", 50000, 24, "REGULAR", LocalDate.now());
+        mockMvc.perform(json(post("/portfolio/policies/" + cancelled[1] + "/cancel"), "admin",
+                        "{\"reason\":\"Borrower's written request\"}"))
+                .andExpect(status().isOk());
+        dispatcher.dispatch();
+        dispatcher.dispatch();
+        assertThat(events("CreditCoverTerminated", cancelled[0])).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select payload from int_outbox_event where event_type = 'CreditCoverTerminated'"
+                + " and aggregate_ref = ?", String.class, cancelled[0])).contains("CANCELLATION");
+        mockMvc.perform(get("/credit/loans/" + cancelled[0]).with(signedIn("credit", "password")))
+                .andExpect(jsonPath("$.loan.status").value("CANCELLED"));
+
+        // The loan term has run out with cover in force: the daily job ends the cover and the policy, for expiry.
+        String[] ended = activeLoan("Lesedi Term", "LSH-6002", 50000, 12, "REGULAR", LocalDate.now().minusMonths(13));
+        jdbc.update("update ins_policy set cover_start_date = ? where record_ref = ?",
+                java.sql.Date.valueOf(LocalDate.now().minusMonths(13)), ended[1]);
+        String[] running = activeLoan("Naledi Running", "LSH-6003", 50000, 12, "REGULAR", LocalDate.now());
+        assertThat(credit.endExpiredTerms()).contains(ended[0]).doesNotContain(running[0]);
+        assertThat(credit.endExpiredTerms()).doesNotContain(ended[0]);
+        mockMvc.perform(get("/credit/loans/" + ended[0]).with(signedIn("credit", "password")))
+                .andExpect(jsonPath("$.loan.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.loan.policyStatus").value("Terminated"));
+        mockMvc.perform(get("/servicing/policies/" + ended[1]).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.policy.terminationReason").value("EXPIRY"));
+        assertThat(events("CreditCoverTerminated", ended[0])).isEqualTo(1);
+        dispatcher.dispatch();
+        assertThat(events("CreditCoverTerminated", ended[0])).isEqualTo(1);
+        assertThat(events("CreditCoverTerminated", running[0])).isZero();
     }
 
     /** A disbursed loan whose first premium has been paid: {loanRef, policyRef}. */
