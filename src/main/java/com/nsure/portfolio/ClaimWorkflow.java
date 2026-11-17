@@ -807,6 +807,15 @@ public class ClaimWorkflow {
         if (start == null || start.isAfter(event)) {
             return false;
         }
+        String last = stateOn(policy, event);
+        return last == null || PolicyWorkflow.ACTIVE.equals(last);
+    }
+
+    /**
+     * The policy state in force on {@code event}: the last change effective on or before it, or null when no change
+     * is recorded (the policy has simply been in force since cover started).
+     */
+    private String stateOn(InsurancePolicy policy, LocalDate event) {
         // NS-DAT-002: the state in force on the event date is the last change *effective* on or before it, whenever
         // it was recorded. A cover end recorded late (a returned premium noticed weeks after grace ran out) still
         // applies from the day it took effect, and a reinstatement after the event does not reach back to it.
@@ -827,7 +836,34 @@ public class ClaimWorkflow {
                 last = to;
             }
         }
-        return last == null || PolicyWorkflow.ACTIVE.equals(last);
+        return last;
+    }
+
+    /**
+     * The cover reconstructed as at the claim's event date (NS-SH05-002, SH05 event-date cover view): the policy's
+     * state then, cover start and waiting period, the cover amount claimed, the premium position and the
+     * beneficiaries designated on that day. Null when the claim has no policy or no valid event date.
+     */
+    public PortfolioViews.EventCoverView eventCover(InsuranceClaim claim) {
+        if (trim(claim.getPolicyRef()).isEmpty()) {
+            return null;
+        }
+        LocalDate event;
+        try {
+            event = LocalDate.parse(trim(claim.getEventDate()));
+        } catch (DateTimeParseException e) {
+            return null;
+        }
+        InsurancePolicy policy = policies.policy(claim.getPolicyRef());
+        LocalDate start = policy.getCoverStartDate();
+        String state = start == null || start.isAfter(event) ? "Not yet in cover" : stateOn(policy, event);
+        int waiting = policies.terms(policy).getWaitingPeriodDays();
+        return new PortfolioViews.EventCoverView(event.toString(), state == null ? PolicyWorkflow.ACTIVE : state,
+                coverInForceOn(policy, event), start == null ? null : start.toString(), waiting,
+                start == null ? null : start.plusDays(waiting).toString(), claim.getAmount(),
+                policy.getNextPremiumDue() == null ? null : policy.getNextPremiumDue().toString(),
+                policy.getGracePeriodEnd() == null ? null : policy.getGracePeriodEnd().toString(),
+                policies.beneficiariesOn(policy, event).stream().map(PolicyBeneficiary::getFullName).toList());
     }
 
     /** Checks that decide whether there was valid cover for the event. A failure cannot be overridden. */

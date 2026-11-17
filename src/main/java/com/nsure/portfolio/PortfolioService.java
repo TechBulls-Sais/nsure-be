@@ -1173,7 +1173,13 @@ public class PortfolioService {
                 limits == null ? null : limits.policyLimit(), limits == null ? null : limits.policyUsed(),
                 claimWorkflow.decisions(ref).stream().map(d -> new PortfolioViews.ClaimDecisionView(d.getSequenceNo(),
                         d.getDecision(), d.getReason(), d.getAmount(), d.getDecidedBy(), d.getDecidedAt(),
-                        d.getSupersededBy())).toList());
+                        d.getSupersededBy())).toList(),
+                claimWorkflow.eventCover(claim),
+                em.createQuery("select r.ref, r.treaty.ref, r.recoveryAmount, r.status, r.receivedAmount from Recovery r"
+                                + " where r.claimRef = :ref order by r.id", Object[].class)
+                        .setParameter("ref", ref).getResultList().stream()
+                        .map(r -> new PortfolioViews.ClaimRecoveryView((String) r[0], (String) r[1], (BigDecimal) r[2],
+                                (String) r[3], (BigDecimal) r[4])).toList());
     }
 
     @Transactional(readOnly = true)

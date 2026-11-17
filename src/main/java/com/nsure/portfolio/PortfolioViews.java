@@ -223,10 +223,28 @@ public final class PortfolioViews {
             boolean possibleDuplicate) {
     }
 
-    /** A claim's reserve history, decisions and the benefit limits it draws on (NS-SH05-003/004/005). */
+    /**
+     * A claim's reserve history, decisions and the benefit limits it draws on (NS-SH05-003/004/005), the cover as at
+     * its event date and the reinsurance recoveries on it (SH05 workspace).
+     */
     public record ClaimFinancialsView(String claimRef, BigDecimal reserve, List<ReserveMovementView> movements,
             BigDecimal lifeLimit, BigDecimal lifeUsed, BigDecimal policyLimit, BigDecimal policyUsed,
-            List<ClaimDecisionView> decisions) {
+            List<ClaimDecisionView> decisions, EventCoverView eventCover, List<ClaimRecoveryView> recoveries) {
+    }
+
+    /**
+     * Cover reconstructed as at the event date (NS-SH05-002): the policy's state then and whether cover was in force,
+     * the waiting period, the cover claimed, the premium position (paid to and grace end, as recorded today) and the
+     * beneficiaries designated on that day.
+     */
+    public record EventCoverView(String eventDate, String policyStatusOnEventDate, boolean coverInForce,
+            String coverStartDate, int waitingPeriodDays, String waitingPeriodEnds, BigDecimal coverAmount,
+            String paidTo, String graceEnds, List<String> beneficiariesOnEventDate) {
+    }
+
+    /** A reinsurance recovery recognised on the claim (SH07), shown with the claim; it never holds up the payout. */
+    public record ClaimRecoveryView(String ref, String treatyRef, BigDecimal amount, String status,
+            BigDecimal receivedAmount) {
     }
 
     /** One decision on a claim; {@code supersededBy} names the later decision that set it aside (§09 reopen). */

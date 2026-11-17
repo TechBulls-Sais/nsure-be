@@ -510,7 +510,15 @@ class ClaimWorkflowApiTest {
                 .andExpect(jsonPath("$.lifeLimit").value(50000.0))
                 .andExpect(jsonPath("$.lifeUsed").value(45000.0))
                 .andExpect(jsonPath("$.policyUsed").value(45000.0))
-                .andExpect(jsonPath("$.movements.length()").value(2));
+                .andExpect(jsonPath("$.movements.length()").value(2))
+                // SH05 event-date cover view: the cover reconstructed as at the event.
+                .andExpect(jsonPath("$.eventCover.eventDate").value(LocalDate.now().minusDays(1).toString()))
+                .andExpect(jsonPath("$.eventCover.policyStatusOnEventDate").value("Active"))
+                .andExpect(jsonPath("$.eventCover.coverInForce").value(true))
+                .andExpect(jsonPath("$.eventCover.coverStartDate").value(LocalDate.now().minusDays(60).toString()))
+                .andExpect(jsonPath("$.eventCover.coverAmount").value(50000.0))
+                .andExpect(jsonPath("$.eventCover.beneficiariesOnEventDate[0]").value("Kabo Reserve"))
+                .andExpect(jsonPath("$.recoveries").isEmpty());
         mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Approved')].details").value(org.hamcrest.Matchers.hasItem(
                         org.hamcrest.Matchers.containsString("evidence outstanding: Death certificate"))));
