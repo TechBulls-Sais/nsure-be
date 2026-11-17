@@ -130,3 +130,11 @@ Partner portal logins come from migration 077: `agent` (intermediary INT-00001),
 Rules that drive these modules are data, editable in the workspace: underwriting rule sets and authority limits,
 product benefit and servicing rules, and the credit product rule. The seeded values are starting points for the
 insurer's approved figures.
+
+Lives and credit cover follow the policy through the event bus: `servicing.insured-lives` announces the lives captured
+at application (InsuredLifeAdded) on PolicyIssued and ceases the lives still covered (InsuredLifeCeased) on
+PolicyTerminated; `credit.cover-ended` ends a loan's cover (CreditCoverTerminated) when its credit policy is cancelled,
+lapses or is terminated. A credit claim terminates its policy, and a daily job (`nsure.credit.term-end-cron`, 01:45)
+ends credit cover whose loan term has run out. Product configurations go Draft → In review → Active (a second person
+activates); ProductVersionApproved, ProductActivated and ProductWithdrawn are published for product terms, product
+configurations and configuration releases.
