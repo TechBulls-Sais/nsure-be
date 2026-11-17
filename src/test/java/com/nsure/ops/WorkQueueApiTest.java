@@ -86,8 +86,13 @@ class WorkQueueApiTest {
         Number commandId = JsonPath.read(call(put("/roles/" + roleId), "admin", "{\"description\":\"Queue\"}")
                 .getContentAsString(), "$.commandId");
         String approval = "ACCESS_APPROVAL:" + commandId;
-        assertThat(JsonPath.<List<Object>>read(ok(get("/ops/queue"), "admin", null),
-                "$[?(@.key == '" + approval + "')].canAct")).containsExactly(false);
+        String adminQueue = ok(get("/ops/queue"), "admin", null);
+        assertThat(JsonPath.<List<Object>>read(adminQueue, "$[?(@.key == '" + approval + "')].canAct"))
+                .containsExactly(false);
+        assertThat(JsonPath.<List<Object>>read(adminQueue, "$[?(@.key == '" + approval + "')].approval"))
+                .containsExactly(true);
+        assertThat(JsonPath.<List<Object>>read(adminQueue, "$[?(@.key == '" + key + "')].approval"))
+                .containsExactly(false);
         assertThat(call(post("/ops/queue/claim").param("key", approval), "admin", null).getStatus()).isEqualTo(403);
         assertThat(call(post("/ops/queue/claim").param("key", approval), "secadmin", null).getStatus()).isEqualTo(200);
         ok(post("/audits/" + commandId + "/approve"), "secadmin", null);

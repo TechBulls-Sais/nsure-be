@@ -59,6 +59,13 @@ public class WorkQueueService {
     private static final List<String> PRIORITIES = List.of("HIGH", "NORMAL", "LOW");
 
     /**
+     * Work that is a decision on someone else's request (a second person approves): together they are the one
+     * approval screen across the modules (SH10 workspace).
+     */
+    private static final Set<String> APPROVALS = Set.of("ENDORSEMENT", "BENEFIT", "CARE_CASH", "SCHEME_EVENT",
+            "GROUP_QUOTE", "CLAIM_DECISION", "MANUAL_JOURNAL", "TREATY", "TEMPLATE", "ACCESS_APPROVAL");
+
+    /**
      * One kind of open work: the workflow definition it follows, the page that handles it, the query that finds it
      * (columns ref, subject, detail, opened, status, and optionally contract_ref, maker, item_priority, module_owner,
      * module_due), who may act on an item and what comes next.
@@ -367,6 +374,7 @@ public class WorkQueueService {
                 view.put("owner", owner);
                 view.put("assignedBy", source.ownedInModule() || assignment == null ? null : assignment[1]);
                 view.put("nextAction", source.nextAction().apply(r));
+                view.put("approval", APPROVALS.contains(source.workflow()));
                 view.put("steps", d.get("steps"));
                 items.add(new Item(key, source.workflow(), ref, source, source.actors().apply(r),
                         (String) r.get("maker"), view));
