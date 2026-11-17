@@ -172,6 +172,27 @@ public final class GroupViews {
             LocalDateTime receivedAt) {
     }
 
+    /** A claim on a member's group cover (GL claim register). */
+    public record ClaimView(
+            String ref,
+            String schemeRef,
+            Long memberId,
+            String memberKey,
+            String member,
+            String benefitType,
+            LocalDate eventDate,
+            BigDecimal claimedAmount,
+            BigDecimal approvedAmount,
+            String status,
+            LocalDate nextReviewDate,
+            String paymentReference,
+            String note,
+            String notifiedBy,
+            LocalDateTime notifiedAt,
+            String decidedBy,
+            LocalDateTime decidedAt) {
+    }
+
     /** The allocation just made (or the existing one for a repeated reference) and the invoice after it. */
     public record ReceiptAllocationView(ReceiptView receipt, InvoiceView invoice) {
     }

@@ -233,3 +233,6 @@ databaseChangeLog:
   - include:
       file: changes/079-demo-only-default-accounts.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/105-group-scheme-lifecycle.yaml
+      relativeToChangelogFile: true

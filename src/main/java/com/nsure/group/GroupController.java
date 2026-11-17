@@ -2,6 +2,7 @@ package com.nsure.group;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -18,11 +19,14 @@ public class GroupController {
     private final GroupSchemeService schemes;
     private final CensusService census;
     private final SchemeBillingService billing;
+    private final GroupClaimService claims;
 
-    public GroupController(GroupSchemeService schemes, CensusService census, SchemeBillingService billing) {
+    public GroupController(GroupSchemeService schemes, CensusService census, SchemeBillingService billing,
+            GroupClaimService claims) {
         this.schemes = schemes;
         this.census = census;
         this.billing = billing;
+        this.claims = claims;
     }
 
     @GetMapping("/schemes")
@@ -38,6 +42,12 @@ public class GroupController {
     @PostMapping("/schemes")
     public GroupViews.SchemeDetailView createScheme(@RequestBody JsonNode body) {
         return schemes.createScheme(body);
+    }
+
+    /** Refused once the scheme has any contractual or financial activity: such a scheme is closed, never deleted. */
+    @DeleteMapping("/schemes/{ref}")
+    public void deleteScheme(@PathVariable String ref) {
+        schemes.deleteScheme(ref);
     }
 
     @PostMapping("/schemes/{ref}/categories")
@@ -74,6 +84,23 @@ public class GroupController {
     @PostMapping("/schemes/{ref}/invoices")
     public GroupViews.InvoiceView invoice(@PathVariable String ref, @RequestBody JsonNode body) {
         return billing.invoice(ref, body);
+    }
+
+    @GetMapping("/schemes/{ref}/claims")
+    public List<GroupViews.ClaimView> claims(@PathVariable String ref) {
+        return claims.claims(ref);
+    }
+
+    /** {memberKey, benefitType, eventDate, amount, note?} */
+    @PostMapping("/schemes/{ref}/claims")
+    public GroupViews.ClaimView notifyClaim(@PathVariable String ref, @RequestBody JsonNode body) {
+        return claims.notify(ref, body);
+    }
+
+    /** {action APPROVE|DECLINE|PAY|REVIEW|CEASE, amount?, note, nextReviewDate?, paymentReference?} */
+    @PostMapping("/claims/{ref}/decision")
+    public GroupViews.ClaimView decideClaim(@PathVariable String ref, @RequestBody JsonNode body) {
+        return claims.decide(ref, body);
     }
 
     @PostMapping("/invoices/{ref}/receipts")

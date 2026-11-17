@@ -52,6 +52,23 @@ public class GroupRecords {
                 .orElseThrow(() -> new NotFoundException("Scheme " + ref + " not found"));
     }
 
+    /** Refuses a membership change unless the scheme is active (NS-GL01-006): suspended and closed schemes take none. */
+    static void requireActive(GroupScheme scheme, String what) {
+        if (!"ACTIVE".equals(scheme.getStatus())) {
+            throw new IllegalArgumentException("Scheme " + scheme.getRef() + " is "
+                    + scheme.getStatus().toLowerCase(java.util.Locale.ROOT) + "; " + what + " is not accepted until it"
+                    + " is active again.");
+        }
+    }
+
+    /** Refuses a change of terms on a closed scheme; its terms stay as they were for the cover history. */
+    static void requireOpen(GroupScheme scheme) {
+        if ("CLOSED".equals(scheme.getStatus())) {
+            throw new IllegalArgumentException("Scheme " + scheme.getRef() + " is closed; its terms can no longer"
+                    + " change.");
+        }
+    }
+
     List<BenefitCategory> categories(GroupScheme scheme) {
         return em.createQuery("select c from BenefitCategory c where c.scheme = :scheme order by c.code",
                         BenefitCategory.class)

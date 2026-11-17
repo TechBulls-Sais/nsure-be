@@ -223,6 +223,10 @@ public final class ApiAccessRules {
             rule(POST, "/group/members/*/underwriting", anyOf("UNDERWRITE_MEMBER")),
             rule(POST, "/group/schemes/*/invoices", anyOf("BILL_SCHEME")),
             rule(POST, "/group/invoices/*/receipts", anyOf("BILL_SCHEME")),
+            rule(DELETE, "/group/schemes/*", anyOf("MANAGE_SCHEME")),
+            rule(GET, "/group/schemes/*/claims", anyOf("READ_SCHEME")),
+            rule(POST, "/group/schemes/*/claims", anyOf("CREATE_CLAIM")),
+            rule(POST, "/group/claims/*/decision", anyOf("APPROVE_CLAIM", "ASSESS_CLAIM", "SETTLE_CLAIM")),
 
             // ── insurance subledger SH08 (Finance Controller) ──────────────────────────────────────────
             rule(GET, "/finance/**", anyOf("READ_FINANCE")),

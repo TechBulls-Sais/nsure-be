@@ -61,8 +61,10 @@ public class GroupLifeController {
     }
 
     @GetMapping("/schemes/{ref}/impact")
-    public Map<String, Object> impact(@PathVariable String ref, @RequestParam String eventType) {
-        return groupLife.impact(ref, eventType);
+    public Map<String, Object> impact(@PathVariable String ref, @RequestParam String eventType,
+            @RequestParam(required = false) String effectiveDate,
+            @RequestParam(required = false) String targetSchemeRef) {
+        return groupLife.impact(ref, eventType, effectiveDate, targetSchemeRef);
     }
 
     @GetMapping("/events")
@@ -70,7 +72,7 @@ public class GroupLifeController {
         return groupLife.events(schemeRef);
     }
 
-    /** {eventType, effectiveDate?, rateChangePercent?, reason} */
+    /** {eventType RENEWAL|SUSPENSION|CLOSURE|TRANSFER|REACTIVATION, effectiveDate?, rateChangePercent?, targetSchemeRef?, reason} */
     @PostMapping("/schemes/{ref}/events")
     public Map<String, Object> requestEvent(@PathVariable String ref, @RequestBody JsonNode body) {
         return groupLife.requestEvent(ref, body);

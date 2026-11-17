@@ -60,6 +60,7 @@ public class CensusService {
         user.validateHasPermissionTo("PROCESS_CENSUS");
         GroupScheme scheme = records.lockedScheme(schemeRef);
         com.nsure.common.ExpectedVersion.check("Scheme " + schemeRef, scheme.getRowVersion());
+        GroupRecords.requireActive(scheme, "a census");
         String externalId = GroupRecords.requiredText(body, "externalBatchId", "External batch id", 80);
         String mode = GroupRecords.text(body, "mode");
         mode = mode == null ? CensusBatch.PARTIAL : mode.toUpperCase(Locale.ROOT);
@@ -135,6 +136,7 @@ public class CensusService {
         if (batch.isCommitted()) {
             return records.batchView(batch);
         }
+        GroupRecords.requireActive(scheme, "a census commit");
         boolean atomic = CensusBatch.ATOMIC.equals(batch.getMode());
         if (atomic && batch.getInvalidRows() > 0) {
             throw new IllegalArgumentException("ATOMIC batch " + batch.getRef() + " has " + batch.getInvalidRows()

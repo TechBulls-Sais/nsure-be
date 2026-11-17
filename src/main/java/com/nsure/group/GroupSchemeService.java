@@ -29,11 +29,14 @@ public class GroupSchemeService {
     private final EntityManager em;
     private final PlatformSecurityContext security;
     private final GroupRecords records;
+    private final com.nsure.audit.evidence.EvidenceChain audit;
 
-    public GroupSchemeService(EntityManager em, PlatformSecurityContext security, GroupRecords records) {
+    public GroupSchemeService(EntityManager em, PlatformSecurityContext security, GroupRecords records,
+            com.nsure.audit.evidence.EvidenceChain audit) {
         this.em = em;
         this.security = security;
         this.records = records;
+        this.audit = audit;
     }
 
     // ── schemes ────────────────────────────────────────────────────────────────────────────────────
@@ -116,6 +119,50 @@ public class GroupSchemeService {
         return detail(scheme);
     }
 
+    /**
+     * Deletes a scheme set up by mistake. Once it has any contractual or financial activity (activated from a quote,
+     * members, census, invoices, claims, loans or lifecycle requests) it is refused: such a scheme is closed instead,
+     * so its cover history is kept (NS-GL01-006).
+     */
+    @Transactional
+    public void deleteScheme(String ref) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("MANAGE_SCHEME");
+        GroupScheme scheme = records.lockedScheme(ref);
+        List<String> activity = new java.util.ArrayList<>();
+        if (scheme.getQuoteRef() != null) {
+            activity.add("its master policy was activated from " + scheme.getQuoteRef());
+        }
+        count(activity, "member episode(s)", "select count(m) from SchemeMember m where m.scheme = :s", scheme);
+        count(activity, "census batch(es)", "select count(b) from CensusBatch b where b.scheme = :s", scheme);
+        count(activity, "invoice(s)", "select count(i) from SchemeInvoice i where i.scheme = :s", scheme);
+        count(activity, "claim(s)", "select count(c) from GroupClaim c where c.scheme = :s", scheme);
+        countByRef(activity, "credit loan(s)", "select count(l) from GroupCreditLoan l where l.schemeRef = :ref", ref);
+        countByRef(activity, "lifecycle request(s)", "select count(e) from SchemeEvent e where e.schemeRef = :ref", ref);
+        if (!activity.isEmpty()) {
+            throw new ConflictException("Scheme " + ref + " cannot be deleted: " + String.join(", ", activity)
+                    + ". Close it instead; its cover history is kept.");
+        }
+        em.createQuery("delete from SchemeBenefit b where b.schemeRef = :ref").setParameter("ref", ref).executeUpdate();
+        em.createQuery("delete from BenefitCategory c where c.scheme = :s").setParameter("s", scheme).executeUpdate();
+        em.remove(scheme);
+        audit.record(user.getUsername(), "Scheme deleted", "Scheme", ref, "No contractual or financial activity");
+    }
+
+    private void count(List<String> activity, String label, String jpql, GroupScheme scheme) {
+        long n = em.createQuery(jpql, Long.class).setParameter("s", scheme).getSingleResult();
+        if (n > 0) {
+            activity.add(n + " " + label);
+        }
+    }
+
+    private void countByRef(List<String> activity, String label, String jpql, String ref) {
+        long n = em.createQuery(jpql, Long.class).setParameter("ref", ref).getSingleResult();
+        if (n > 0) {
+            activity.add(n + " " + label);
+        }
+    }
+
     private static String initials(String name) {
         String[] words = name.trim().split("[^\\p{L}\\p{N}]+");
         StringBuilder out = new StringBuilder();
@@ -180,6 +227,7 @@ public class GroupSchemeService {
         user.validateHasPermissionTo("MANAGE_SCHEME");
         GroupScheme scheme = records.lockedScheme(schemeRef);
         com.nsure.common.ExpectedVersion.check("Scheme " + schemeRef, scheme.getRowVersion());
+        GroupRecords.requireOpen(scheme);
         String code = GroupRecords.requiredText(body, "code", "Category code", 20).toUpperCase(Locale.ROOT);
         if (!CODE.matcher(code).matches()) {
             throw new IllegalArgumentException("Category code may use only letters, digits, - and _");
@@ -200,6 +248,7 @@ public class GroupSchemeService {
         user.validateHasPermissionTo("MANAGE_SCHEME");
         GroupScheme scheme = records.lockedScheme(schemeRef);
         com.nsure.common.ExpectedVersion.check("Scheme " + schemeRef, scheme.getRowVersion());
+        GroupRecords.requireOpen(scheme);
         BenefitCategory category = findCategory(scheme, code.toUpperCase(Locale.ROOT));
         if (category == null) {
             throw new NotFoundException("Category " + code + " not found on scheme " + schemeRef);
@@ -278,7 +327,7 @@ public class GroupSchemeService {
         if (member == null) {
             throw new NotFoundException("Member " + memberId + " not found");
         }
-        records.lockedScheme(member.getScheme().getRef());
+        GroupRecords.requireActive(records.lockedScheme(member.getScheme().getRef()), "an underwriting decision");
         em.refresh(member);
         com.nsure.common.ExpectedVersion.check("Member " + member.getMemberKey(), member.getRowVersion());
         if (!SchemeMember.UNDERWRITING_PENDING.equals(member.getStatus())) {

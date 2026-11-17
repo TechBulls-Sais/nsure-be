@@ -99,7 +99,9 @@ public class SchemeBillingService {
             // The exit date is the member's last day of cover.
             LocalDate to = member.getExitDate() != null && member.getExitDate().isBefore(end)
                     ? member.getExitDate() : end;
-            int days = (int) ChronoUnit.DAYS.between(from, to) + 1;
+            // Days the scheme was suspended are neither covered nor billed (NS-GL01-006).
+            int days = (int) ChronoUnit.DAYS.between(from, to) + 1 - (to.isBefore(from) ? 0
+                    : member.suspendedDays(from, to));
             if (days <= 0) {
                 continue;
             }
