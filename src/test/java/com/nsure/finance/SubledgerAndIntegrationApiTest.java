@@ -158,6 +158,8 @@ class SubledgerAndIntegrationApiTest {
         String exceptions = mockMvc.perform(get("/finance/exceptions").with(signedIn("finance", "password")))
                 .andReturn().getResponse().getContentAsString();
         Integer id = ((List<Integer>) JsonPath.read(exceptions, "$[?(@.sourceRef == '" + policy[0] + "')].id")).get(0);
+        // SH08: the exception is raised as an event once; a retry that still fails raises no second one.
+        assertThat(eventPayloads("FinancialExceptionRaised", policy[0])).hasSize(1);
         mockMvc.perform(json(put("/finance/posting-rules/PremiumReceived"), "finance",
                         "{\"debitAccount\":\"1000\",\"creditAccount\":\"4000\",\"domain\":\"INDIVIDUAL\","
                                 + "\"status\":\"ACTIVE\",\"description\":\"Individual premium collected\","
@@ -176,6 +178,9 @@ class SubledgerAndIntegrationApiTest {
                 .andReturn().getResponse().getContentAsString();
         mockMvc.perform(get("/finance/journals/" + JsonPath.read(resolved, "$.journalRef")).with(signedIn("finance", "password")))
                 .andExpect(jsonPath("$.ruleVersion").value(3));
+        assertThat(eventPayloads("FinancialExceptionRaised", policy[0])).hasSize(1);
+        assertThat(eventPayloads("JournalPosted", JsonPath.read(resolved, "$.journalRef"))).singleElement().asString()
+                .contains("\"sourceRef\":\"" + policy[0] + "\"").contains("\"ruleVersion\":3");
         mockMvc.perform(post("/finance/exceptions/" + id + "/retry").with(signedIn("finance", "password")))
                 .andExpect(status().isConflict());
     }
@@ -290,6 +295,9 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(jsonPath("$.lines[0].credit").value(new BigDecimal(policy[1]).doubleValue()));
         mockMvc.perform(json(post("/finance/journals/" + journal + "/reverse"), "finance", "{\"reason\":\"again\"}"))
                 .andExpect(status().isUnprocessableEntity());
+        // SH08 JournalPosted: the original posting and its reversal.
+        assertThat(eventPayloads("JournalPosted", journal)).hasSize(1);
+        assertThat(eventPayloads("JournalPosted", null)).anySatisfy(p -> assertThat(p).contains("\"reverses\":\"" + journal + "\""));
 
         String period = YearMonth.now().toString();
         mockMvc.perform(json(post("/finance/periods/" + period + "/soft-close"), "finance", "{}"))
@@ -321,6 +329,7 @@ class SubledgerAndIntegrationApiTest {
         mockMvc.perform(json(post("/finance/gl-batches/" + batchRef + "/acknowledge"), "finance",
                         "{\"status\":\"ACCEPTED\"}"))
                 .andExpect(status().isOk());
+        assertThat(eventPayloads("GlBatchAccepted", batchRef)).singleElement().asString().contains("SAP-9001");
         mockMvc.perform(json(post("/finance/gl-batches/" + batchRef + "/acknowledge"), "finance",
                         "{\"status\":\"REJECTED\",\"note\":\"late\"}"))
                 .andExpect(status().isConflict());
@@ -342,6 +351,8 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(jsonPath("$.status").value("CLOSED"))
                 .andReturn().getResponse().getContentAsString();
         assertThat((String) JsonPath.read(closed, "$.code")).isEqualTo(period);
+        assertThat(eventPayloads("PeriodClosed", "PERIOD-" + period)).singleElement().asString()
+                .contains("\"closedBy\":\"finance\"");
 
         // An event dated in the closed period posts to the next open one, keeping its event date.
         String[] later = pendingPolicy("Oratile Dube", "oratile");
@@ -460,6 +471,13 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(jsonPath("$.sections[?(@.error != null)]").isEmpty());
         mockMvc.perform(get("/reports/management").with(signedIn("service", "password")))
                 .andExpect(status().isForbidden());
+    }
+
+    /** Payloads of the events of a type, for one aggregate (or all of that type when {@code aggregate} is null). */
+    private List<String> eventPayloads(String type, String aggregate) {
+        return moduleJdbc.queryForList("select payload from int_outbox_event where event_type = ?"
+                + (aggregate == null ? "" : " and (aggregate_ref = ? or payload like ?)"), String.class,
+                aggregate == null ? new Object[] {type} : new Object[] {type, aggregate, "%\"sourceRef\":\"" + aggregate + "\"%"});
     }
 
     private void dispatch() throws Exception {

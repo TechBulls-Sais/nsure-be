@@ -1,6 +1,8 @@
 package com.nsure.finance;
 
 import com.nsure.integration.DomainEvent;
+import com.nsure.integration.Events;
+import com.nsure.integration.Outbox;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -22,9 +24,25 @@ public class Subledger {
     static final String SYSTEM = "system";
 
     private final EntityManager em;
+    private final Outbox outbox;
 
-    public Subledger(EntityManager em) {
+    public Subledger(EntityManager em, Outbox outbox) {
         this.em = em;
+        this.outbox = outbox;
+    }
+
+    /** SH08 JournalPosted: every journal written, including reversals and manual journals. */
+    private void published(Journal journal, String actor, String correlationId) {
+        java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("journalRef", journal.getRef());
+        data.put("eventType", journal.getEventType());
+        data.put("sourceRef", journal.getSourceRef());
+        data.put("period", journal.getPeriodCode());
+        data.put("accountingDate", journal.getAccountingDate().toString());
+        data.put("amount", journal.getAmount().toPlainString());
+        data.put("ruleVersion", journal.getRuleVersion());
+        data.put("reverses", journal.getReversesRef() == null ? "" : journal.getReversesRef());
+        outbox.publish(Events.JOURNAL_POSTED, journal.getRef(), data, actor, correlationId);
     }
 
     @Transactional
@@ -79,6 +97,7 @@ public class Subledger {
         }
         em.persist(journal);
         exceptionByKey(event.eventId()).ifPresent(open -> open.resolved(journal.getRef(), actor));
+        published(journal, actor, event.correlationId());
         return Optional.of(journal);
     }
 
@@ -104,6 +123,7 @@ public class Subledger {
         reversal.markReversal(original.getRef());
         em.persist(reversal);
         original.markReversed(reversal.getRef());
+        published(reversal, actor, null);
         return reversal;
     }
 
@@ -130,6 +150,7 @@ public class Subledger {
             throw new IllegalArgumentException("Manual journal " + manualRef + " does not balance.");
         }
         em.persist(journal);
+        published(journal, actor, null);
         return journal;
     }
 
@@ -215,6 +236,15 @@ public class Subledger {
         } else {
             em.persist(new UnpostedEvent(event.eventId(), event.eventType(), event.aggregateRef(), amount.abs(),
                     reason));
+            // SH08: raised once, when the exception opens; retries that still fail update it quietly.
+            java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+            data.put("eventKey", event.eventId());
+            data.put("eventType", event.eventType());
+            data.put("sourceRef", event.aggregateRef());
+            data.put("amount", amount.abs().toPlainString());
+            data.put("reason", reason.length() <= 300 ? reason : reason.substring(0, 300));
+            outbox.publish(Events.FINANCIAL_EXCEPTION_RAISED, "UNPOSTED-" + event.eventId(), data, SYSTEM,
+                    event.correlationId());
         }
     }
 

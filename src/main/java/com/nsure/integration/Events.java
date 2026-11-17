@@ -47,6 +47,16 @@ public final class Events {
     /** inboundId, providerRef, action (ALLOCATE or REFUND), policyRef, amount. Suspense cash allocated or refunded. */
     public static final String SUSPENSE_CLEARED = "SuspenseCleared";
 
+    // Finance subledger (spec SH08). Raised by the subledger itself, so no subledger handler consumes them.
+    /** journalRef, eventType, sourceRef, period, accountingDate, amount, ruleVersion, reverses (or ""). */
+    public static final String JOURNAL_POSTED = "JournalPosted";
+    /** eventKey, eventType, sourceRef, amount, reason. A monetary event could not be posted. */
+    public static final String FINANCIAL_EXCEPTION_RAISED = "FinancialExceptionRaised";
+    /** batchRef, glReference, journalCount, debitTotal, creditTotal. The general ledger accepted the batch. */
+    public static final String GL_BATCH_ACCEPTED = "GlBatchAccepted";
+    /** period, closedBy, openItems (acknowledged at close; empty when none). */
+    public static final String PERIOD_CLOSED = "PeriodClosed";
+
     /** policyRef, customerRef, customerName, product, amount, dueDate. A scheduled premium reminder (Blueprint §5). */
     public static final String PREMIUM_DUE_REMINDER = "PremiumDueReminder";
 
