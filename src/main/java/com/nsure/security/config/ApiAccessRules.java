@@ -223,6 +223,7 @@ public final class ApiAccessRules {
             rule(POST, "/group/members/*/underwriting", anyOf("UNDERWRITE_MEMBER")),
             rule(POST, "/group/schemes/*/invoices", anyOf("BILL_SCHEME")),
             rule(POST, "/group/invoices/*/receipts", anyOf("BILL_SCHEME")),
+            rule(POST, "/group/invoices/*/disputes", anyOf("BILL_SCHEME")),
             rule(DELETE, "/group/schemes/*", anyOf("MANAGE_SCHEME")),
             rule(GET, "/group/schemes/*/claims", anyOf("READ_SCHEME")),
             rule(POST, "/group/schemes/*/claims", anyOf("CREATE_CLAIM")),

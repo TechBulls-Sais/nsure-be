@@ -311,6 +311,12 @@ public class GroupSchemeService {
             throw new IllegalArgumentException("Entry ages must satisfy 0 <= minimum < maximum <= 100");
         }
         category.define(name, basis, multiple, fixed, freeCover, rate.setScale(4), minAge, maxAge, actor);
+        // Optional: no window means no late-entrant rule (the insurer sets it per category).
+        Integer lateEntryDays = GroupRecords.integer(body, "lateEntryDays", "Late-entry window");
+        if (lateEntryDays != null && (lateEntryDays < 0 || lateEntryDays > 3650)) {
+            throw new IllegalArgumentException("Late-entry window must be between 0 and 3650 days");
+        }
+        category.lateEntry(lateEntryDays);
     }
 
     // ── member underwriting (GL03-lite) ────────────────────────────────────────────────────────────

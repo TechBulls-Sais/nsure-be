@@ -216,7 +216,7 @@ public class GroupRecords {
     static GroupViews.CategoryView categoryView(BenefitCategory c, int activeMembers) {
         return new GroupViews.CategoryView(c.getCode(), c.getName(), c.getBenefitBasis(), c.getSalaryMultiple(),
                 c.getFixedCover(), c.getFreeCoverLimit(), c.getRatePerMille(), c.getMinEntryAge(), c.getMaxEntryAge(),
-                activeMembers, c.getUpdatedBy(), c.getUpdatedAt());
+                c.getLateEntryDays(), activeMembers, c.getUpdatedBy(), c.getUpdatedAt());
     }
 
     static GroupViews.MemberView memberView(SchemeMember m) {
@@ -226,7 +226,7 @@ public class GroupRecords {
                 m.fullName(), m.getDateOfBirth(), c.getCode(), c.getName(), m.getSalary(), m.getStatus(),
                 m.getJoinDate(), m.getExitDate(), m.getRequestedCover(), m.getAcceptedCover(), m.getPendingCover(),
                 premium, m.getUnderwritingDecision(), m.getUnderwritingReason(), m.getUnderwrittenBy(),
-                m.getUnderwrittenAt(), m.getSourceBatchRef(), m.getRowVersion());
+                m.getUnderwrittenAt(), m.getSourceBatchRef(), m.getActivelyAtWork(), m.getRowVersion());
     }
 
     static GroupViews.CensusBatchSummaryView batchSummary(CensusBatch b) {
@@ -269,7 +269,7 @@ public class GroupRecords {
             lines.computeIfAbsent(l.getInvoice().getId(), id -> new ArrayList<>())
                     .add(new GroupViews.InvoiceLineView(l.getMemberId(), l.getMemberKey(), l.getMemberName(),
                             l.getCategoryCode(), l.getAcceptedCover(), l.getRatePerMille(), l.getDaysCovered(),
-                            l.getDaysInPeriod(), l.getPremium()));
+                            l.getDaysInPeriod(), l.getPremium(), l.getDisputeStatus(), l.getDisputeNote()));
         }
         Map<Long, List<GroupViews.ReceiptView>> receipts = new HashMap<>();
         for (SponsorReceipt r : em.createQuery(
@@ -281,7 +281,9 @@ public class GroupRecords {
         return invoices.stream()
                 .map(i -> new GroupViews.InvoiceView(i.getRef(), i.getScheme().getRef(), i.getScheme().getName(),
                         i.getPeriod(), i.getPeriodStart(), i.getPeriodEnd(), i.getAmount(), i.getPaidAmount(),
-                        i.getOutstanding(), i.getStatus(), i.getMemberCount(), i.getIssuedBy(), i.getIssuedAt(),
+                        i.getOutstanding(), lines.getOrDefault(i.getId(), List.of()).stream()
+                                .filter(l -> "OPEN".equals(l.disputeStatus())).map(GroupViews.InvoiceLineView::premium)
+                                .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add), i.getStatus(), i.getMemberCount(), i.getIssuedBy(), i.getIssuedAt(),
                         lines.getOrDefault(i.getId(), List.of()), receipts.getOrDefault(i.getId(), List.of())))
                 .toList();
     }

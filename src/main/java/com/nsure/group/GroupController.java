@@ -103,6 +103,12 @@ public class GroupController {
         return claims.decide(ref, body);
     }
 
+    /** {memberKey, action RAISE|RESOLVE, note} */
+    @PostMapping("/invoices/{ref}/disputes")
+    public GroupViews.InvoiceView dispute(@PathVariable String ref, @RequestBody JsonNode body) {
+        return billing.dispute(ref, body);
+    }
+
     @PostMapping("/invoices/{ref}/receipts")
     public GroupViews.ReceiptAllocationView receipt(@PathVariable String ref, @RequestBody JsonNode body) {
         return billing.receipt(ref, body);

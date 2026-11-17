@@ -105,6 +105,10 @@ public class SchemeMember {
     @Column(name = "source_batch_ref", length = 20)
     private String sourceBatchRef;
 
+    /** The actively-at-work declaration given on entry or the latest increase; null when none was given. */
+    @Column(name = "actively_at_work")
+    private Boolean activelyAtWork;
+
     /** The status the member returns to when a suspended scheme is reactivated. */
     @Column(name = "status_before_suspension", length = 30)
     private String statusBeforeSuspension;
@@ -140,6 +144,20 @@ public class SchemeMember {
         applyCover(category.coverFor(salary), category.getFreeCoverLimit());
     }
 
+    /**
+     * A joiner whose free cover is withheld (not actively at work, or a late entrant): all requested cover is referred
+     * to underwriting and none is in force until an underwriter accepts it (AT-GL03-02).
+     */
+    SchemeMember(GroupScheme scheme, BenefitCategory category, String memberKey, String firstName, String lastName,
+            LocalDate dateOfBirth, BigDecimal salary, LocalDate joinDate, String sourceBatchRef, Boolean activelyAtWork,
+            boolean withholdFreeCover) {
+        this(scheme, category, memberKey, firstName, lastName, dateOfBirth, salary, joinDate, sourceBatchRef);
+        this.activelyAtWork = activelyAtWork;
+        if (withholdFreeCover) {
+            applyCover(category.coverFor(salary), BigDecimal.ZERO.setScale(2));
+        }
+    }
+
     /** Accepts cover up to the ceiling (free-cover limit or underwritten amount); the excess stays pending. */
     private void applyCover(BigDecimal requested, BigDecimal ceiling) {
         this.requestedCover = requested;
@@ -151,12 +169,30 @@ public class SchemeMember {
 
     /** A salary change recalculates cover from the category formula; an increase above the ceiling is pending. */
     void changeSalary(BigDecimal newSalary) {
+        changeSalary(newSalary, null);
+    }
+
+    /**
+     * A salary change with the actively-at-work declaration at the increase date: a member not actively at work keeps
+     * the cover already in force and any increase is referred to underwriting (NS-GL03-001).
+     */
+    void changeSalary(BigDecimal newSalary, Boolean activelyAtWorkNow) {
         this.salary = newSalary;
         BigDecimal ceiling = category.getFreeCoverLimit();
         if (underwrittenCover != null && underwrittenCover.compareTo(ceiling) > 0) {
             ceiling = underwrittenCover;
         }
+        if (Boolean.FALSE.equals(activelyAtWorkNow)) {
+            ceiling = ceiling.min(acceptedCover);
+        }
+        if (activelyAtWorkNow != null) {
+            this.activelyAtWork = activelyAtWorkNow;
+        }
         applyCover(category.coverFor(newSalary), ceiling);
+    }
+
+    public Boolean getActivelyAtWork() {
+        return activelyAtWork;
     }
 
     /** Suspends cover from the given day with the scheme; the status before it is kept for reactivation. */

@@ -50,6 +50,7 @@ public final class GroupViews {
             BigDecimal ratePerMille,
             int minEntryAge,
             int maxEntryAge,
+            Integer lateEntryDays,
             int activeMembers,
             String updatedBy,
             LocalDateTime updatedAt) {
@@ -77,6 +78,7 @@ public final class GroupViews {
             String underwrittenBy,
             LocalDateTime underwrittenAt,
             String sourceBatchRef,
+            Boolean activelyAtWork,
             long version) {
     }
 
@@ -143,6 +145,8 @@ public final class GroupViews {
             BigDecimal amount,
             BigDecimal paidAmount,
             BigDecimal outstanding,
+            // Premium on lines the sponsor disputes; cover is not changed by a dispute (NS-GL05-003).
+            BigDecimal disputedAmount,
             String status,
             int memberCount,
             String issuedBy,
@@ -160,7 +164,9 @@ public final class GroupViews {
             BigDecimal ratePerMille,
             int daysCovered,
             int daysInPeriod,
-            BigDecimal premium) {
+            BigDecimal premium,
+            String disputeStatus,
+            String disputeNote) {
     }
 
     public record ReceiptView(

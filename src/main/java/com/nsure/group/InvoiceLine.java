@@ -71,6 +71,34 @@ public class InvoiceLine {
         this.premium = premium;
     }
 
+    /** OPEN while the sponsor disputes this member's contribution, RESOLVED once settled; null when never disputed. */
+    @Column(name = "dispute_status", length = 20)
+    private String disputeStatus;
+
+    @Column(name = "dispute_note", length = 300)
+    private String disputeNote;
+
+    @Column(name = "disputed_by", length = 100)
+    private String disputedBy;
+
+    @Column(name = "disputed_at")
+    private java.time.LocalDateTime disputedAt;
+
+    void dispute(String status, String note, String actor) {
+        this.disputeStatus = status;
+        this.disputeNote = note;
+        this.disputedBy = actor;
+        this.disputedAt = java.time.LocalDateTime.now();
+    }
+
+    public String getDisputeStatus() {
+        return disputeStatus;
+    }
+
+    public String getDisputeNote() {
+        return disputeNote;
+    }
+
     public Long getId() {
         return id;
     }

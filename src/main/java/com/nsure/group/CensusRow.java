@@ -67,6 +67,14 @@ public class CensusRow {
     @Column(name = "member_id")
     private Long memberId;
 
+    /** Optional template column (Y/N): the member's actively-at-work declaration at the entry or increase date. */
+    @Column(name = "actively_at_work", length = 5)
+    private String activelyAtWork;
+
+    /** Optional template column: the date the member first became eligible, to recognise a late entrant. */
+    @Column(name = "eligible_date", length = 20)
+    private String eligibleDate;
+
     protected CensusRow() {
     }
 
@@ -81,6 +89,8 @@ public class CensusRow {
         this.salary = clip(cells[5], 30);
         this.action = clip(cells[6], 20);
         this.effectiveDate = clip(cells[7], 20);
+        this.activelyAtWork = cells.length > 8 ? clip(cells[8], 5) : null;
+        this.eligibleDate = cells.length > 9 ? clip(cells[9], 20) : null;
     }
 
     void outcome(String status, String error) {
@@ -154,5 +164,13 @@ public class CensusRow {
 
     public Long getMemberId() {
         return memberId;
+    }
+
+    public String getActivelyAtWork() {
+        return activelyAtWork;
+    }
+
+    public String getEligibleDate() {
+        return eligibleDate;
     }
 }

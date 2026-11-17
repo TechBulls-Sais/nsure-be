@@ -35,6 +35,12 @@ public class CensusService {
 
     static final List<String> HEADER = List.of("memberKey", "firstName", "lastName", "dateOfBirth", "category",
             "salary", "action", "effectiveDate");
+    /**
+     * Optional columns after the mandatory ones, in any order: the actively-at-work declaration (Y/N) at the entry or
+     * increase date, and the date the member first became eligible (for the category's late-entry window).
+     */
+    static final List<String> OPTIONAL = List.of("activelyAtWork", "eligibleDate");
+    private static final int CELLS = HEADER.size() + OPTIONAL.size();
     static final String JOIN = "JOIN";
     static final String LEAVE = "LEAVE";
     static final String SALARY = "SALARY";
@@ -88,6 +94,7 @@ public class CensusService {
                     + " (" + existing.getRef() + ") with different content");
         }
 
+        List<String> columns = header(csv);
         List<String[]> lines = parse(csv);
         CensusBatch batch = new CensusBatch(records.nextRef(CensusBatch.class, "CEN-", 5), scheme, externalId, mode,
                 hash, user.getUsername());
@@ -99,10 +106,13 @@ public class CensusService {
         for (String[] line : lines) {
             int lineNo = Integer.parseInt(line[0]);
             String[] raw = Arrays.copyOfRange(line, 1, line.length);
-            String[] cells = Arrays.copyOf(raw, HEADER.size());
+            String[] cells = new String[CELLS];
+            for (int c = 0; c < Math.min(raw.length, columns.size()); c++) {
+                cells[columns.get(c).isEmpty() ? c : HEADER.size() + OPTIONAL.indexOf(columns.get(c))] = raw[c];
+            }
             List<String> errors = new ArrayList<>();
-            if (raw.length != HEADER.size()) {
-                errors.add("expected " + HEADER.size() + " columns but found " + raw.length);
+            if (raw.length != columns.size()) {
+                errors.add("expected " + columns.size() + " columns but found " + raw.length);
             }
             errors.addAll(validator.validate(lineNo, cells));
             CensusRow row = new CensusRow(batch, lineNo, cells);
@@ -186,27 +196,38 @@ public class CensusService {
     private Long apply(Validator validator, CensusBatch batch, CensusRow row, String actor) {
         String action = row.getAction().trim().toUpperCase(Locale.ROOT);
         LocalDate effective = GroupRecords.parseDate(row.getEffectiveDate().trim());
+        Boolean activelyAtWork = yesNo(row.getActivelyAtWork());
         if (JOIN.equals(action)) {
             BenefitCategory category = validator.categories.get(row.getCategoryCode().trim().toUpperCase(Locale.ROOT));
+            LocalDate eligible = row.getEligibleDate() == null ? null : GroupRecords.parseDate(row.getEligibleDate().trim());
+            boolean lateEntrant = lateEntrant(category, eligible, effective);
+            boolean notAtWork = Boolean.FALSE.equals(activelyAtWork);
             SchemeMember member = new SchemeMember(batch.getScheme(), category, row.getMemberKey().trim(),
                     row.getFirstName().trim(), row.getLastName().trim(),
                     GroupRecords.parseDate(row.getDateOfBirth().trim()), amount(row.getSalary()), effective,
-                    batch.getRef());
+                    batch.getRef(), activelyAtWork, notAtWork || lateEntrant);
             em.persist(member);
-            em.persist(new MemberChange(member, JOIN, effective, null, null, batch.getRef(),
-                    SchemeMember.UNDERWRITING_PENDING.equals(member.getStatus())
-                            ? "Cover above the free-cover limit is pending underwriting" : null, actor));
+            String note = notAtWork ? "Not actively at work on the entry date: all cover is referred to underwriting"
+                    : lateEntrant ? "Late entrant (eligible " + eligible + ", outside the " + category.getLateEntryDays()
+                            + "-day window): all cover is referred to underwriting"
+                    : SchemeMember.UNDERWRITING_PENDING.equals(member.getStatus())
+                            ? "Cover above the free-cover limit is pending underwriting" : null;
+            em.persist(new MemberChange(member, JOIN, effective, null, null, batch.getRef(), note, actor));
             return member.getId();
         }
         SchemeMember member = validator.members.get(row.getMemberKey().trim());
         BigDecimal salaryBefore = member.getSalary();
         BigDecimal coverBefore = member.getAcceptedCover();
+        String note = null;
         if (LEAVE.equals(action)) {
             member.cease(effective);
         } else {
-            member.changeSalary(amount(row.getSalary()));
+            member.changeSalary(amount(row.getSalary()), activelyAtWork);
+            if (Boolean.FALSE.equals(activelyAtWork) && member.getPendingCover().signum() > 0) {
+                note = "Not actively at work on the increase date: the increase is referred to underwriting";
+            }
         }
-        em.persist(new MemberChange(member, action, effective, salaryBefore, coverBefore, batch.getRef(), null, actor));
+        em.persist(new MemberChange(member, action, effective, salaryBefore, coverBefore, batch.getRef(), note, actor));
         return member.getId();
     }
 
@@ -220,7 +241,27 @@ public class CensusService {
 
     private static String[] cells(CensusRow row) {
         return new String[] {row.getMemberKey(), row.getFirstName(), row.getLastName(), row.getDateOfBirth(),
-                row.getCategoryCode(), row.getSalary(), row.getAction(), row.getEffectiveDate()};
+                row.getCategoryCode(), row.getSalary(), row.getAction(), row.getEffectiveDate(),
+                row.getActivelyAtWork(), row.getEligibleDate()};
+    }
+
+    /** Y/YES/TRUE or N/NO/FALSE; null when blank, and when not a yes or no (validation reports that). */
+    static Boolean yesNo(String text) {
+        String v = value(text);
+        if (v == null) {
+            return null;
+        }
+        return switch (v.toUpperCase(Locale.ROOT)) {
+            case "Y", "YES", "TRUE" -> Boolean.TRUE;
+            case "N", "NO", "FALSE" -> Boolean.FALSE;
+            default -> null;
+        };
+    }
+
+    /** Joining more than the category's late-entry window after first becoming eligible; never when no window is set. */
+    static boolean lateEntrant(BenefitCategory category, LocalDate eligible, LocalDate effective) {
+        return category.getLateEntryDays() != null && eligible != null && effective != null
+                && eligible.plusDays(category.getLateEntryDays()).isBefore(effective);
     }
 
     // ── validation ─────────────────────────────────────────────────────────────────────────────────
@@ -251,6 +292,11 @@ public class CensusService {
             String salaryText = value(cells[5]);
             String action = value(cells[6]);
             String effectiveText = value(cells[7]);
+            String atWorkText = cells.length > 8 ? value(cells[8]) : null;
+            String eligibleText = cells.length > 9 ? value(cells[9]) : null;
+            if (atWorkText != null && yesNo(atWorkText) == null) {
+                errors.add("activelyAtWork must be Y or N");
+            }
 
             if (key == null) {
                 errors.add("memberKey is required");
@@ -286,6 +332,16 @@ public class CensusService {
                 return errors;
             }
             SchemeMember member = members.get(key);
+            if (eligibleText != null) {
+                LocalDate eligible = GroupRecords.parseDate(eligibleText);
+                if (!JOIN.equals(action)) {
+                    errors.add("eligibleDate applies to JOIN rows only");
+                } else if (eligible == null) {
+                    errors.add("eligibleDate must be a date in the format yyyy-MM-dd");
+                } else if (effective != null && eligible.isAfter(effective)) {
+                    errors.add("eligibleDate is after the effectiveDate");
+                }
+            }
             if (JOIN.equals(action)) {
                 validateJoin(errors, member, key, firstName, lastName, dob, categoryCode, salaryText, effective);
             } else if (member == null) {
@@ -296,6 +352,18 @@ public class CensusService {
                 }
                 if (SALARY.equals(action) && salaryText == null) {
                     errors.add("salary is required for a SALARY change");
+                }
+                if (LEAVE.equals(action) && effective != null) {
+                    // AT-GL04-03: a retrospective leave behind an admitted claim waits for an authorised review.
+                    for (GroupClaim claim : em.createQuery("select c from GroupClaim c where c.member = :m"
+                                    + " and c.status in :admitted and c.eventDate > :exit order by c.eventDate",
+                                    GroupClaim.class)
+                            .setParameter("m", member).setParameter("admitted", GroupClaim.ADMITTED)
+                            .setParameter("exit", effective).getResultList()) {
+                        errors.add("held for authorised review: claim " + claim.getRef() + " ("
+                                + claim.getStatus().toLowerCase(Locale.ROOT).replace('_', ' ') + ", event "
+                                + claim.getEventDate() + ") falls after this leave date");
+                    }
                 }
             }
             return errors;
@@ -381,8 +449,40 @@ public class CensusService {
     }
 
     /**
+     * The file's columns in order: the mandatory template columns as "" and each optional column by its name. The
+     * header must start with the template columns and may add any of the optional ones once.
+     */
+    static List<String> header(String csv) {
+        for (String line : csv.split("\n", -1)) {
+            if (line.isBlank()) {
+                continue;
+            }
+            List<String> names = splitLine(line).stream().map(String::trim).toList();
+            List<String> out = new ArrayList<>();
+            boolean ok = names.size() >= HEADER.size() && names.size() <= HEADER.size() + OPTIONAL.size();
+            for (int i = 0; ok && i < names.size(); i++) {
+                if (i < HEADER.size()) {
+                    ok = names.get(i).equalsIgnoreCase(HEADER.get(i));
+                    out.add("");
+                } else {
+                    String name = names.get(i);
+                    String optional = OPTIONAL.stream().filter(o -> o.equalsIgnoreCase(name)).findFirst().orElse(null);
+                    ok = optional != null && !out.contains(optional);
+                    out.add(optional);
+                }
+            }
+            if (!ok) {
+                throw new IllegalArgumentException("The first line must be the census header: " + String.join(",", HEADER)
+                        + ", optionally followed by " + String.join(" and/or ", OPTIONAL));
+            }
+            return out;
+        }
+        throw new IllegalArgumentException("The census file has no data rows");
+    }
+
+    /**
      * Splits the file into data lines; each array starts with the file line number followed by the cells. The first
-     * non-blank line must be the template header.
+     * non-blank line is the header (checked by {@link #header}).
      */
     private static List<String[]> parse(String csv) {
         String[] lines = csv.split("\n", -1);
@@ -394,12 +494,6 @@ public class CensusService {
             }
             List<String> cells = splitLine(lines[i]);
             if (!header) {
-                List<String> names = cells.stream().map(String::trim).toList();
-                if (names.size() != HEADER.size() || !names.stream().map(n -> n.toLowerCase(Locale.ROOT)).toList()
-                        .equals(HEADER.stream().map(n -> n.toLowerCase(Locale.ROOT)).toList())) {
-                    throw new IllegalArgumentException("The first line must be the census header: "
-                            + String.join(",", HEADER));
-                }
                 header = true;
                 continue;
             }

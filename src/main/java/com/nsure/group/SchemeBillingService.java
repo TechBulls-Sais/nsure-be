@@ -133,6 +133,46 @@ public class SchemeBillingService {
     }
 
     /**
+     * {memberKey, action RAISE|RESOLVE, note}: the sponsor disputes (or settles a dispute about) one member's line.
+     * The dispute is tracked on the line and the invoice's disputed amount; it never changes the member's cover or the
+     * receivable by itself (NS-GL05-003).
+     */
+    @Transactional
+    public GroupViews.InvoiceView dispute(String invoiceRef, JsonNode body) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("BILL_SCHEME");
+        SchemeInvoice invoice = em.createQuery("select i from SchemeInvoice i join fetch i.scheme where i.ref = :ref",
+                        SchemeInvoice.class)
+                .setParameter("ref", invoiceRef)
+                .setLockMode(LockModeType.PESSIMISTIC_WRITE)
+                .getResultStream()
+                .findFirst()
+                .orElseThrow(() -> new NotFoundException("Invoice " + invoiceRef + " not found"));
+        String key = GroupRecords.requiredText(body, "memberKey", "Member key", 40);
+        String action = GroupRecords.requiredText(body, "action", "Action", 10).toUpperCase(java.util.Locale.ROOT);
+        String note = GroupRecords.requiredText(body, "note", "Note", 300);
+        InvoiceLine line = em.createQuery("select l from InvoiceLine l where l.invoice = :i and l.memberKey = :k",
+                        InvoiceLine.class)
+                .setParameter("i", invoice).setParameter("k", key).getResultStream().findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Invoice " + invoiceRef + " has no line for " + key));
+        if ("RAISE".equals(action)) {
+            if ("OPEN".equals(line.getDisputeStatus())) {
+                throw new com.nsure.common.exception.ConflictException(key + " is already disputed on " + invoiceRef);
+            }
+            line.dispute("OPEN", note, user.getUsername());
+        } else if ("RESOLVE".equals(action)) {
+            if (!"OPEN".equals(line.getDisputeStatus())) {
+                throw new IllegalArgumentException(key + " has no open dispute on " + invoiceRef);
+            }
+            line.dispute("RESOLVED", note, user.getUsername());
+        } else {
+            throw new IllegalArgumentException("Action must be RAISE or RESOLVE");
+        }
+        em.flush();
+        return records.invoiceView(invoice);
+    }
+
+    /**
      * Allocates a sponsor payment to an invoice. A repeated payer reference returns the existing allocation; an
      * overpayment is refused; a short payment leaves the invoice Partially Paid with the balance outstanding.
      */
