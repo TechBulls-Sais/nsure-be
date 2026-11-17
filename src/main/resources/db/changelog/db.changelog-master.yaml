@@ -239,3 +239,6 @@ databaseChangeLog:
   - include:
       file: changes/086-care-cash-payment-instruction.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/087-reinsurance-recovery-receipt.yaml
+      relativeToChangelogFile: true

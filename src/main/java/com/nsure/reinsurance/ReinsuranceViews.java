@@ -60,7 +60,12 @@ public final class ReinsuranceViews {
             BigDecimal cededShare,
             BigDecimal recoveryAmount,
             String status,
-            LocalDateTime createdAt
+            LocalDateTime createdAt,
+            BigDecimal receivedAmount,
+            String receivedReference,
+            String receivedNote,
+            String receivedBy,
+            LocalDateTime receivedAt
     ) {
     }
 

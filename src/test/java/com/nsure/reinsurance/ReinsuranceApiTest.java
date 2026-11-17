@@ -247,6 +247,23 @@ class ReinsuranceApiTest {
         assertAmount(recoveries.get(0).get("recoveryAmount"), new BigDecimal("25000"));
         assertThat(eventCount(Events.RECOVERY_RECOGNISED, ceded)).isEqualTo(1);
 
+        // SH07: the reinsurer's payment is recorded once, and a different amount needs a note.
+        String recovery = (String) recoveries.get(0).get("ref");
+        String receipt = "/reinsurance/recoveries/" + recovery + "/receipt";
+        mockMvc.perform(json(post(receipt), "finance", "{\"amount\":\"25000\",\"reference\":\"RE-PAY-1\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post(receipt), "reinsurance", "{\"amount\":\"24000\",\"reference\":\"RE-PAY-1\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Add a note")));
+        mockMvc.perform(json(post(receipt), "reinsurance", "{\"amount\":\"25000.00\",\"reference\":\"RE-PAY-1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RECEIVED"))
+                .andExpect(jsonPath("$.receivedReference").value("RE-PAY-1"))
+                .andExpect(jsonPath("$.receivedBy").value("reinsurance"));
+        mockMvc.perform(json(post(receipt), "reinsurance", "{\"amount\":\"25000.00\",\"reference\":\"RE-PAY-2\"}"))
+                .andExpect(status().isConflict());
+        assertThat(eventCount(Events.RECOVERY_RECEIVED, ceded)).isEqualTo(1);
+
         // No cession on the policy, no recovery.
         String retained = pendingPolicy("Term Life", "Silver");
         pay(retained);
@@ -283,6 +300,7 @@ class ReinsuranceApiTest {
                 .andExpect(jsonPath("$.recordCount").value(unreported.size()))
                 .andReturn().getResponse().getContentAsString();
         String ref = JsonPath.read(body, "$.ref");
+        assertThat(eventsOn(Events.BORDEREAU_SUBMITTED, ref)).isEqualTo(1);
         assertAmount(JsonPath.read(body, "$.totalCededPremium"), premiumTotal);
         assertAmount(JsonPath.read(body, "$.totalCededSum"), sumTotal);
         assertThat(cessions(policy).get(0).get("bordereauRef")).isEqualTo(ref);
@@ -294,6 +312,7 @@ class ReinsuranceApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.ref").value(ref))
                 .andExpect(jsonPath("$.recordCount").value(unreported.size()));
+        assertThat(eventsOn(Events.BORDEREAU_SUBMITTED, ref)).isEqualTo(1);
         List<Map<String, Object>> cessions = cessions(policy);
         assertThat(cessions).hasSize(2);
         assertThat(cessions.get(0).get("bordereauRef")).isNull();
@@ -312,6 +331,36 @@ class ReinsuranceApiTest {
         mockMvc.perform(json(post("/reinsurance/bordereaux"), "reinsurance",
                         "{\"treatyRef\":\"TRT-99999\",\"period\":\"" + period + "\"}"))
                 .andExpect(status().isNotFound());
+    }
+
+    /** AT-SH07-02 with SH07 events: a returned premium's ceded-premium adjustment is published as a negative RiskCeded. */
+    @Test
+    void aReturnedPremiumPublishesItsCededPremiumAdjustment() throws Exception {
+        String policy = pendingPolicy("Whole of Life", "Bronze");
+        pay(policy);
+        dispatcher.dispatch();
+        String account = mockMvc.perform(get("/collections/policies/" + policy).with(signedIn("admin", "password")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String receipt = JsonPath.read(account, "$.receipts[0].receiptRef");
+        mockMvc.perform(json(post("/collections/receipts/" + receipt + "/reverse"), "admin",
+                        "{\"kind\":\"RETURNED\",\"reason\":\"Debit returned: insufficient funds\"}"))
+                .andExpect(status().isOk());
+        dispatcher.dispatch();
+        dispatcher.dispatch();
+        List<Map<String, Object>> cessions = cessions(policy);
+        assertThat(cessions).hasSize(2);
+        String adjustment = cessions.stream().filter(c -> new BigDecimal(String.valueOf(c.get("cededPremium"))).signum() < 0)
+                .map(c -> (String) c.get("ref")).findFirst().orElseThrow();
+        List<String> payloads = tx.execute(s -> em.createQuery("select e.payload from OutboxEvent e"
+                + " where e.eventType = :type and e.aggregateRef = :ref", String.class)
+                .setParameter("type", Events.RISK_CEDED).setParameter("ref", adjustment).getResultList());
+        assertThat(payloads).singleElement().asString().contains("\"cededPremium\":\"-").contains("\"adjusts\":\"CES-");
+    }
+
+    private long eventsOn(String type, String aggregate) {
+        return tx.execute(s -> em.createQuery("select count(e) from OutboxEvent e where e.eventType = :type"
+                + " and e.aggregateRef = :ref", Long.class).setParameter("type", type).setParameter("ref", aggregate)
+                .getSingleResult());
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────

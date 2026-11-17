@@ -3,6 +3,8 @@ package com.nsure.reinsurance;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.nsure.common.exception.ConflictException;
 import com.nsure.common.exception.NotFoundException;
+import com.nsure.integration.Events;
+import com.nsure.integration.Outbox;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.service.PlatformSecurityContext;
@@ -32,10 +34,12 @@ public class ReinsuranceService {
 
     private final EntityManager em;
     private final PlatformSecurityContext security;
+    private final Outbox outbox;
 
-    public ReinsuranceService(EntityManager em, PlatformSecurityContext security) {
+    public ReinsuranceService(EntityManager em, PlatformSecurityContext security, Outbox outbox) {
         this.em = em;
         this.security = security;
+        this.outbox = outbox;
     }
 
     // ── treaties ──────────────────────────────────────────────────────────────────────────────────
@@ -215,7 +219,60 @@ public class ReinsuranceService {
         em.flush();
         bordereau.numbered();
         cessions.forEach(c -> c.reportedOn(bordereau));
+        // SH07: producing the bordereau submits it to the reinsurer (it is created SUBMITTED).
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("bordereauRef", bordereau.getRef());
+        data.put("treatyRef", treaty.getRef());
+        data.put("reinsurer", treaty.getReinsurer());
+        data.put("period", month.toString());
+        data.put("recordCount", cessions.size());
+        data.put("totalCededPremium", premium.toPlainString());
+        data.put("totalCededSum", sum.toPlainString());
+        outbox.publish(Events.BORDEREAU_SUBMITTED, bordereau.getRef(), data, user.getUsername());
         return view(bordereau);
+    }
+
+    /**
+     * {amount, reference, note?}: the reinsurer paid a recognised recovery (SH07 RecoveryReceived). A receipt that
+     * differs from the amount expected needs a note; a recovery is received once.
+     */
+    @Transactional
+    public ReinsuranceViews.RecoveryView receiveRecovery(String ref, JsonNode body) {
+        AppUser user = user("MANAGE_REINSURANCE");
+        Recovery recovery = em.createQuery("select r from Recovery r join fetch r.treaty where r.ref = :ref",
+                        Recovery.class)
+                .setParameter("ref", ref).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Recovery " + ref + " not found"));
+        if (Recovery.RECEIVED.equals(recovery.getStatus())) {
+            throw new ConflictException("Recovery " + ref + " was already received (" + recovery.getReceivedReference()
+                    + ").");
+        }
+        BigDecimal amount = number(body, "amount").setScale(2, java.math.RoundingMode.HALF_UP);
+        if (amount.signum() <= 0) {
+            throw new IllegalArgumentException("amount must be greater than zero.");
+        }
+        String reference = required(body, "reference", 60);
+        String note = body.hasNonNull("note") && !body.get("note").asText().isBlank()
+                ? body.get("note").asText().trim() : null;
+        if (note != null && note.length() > 500) {
+            throw new IllegalArgumentException("note must be at most 500 characters.");
+        }
+        if (amount.compareTo(recovery.getRecoveryAmount()) != 0 && note == null) {
+            throw new IllegalArgumentException("The reinsurer paid " + com.nsure.common.Money.display(amount)
+                    + " but " + com.nsure.common.Money.display(recovery.getRecoveryAmount())
+                    + " was expected. Add a note explaining the difference.");
+        }
+        recovery.received(amount, reference, note, user.getUsername());
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("recoveryRef", recovery.getRef());
+        data.put("treatyRef", recovery.getTreaty().getRef());
+        data.put("claimRef", recovery.getClaimRef());
+        data.put("policyRef", recovery.getPolicyRef());
+        data.put("amount", amount.toPlainString());
+        data.put("expected", recovery.getRecoveryAmount().toPlainString());
+        data.put("reference", reference);
+        outbox.publish(Events.RECOVERY_RECEIVED, recovery.getRef(), data, user.getUsername());
+        return view(recovery);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────
@@ -280,7 +337,8 @@ public class ReinsuranceService {
     private static ReinsuranceViews.RecoveryView view(Recovery r) {
         return new ReinsuranceViews.RecoveryView(r.getRef(), r.getTreaty().getRef(), r.getTreaty().getName(),
                 r.getTreaty().getReinsurer(), r.getClaimRef(), r.getPolicyRef(), r.getClaimAmount(), r.getCededShare(),
-                r.getRecoveryAmount(), r.getStatus(), r.getCreatedAt());
+                r.getRecoveryAmount(), r.getStatus(), r.getCreatedAt(), r.getReceivedAmount(),
+                r.getReceivedReference(), r.getReceivedNote(), r.getReceivedBy(), r.getReceivedAt());
     }
 
     private static ReinsuranceViews.BordereauView view(Bordereau b) {

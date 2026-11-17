@@ -59,6 +59,22 @@ public class Recovery {
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
+    // SH07: the reinsurer's payment of the recovery, when it arrives.
+    @Column(name = "received_amount", precision = 15, scale = 2)
+    private BigDecimal receivedAmount;
+
+    @Column(name = "received_reference", length = 60)
+    private String receivedReference;
+
+    @Column(name = "received_note", length = 500)
+    private String receivedNote;
+
+    @Column(name = "received_by", length = 100)
+    private String receivedBy;
+
+    @Column(name = "received_at")
+    private LocalDateTime receivedAt;
+
     protected Recovery() {
     }
 
@@ -122,5 +138,34 @@ public class Recovery {
 
     public LocalDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    void received(BigDecimal amount, String reference, String note, String by) {
+        this.receivedAmount = amount;
+        this.receivedReference = reference;
+        this.receivedNote = note;
+        this.receivedBy = by;
+        this.receivedAt = LocalDateTime.now();
+        this.status = RECEIVED;
+    }
+
+    public BigDecimal getReceivedAmount() {
+        return receivedAmount;
+    }
+
+    public String getReceivedReference() {
+        return receivedReference;
+    }
+
+    public String getReceivedNote() {
+        return receivedNote;
+    }
+
+    public String getReceivedBy() {
+        return receivedBy;
+    }
+
+    public LocalDateTime getReceivedAt() {
+        return receivedAt;
     }
 }

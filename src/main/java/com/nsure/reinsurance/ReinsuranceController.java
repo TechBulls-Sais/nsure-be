@@ -47,6 +47,12 @@ public class ReinsuranceController {
         return reinsurance.recoveries();
     }
 
+    /** {amount, reference, note?}: the reinsurer paid the recovery. */
+    @PostMapping("/recoveries/{ref}/receipt")
+    public ReinsuranceViews.RecoveryView receiveRecovery(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.receiveRecovery(ref, body);
+    }
+
     @GetMapping("/bordereaux")
     public List<ReinsuranceViews.BordereauView> bordereaux() {
         return reinsurance.bordereaux();
