@@ -29,11 +29,14 @@ public class GroupSchemeService {
     private final EntityManager em;
     private final PlatformSecurityContext security;
     private final GroupRecords records;
+    private final com.nsure.audit.evidence.EvidenceChain audit;
 
-    public GroupSchemeService(EntityManager em, PlatformSecurityContext security, GroupRecords records) {
+    public GroupSchemeService(EntityManager em, PlatformSecurityContext security, GroupRecords records,
+            com.nsure.audit.evidence.EvidenceChain audit) {
         this.em = em;
         this.security = security;
         this.records = records;
+        this.audit = audit;
     }
 
     // ── schemes ────────────────────────────────────────────────────────────────────────────────────
@@ -86,6 +89,15 @@ public class GroupSchemeService {
 
     @Transactional
     public GroupViews.SchemeDetailView createScheme(JsonNode body) {
+        return createScheme(body, null);
+    }
+
+    /**
+     * Creates the scheme's master record, directly or from an accepted quote, and publishes SchemeActivated once for
+     * either path (GL01).
+     */
+    @Transactional
+    public GroupViews.SchemeDetailView createScheme(JsonNode body, String quoteRef) {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("MANAGE_SCHEME");
         String name = GroupRecords.requiredText(body, "name", "Scheme name", 100);
@@ -112,8 +124,65 @@ public class GroupSchemeService {
         GroupScheme scheme = new GroupScheme(records.nextRef(GroupScheme.class, "SCH-", 3), name, sector,
                 initials(name), COLORS[(order - 1) % COLORS.length], order, inception, renewal,
                 renewal.format(DISPLAY), frequency);
+        if (quoteRef != null) {
+            scheme.setQuoteRef(quoteRef);
+        }
         em.persist(scheme);
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("schemeRef", scheme.getRef());
+        data.put("quoteRef", quoteRef);
+        data.put("sponsor", name);
+        data.put("inceptionDate", inception.toString());
+        records.publish(com.nsure.integration.Events.SCHEME_ACTIVATED, scheme.getRef(), data, user.getUsername());
         return detail(scheme);
+    }
+
+    /**
+     * Deletes a scheme set up by mistake. Once it has any contractual or financial activity (activated from a quote,
+     * members, census, invoices, claims, loans or lifecycle requests) it is refused: such a scheme is closed instead,
+     * so its cover history is kept (NS-GL01-006).
+     */
+    @Transactional
+    public void deleteScheme(String ref) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("MANAGE_SCHEME");
+        GroupScheme scheme = records.lockedScheme(ref);
+        List<String> activity = new java.util.ArrayList<>();
+        if (scheme.getQuoteRef() != null) {
+            activity.add("its master policy was activated from " + scheme.getQuoteRef());
+        }
+        count(activity, "member episode(s)", "select count(m) from SchemeMember m where m.scheme = :s", scheme);
+        count(activity, "census batch(es)", "select count(b) from CensusBatch b where b.scheme = :s", scheme);
+        count(activity, "invoice(s)", "select count(i) from SchemeInvoice i where i.scheme = :s", scheme);
+        count(activity, "claim(s)", "select count(c) from GroupClaim c where c.scheme = :s", scheme);
+        countByRef(activity, "credit loan(s)", "select count(l) from GroupCreditLoan l where l.schemeRef = :ref", ref);
+        countByRef(activity, "lifecycle request(s)", "select count(e) from SchemeEvent e where e.schemeRef = :ref", ref);
+        if (!activity.isEmpty()) {
+            throw new ConflictException("Scheme " + ref + " cannot be deleted: " + String.join(", ", activity)
+                    + ". Close it instead; its cover history is kept.");
+        }
+        em.createQuery("delete from SchemeBenefit b where b.schemeRef = :ref").setParameter("ref", ref).executeUpdate();
+        em.createQuery("delete from BenefitCategory c where c.scheme = :s").setParameter("s", scheme).executeUpdate();
+        em.remove(scheme);
+        audit.record(user.getUsername(), "Scheme deleted", "Scheme", ref, "No contractual or financial activity");
+        // Its SchemeActivated was published, so downstream consumers hear that it has gone.
+        records.publish(com.nsure.integration.Events.SCHEME_CLOSED, ref, Map.of("schemeRef", ref, "closedOn",
+                LocalDate.now().toString(), "reason", "Deleted before any contractual or financial activity"),
+                user.getUsername());
+    }
+
+    private void count(List<String> activity, String label, String jpql, GroupScheme scheme) {
+        long n = em.createQuery(jpql, Long.class).setParameter("s", scheme).getSingleResult();
+        if (n > 0) {
+            activity.add(n + " " + label);
+        }
+    }
+
+    private void countByRef(List<String> activity, String label, String jpql, String ref) {
+        long n = em.createQuery(jpql, Long.class).setParameter("ref", ref).getSingleResult();
+        if (n > 0) {
+            activity.add(n + " " + label);
+        }
     }
 
     private static String initials(String name) {
@@ -180,6 +249,7 @@ public class GroupSchemeService {
         user.validateHasPermissionTo("MANAGE_SCHEME");
         GroupScheme scheme = records.lockedScheme(schemeRef);
         com.nsure.common.ExpectedVersion.check("Scheme " + schemeRef, scheme.getRowVersion());
+        GroupRecords.requireOpen(scheme);
         String code = GroupRecords.requiredText(body, "code", "Category code", 20).toUpperCase(Locale.ROOT);
         if (!CODE.matcher(code).matches()) {
             throw new IllegalArgumentException("Category code may use only letters, digits, - and _");
@@ -190,6 +260,7 @@ public class GroupSchemeService {
         BenefitCategory category = new BenefitCategory(scheme, code);
         define(category, body, user.getUsername());
         em.persist(category);
+        termsChanged(scheme, category, "ADDED", user.getUsername());
         return GroupRecords.categoryView(category, 0);
     }
 
@@ -200,6 +271,7 @@ public class GroupSchemeService {
         user.validateHasPermissionTo("MANAGE_SCHEME");
         GroupScheme scheme = records.lockedScheme(schemeRef);
         com.nsure.common.ExpectedVersion.check("Scheme " + schemeRef, scheme.getRowVersion());
+        GroupRecords.requireOpen(scheme);
         BenefitCategory category = findCategory(scheme, code.toUpperCase(Locale.ROOT));
         if (category == null) {
             throw new NotFoundException("Category " + code + " not found on scheme " + schemeRef);
@@ -212,7 +284,22 @@ public class GroupSchemeService {
                 .getSingleResult();
         // The rate applies to future invoices, so the dashboard premium follows it.
         records.refreshTotals(scheme);
+        termsChanged(scheme, category, "AMENDED", user.getUsername());
         return GroupRecords.categoryView(category, active.intValue());
+    }
+
+    /** GL02 CategoryTermsChanged: the category's terms as they now stand, for downstream rating and documents. */
+    private void termsChanged(GroupScheme scheme, BenefitCategory c, String change, String actor) {
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("schemeRef", scheme.getRef());
+        data.put("categoryCode", c.getCode());
+        data.put("change", change);
+        data.put("benefitBasis", c.getBenefitBasis());
+        data.put("salaryMultiple", c.getSalaryMultiple() == null ? null : c.getSalaryMultiple().toPlainString());
+        data.put("fixedCover", c.getFixedCover() == null ? null : c.getFixedCover().toPlainString());
+        data.put("freeCoverLimit", c.getFreeCoverLimit().toPlainString());
+        data.put("ratePerMille", c.getRatePerMille().toPlainString());
+        records.publish(com.nsure.integration.Events.CATEGORY_TERMS_CHANGED, scheme.getRef(), data, actor);
     }
 
     private BenefitCategory findCategory(GroupScheme scheme, String code) {
@@ -262,6 +349,58 @@ public class GroupSchemeService {
             throw new IllegalArgumentException("Entry ages must satisfy 0 <= minimum < maximum <= 100");
         }
         category.define(name, basis, multiple, fixed, freeCover, rate.setScale(4), minAge, maxAge, actor);
+        // Optional: no window means no late-entrant rule (the insurer sets it per category).
+        Integer lateEntryDays = GroupRecords.integer(body, "lateEntryDays", "Late-entry window");
+        if (lateEntryDays != null && (lateEntryDays < 0 || lateEntryDays > 3650)) {
+            throw new IllegalArgumentException("Late-entry window must be between 0 and 3650 days");
+        }
+        category.lateEntry(lateEntryDays);
+    }
+
+    /**
+     * The member underwriting queue across schemes (GL03 workspace): every member with cover pending underwriting,
+     * oldest first, with the free-cover comparison, the actively-at-work declaration and why it was referred, beside
+     * the scheme's aggregate exposure in force and pending.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> underwritingQueue() {
+        security.authenticatedUser().validateHasPermissionTo("READ_SCHEME");
+        Map<Long, BigDecimal[]> exposure = new HashMap<>();
+        for (Object[] row : em.createQuery("select m.scheme.id, sum(m.acceptedCover), sum(m.pendingCover)"
+                        + " from SchemeMember m where m.status in :statuses group by m.scheme.id", Object[].class)
+                .setParameter("statuses", SchemeMember.ON_COVER).getResultList()) {
+            exposure.put((Long) row[0], new BigDecimal[] {(BigDecimal) row[1], (BigDecimal) row[2]});
+        }
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (SchemeMember m : em.createQuery("select m from SchemeMember m join fetch m.category join fetch m.scheme"
+                        + " where m.status = :pending order by m.updatedAt, m.id", SchemeMember.class)
+                .setParameter("pending", SchemeMember.UNDERWRITING_PENDING).getResultList()) {
+            String reason = em.createQuery("select c.detail from MemberChange c where c.member = :m"
+                            + " and c.changeType in ('JOIN', 'SALARY', 'TRANSFER_IN') order by c.id desc", String.class)
+                    .setParameter("m", m).setMaxResults(1).getResultStream().findFirst().orElse(null);
+            BigDecimal[] scheme = exposure.getOrDefault(m.getScheme().getId(), new BigDecimal[] {BigDecimal.ZERO,
+                    BigDecimal.ZERO});
+            Map<String, Object> v = new java.util.LinkedHashMap<>();
+            v.put("memberId", m.getId());
+            v.put("schemeRef", m.getScheme().getRef());
+            v.put("schemeName", m.getScheme().getName());
+            v.put("schemeStatus", m.getScheme().getStatus());
+            v.put("memberKey", m.getMemberKey());
+            v.put("name", m.fullName());
+            v.put("category", m.getCategory().getCode());
+            v.put("requestedCover", m.getRequestedCover());
+            v.put("freeCoverLimit", m.getCategory().getFreeCoverLimit());
+            v.put("acceptedCover", m.getAcceptedCover());
+            v.put("pendingCover", m.getPendingCover());
+            v.put("activelyAtWork", m.getActivelyAtWork());
+            v.put("referredBecause", reason);
+            v.put("waitingSince", m.getUpdatedAt());
+            v.put("schemeCoverInForce", scheme[0]);
+            v.put("schemeCoverPending", scheme[1]);
+            v.put("version", m.getRowVersion());
+            out.add(v);
+        }
+        return out;
     }
 
     // ── member underwriting (GL03-lite) ────────────────────────────────────────────────────────────
@@ -278,7 +417,7 @@ public class GroupSchemeService {
         if (member == null) {
             throw new NotFoundException("Member " + memberId + " not found");
         }
-        records.lockedScheme(member.getScheme().getRef());
+        GroupRecords.requireActive(records.lockedScheme(member.getScheme().getRef()), "an underwriting decision");
         em.refresh(member);
         com.nsure.common.ExpectedVersion.check("Member " + member.getMemberKey(), member.getRowVersion());
         if (!SchemeMember.UNDERWRITING_PENDING.equals(member.getStatus())) {
@@ -310,8 +449,17 @@ public class GroupSchemeService {
         } else {
             throw new IllegalArgumentException("Decision must be ACCEPT or DECLINE");
         }
-        em.persist(new MemberChange(member, "UNDERWRITING", LocalDate.now(), member.getSalary(), coverBefore, null,
-                decision + (reason == null ? "" : ": " + reason), user.getUsername()));
+        records.memberChanged(new MemberChange(member, "UNDERWRITING", LocalDate.now(), member.getSalary(), coverBefore,
+                null, decision + (reason == null ? "" : ": " + reason), user.getUsername()));
+        Map<String, Object> authorised = new java.util.LinkedHashMap<>();
+        authorised.put("schemeRef", member.getScheme().getRef());
+        authorised.put("memberKey", member.getMemberKey());
+        authorised.put("memberId", member.getId());
+        authorised.put("decision", decision);
+        authorised.put("acceptedCover", member.getAcceptedCover().toPlainString());
+        authorised.put("effectiveDate", LocalDate.now().toString());
+        records.publish(com.nsure.integration.Events.MEMBER_COVER_AUTHORISED, member.getMemberKey(), authorised,
+                user.getUsername());
         records.refreshTotals(member.getScheme());
         em.flush(); // so the view carries the member's new version (NS-TXN-001)
         return GroupRecords.memberView(member);

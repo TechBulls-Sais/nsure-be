@@ -61,6 +61,13 @@ public class BenefitCategory {
     @Column(name = "max_entry_age", nullable = false)
     private int maxEntryAge;
 
+    /**
+     * Days after first becoming eligible within which a member still gets free cover; a later entrant's cover is all
+     * referred to underwriting (NS-GL03-003). Null: no late-entry rule is configured.
+     */
+    @Column(name = "late_entry_days")
+    private Integer lateEntryDays;
+
     @Column(name = "updated_by", nullable = false, length = 100)
     private String updatedBy;
 
@@ -87,6 +94,14 @@ public class BenefitCategory {
         this.maxEntryAge = maxEntryAge;
         this.updatedBy = actor;
         this.updatedAt = LocalDateTime.now();
+    }
+
+    void lateEntry(Integer days) {
+        this.lateEntryDays = days;
+    }
+
+    public Integer getLateEntryDays() {
+        return lateEntryDays;
     }
 
     boolean salaryBased() {

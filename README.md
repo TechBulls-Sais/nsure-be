@@ -119,6 +119,30 @@ Partner portal logins come from migration 077: `agent` (intermediary INT-00001),
    rule names a permission code that is not seeded in `app_permission`.
 3. For a new code, seed it in a Liquibase changeset and grant it to the roles that need it.
 
+## Group scheme lifecycle (Nsure Life GL01–GL06)
+
+- **Suspension, closure, transfer** (`/group-life/schemes/{ref}/events`, decided by a second person): the impact preview
+  (`/impact?eventType=&effectiveDate=&targetSchemeRef=&rateChangePercent=`) lists the affected members, unpaid invoices,
+  premium already invoiced past the effective date, pending claims and income benefits in payment, and is stored with
+  the request. Approval acts on member cover: suspension suspends it (not covered, billed or certified; reactivation
+  restores each member's status), closure ceases every episode the day before the effective date, transfer moves
+  members to another active scheme on its terms. Suspended or closed schemes take no census, underwriting or term
+  changes. `DELETE /group/schemes/{ref}` works only before any contractual or financial activity.
+- **Group claims** (`/group/schemes/{ref}/claims`, `/group/claims/{ref}/decision`): a register of claims on the member's
+  cover episode (notify, four-eyes approve, decline, record payment, review or cease an income benefit) using the
+  claim permission codes; only accepted cover is claimable. Assessment rules and payment execution stay outside.
+- **Census template**: the eight mandatory columns may be followed by `activelyAtWork` (Y/N: N refers all cover, or
+  the increase, to underwriting), `eligibleDate` (with a category's optional `lateEntryDays` window) and `rowKey`
+  (applied at most once per scheme). A leave dated before an admitted claim's event is held for review.
+  `/group/census-batches/{ref}/reconciliation` traces applied rows to member changes, certificates and invoices.
+- **Plan approval**: a saved scheme benefit waits for a second person (`POST /group-life/schemes/{ref}/benefits/approval`);
+  only that publishes `SchemePlanApproved`.
+- **Queues and views**: `/group/underwriting-queue`, `/group/arrears`, `/group-life/schemes/{ref}/timeline`,
+  `/resolved-rules`, `/bordereaux`, and the early-settlement preview `GET /group-life/credit-loans/{id}/settlement`.
+- **Events** add `CategoryTermsChanged`, `MemberUnderwritingReferred`, `MemberCoverAuthorised`, `CensusBatchValidated`,
+  `MemberCoverChanged`, `CensusBatchCompleted` and `UnearnedPremiumRefundApproved`; `SchemeActivated` is published for
+  schemes set up directly as well as from quotes.
+
 ## Individual Life modules (Nsure Life IL02–IL05)
 
 | Module | Package | API | What it does |

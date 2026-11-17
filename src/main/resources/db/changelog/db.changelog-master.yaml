@@ -236,3 +236,18 @@ databaseChangeLog:
   - include:
       file: changes/090-credit-claim-payees.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/105-group-scheme-lifecycle.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/106-group-acceptance-rules.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/107-group-plan-approval.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/108-group-census-reconciliation.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/109-group-invoice-policy-year.yaml
+      relativeToChangelogFile: true

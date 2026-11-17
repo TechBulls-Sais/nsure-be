@@ -70,6 +70,29 @@ class OpsApiTest {
     }
 
     @Test
+    void theEmployerSeesItsOwnSchemesCertificatesOnly() throws Exception {
+        // D-36 / NS-GL01-005: the sponsor sees its own members' certificates, never another scheme's.
+        String portal = mockMvc.perform(get("/ops/portal").with(signedIn("employer", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.scopeRef").value("SCH-001"))
+                .andExpect(jsonPath("$.certificates").isNotEmpty())
+                .andReturn().getResponse().getContentAsString();
+        java.util.List<String> schemes = JsonPath.read(portal, "$.certificates[*].schemeRef");
+        org.assertj.core.api.Assertions.assertThat(schemes).isNotEmpty().allMatch("SCH-001"::equals);
+        java.util.List<String> numbers = JsonPath.read(portal, "$.certificates[*].certificateNo");
+        org.assertj.core.api.Assertions.assertThat(numbers).allMatch(n -> n.startsWith("SCH-001-"));
+        // The member awaiting underwriting is certified for the free cover in force, with the excess shown pending.
+        mockMvc.perform(get("/ops/portal").with(signedIn("employer", "password")))
+                .andExpect(jsonPath("$.certificates[?(@.pendingCover > 0)].acceptedCover").isNotEmpty());
+        org.assertj.core.api.Assertions.assertThat(portal).doesNotContain("uwReason").doesNotContain("underwritingReason");
+        // The staff certificate endpoints stay closed to the partner login.
+        mockMvc.perform(get("/group-life/schemes/SCH-002/certificates").with(signedIn("employer", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/ops/portal").with(signedIn("lender", "password")))
+                .andExpect(jsonPath("$.certificates").doesNotExist());
+    }
+
+    @Test
     void slaTimeIsCountedInWorkingHours() {
         java.util.Map<String, Object> calendar = java.util.Map.of("workStartHour", 8, "workEndHour", 17,
                 "workingDays", "MON,TUE,WED,THU,FRI", "holidays", "");

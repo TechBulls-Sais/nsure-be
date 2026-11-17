@@ -1,0 +1,13 @@
+databaseChangeLog:
+  # Policy-year references on scheme bills (GL05 workspace): each invoice records the scheme year its period falls in.
+  # Invoices already issued take the scheme's current policy year.
+  - changeSet:
+      id: 109-group-invoice-policy-year
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: grp_invoice
+            columns:
+              - column: {name: policy_year, type: int}
+        - sql:
+            sql: UPDATE grp_invoice SET policy_year = (SELECT s.policy_year FROM ins_scheme s WHERE s.id = grp_invoice.scheme_id)

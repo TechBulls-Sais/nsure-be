@@ -28,6 +28,9 @@ public final class GroupViews {
             BigDecimal monthlyPremium,
             BigDecimal outstandingBalance,
             int categories,
+            // The quotation the master policy was activated from (accepted terms), if any.
+            String quoteRef,
+            Integer policyYear,
             // Send back in If-Match when changing the scheme (NS-TXN-001).
             long version) {
     }
@@ -50,6 +53,7 @@ public final class GroupViews {
             BigDecimal ratePerMille,
             int minEntryAge,
             int maxEntryAge,
+            Integer lateEntryDays,
             int activeMembers,
             String updatedBy,
             LocalDateTime updatedAt) {
@@ -77,6 +81,7 @@ public final class GroupViews {
             String underwrittenBy,
             LocalDateTime underwrittenAt,
             String sourceBatchRef,
+            Boolean activelyAtWork,
             long version) {
     }
 
@@ -130,7 +135,9 @@ public final class GroupViews {
             String effectiveDate,
             String status,
             String error,
-            Long memberId) {
+            Long memberId,
+            Long changeId,
+            String rowKey) {
     }
 
     public record InvoiceView(
@@ -143,7 +150,10 @@ public final class GroupViews {
             BigDecimal amount,
             BigDecimal paidAmount,
             BigDecimal outstanding,
+            // Premium on lines the sponsor disputes; cover is not changed by a dispute (NS-GL05-003).
+            BigDecimal disputedAmount,
             String status,
+            Integer policyYear,
             int memberCount,
             String issuedBy,
             LocalDateTime issuedAt,
@@ -160,7 +170,9 @@ public final class GroupViews {
             BigDecimal ratePerMille,
             int daysCovered,
             int daysInPeriod,
-            BigDecimal premium) {
+            BigDecimal premium,
+            String disputeStatus,
+            String disputeNote) {
     }
 
     public record ReceiptView(
@@ -170,6 +182,27 @@ public final class GroupViews {
             BigDecimal outstandingAfter,
             String receivedBy,
             LocalDateTime receivedAt) {
+    }
+
+    /** A claim on a member's group cover (GL claim register). */
+    public record ClaimView(
+            String ref,
+            String schemeRef,
+            Long memberId,
+            String memberKey,
+            String member,
+            String benefitType,
+            LocalDate eventDate,
+            BigDecimal claimedAmount,
+            BigDecimal approvedAmount,
+            String status,
+            LocalDate nextReviewDate,
+            String paymentReference,
+            String note,
+            String notifiedBy,
+            LocalDateTime notifiedAt,
+            String decidedBy,
+            LocalDateTime decidedAt) {
     }
 
     /** The allocation just made (or the existing one for a repeated reference) and the invoice after it. */

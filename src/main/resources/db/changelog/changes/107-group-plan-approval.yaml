@@ -1,0 +1,13 @@
+databaseChangeLog:
+  # A scheme's benefit plan is approved by a second person before SchemePlanApproved is published (GL02): a saved
+  # benefit waits for approval. Benefits already on record were set up from approved quotes, so they start approved.
+  - changeSet:
+      id: 107-group-plan-approval
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: grp_scheme_benefit
+            columns:
+              - column: {name: approval_status, type: varchar(20), defaultValue: APPROVED, constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: timestamp(6)}

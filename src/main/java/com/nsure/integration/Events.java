@@ -90,6 +90,21 @@ public final class Events {
     public static final String CREDIT_BORDEREAU_PROCESSED = "CreditBordereauProcessed";
     public static final String GROUP_PREMIUM_REFUNDED = "GroupPremiumRefunded";
     public static final String OFFER_ACCEPTED = "OfferAccepted";
+    // Group plans, member underwriting, census and group credit (spec GL02, GL03, GL04, GL06).
+    /** schemeRef, categoryCode, change (ADDED or AMENDED), benefitBasis, freeCoverLimit, ratePerMille. */
+    public static final String CATEGORY_TERMS_CHANGED = "CategoryTermsChanged";
+    /** schemeRef, memberKey, memberId, changeType, requestedCover, acceptedCover, pendingCover. */
+    public static final String MEMBER_UNDERWRITING_REFERRED = "MemberUnderwritingReferred";
+    /** schemeRef, memberKey, memberId, decision (ACCEPT or DECLINE), acceptedCover, effectiveDate. */
+    public static final String MEMBER_COVER_AUTHORISED = "MemberCoverAuthorised";
+    /** schemeRef, batchRef, externalBatchId, mode, totalRows, validRows, invalidRows. */
+    public static final String CENSUS_BATCH_VALIDATED = "CensusBatchValidated";
+    /** schemeRef, memberKey, memberId, changeType, effectiveDate, coverBefore, coverAfter, pendingAfter, sourceRef. */
+    public static final String MEMBER_COVER_CHANGED = "MemberCoverChanged";
+    /** schemeRef, batchRef, externalBatchId, acceptedRows, rejectedRows. */
+    public static final String CENSUS_BATCH_COMPLETED = "CensusBatchCompleted";
+    /** schemeRef, certificateNo, settlementDate, amount. Raised with GroupPremiumRefunded when a settlement is made. */
+    public static final String UNEARNED_PREMIUM_REFUND_APPROVED = "UnearnedPremiumRefundApproved";
 
     // Collections and claims (spec SH04, SH05).
     public static final String INVOICE_ISSUED = "InvoiceIssued";

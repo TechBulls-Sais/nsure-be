@@ -1,0 +1,29 @@
+databaseChangeLog:
+  # Group acceptance pack mechanisms (section 08): the census may carry an actively-at-work declaration and the date
+  # a member became eligible; a member keeps that declaration (NS-GL03-001); a category may set a late-entry window
+  # (none by default: the insurer sets it); and a sponsor may dispute a member's line on an invoice without that
+  # changing the member's cover (NS-GL05-003).
+  - changeSet:
+      id: 106-group-acceptance-rules
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: grp_census_row
+            columns:
+              - column: {name: actively_at_work, type: varchar(5)}
+              - column: {name: eligible_date, type: varchar(20)}
+        - addColumn:
+            tableName: grp_member
+            columns:
+              - column: {name: actively_at_work, type: boolean}
+        - addColumn:
+            tableName: grp_benefit_category
+            columns:
+              - column: {name: late_entry_days, type: int}
+        - addColumn:
+            tableName: grp_invoice_line
+            columns:
+              - column: {name: dispute_status, type: varchar(20)}
+              - column: {name: dispute_note, type: varchar(300)}
+              - column: {name: disputed_by, type: varchar(100)}
+              - column: {name: disputed_at, type: timestamp(6)}

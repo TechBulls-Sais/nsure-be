@@ -30,6 +30,8 @@ public class SchemeMember {
     public static final String PARTIALLY_ACCEPTED = "PARTIALLY_ACCEPTED";
     public static final String DECLINED = "DECLINED";
     public static final String CEASED = "CEASED";
+    /** Cover suspended with the scheme (NS-GL01-006): not covered, billed or certified until reactivated. */
+    public static final String SUSPENDED = "SUSPENDED";
 
     /** Statuses with a live episode: the member can leave or change salary, and counts as a scheme member. */
     public static final Set<String> ON_COVER = Set.of(ACTIVE, UNDERWRITING_PENDING, PARTIALLY_ACCEPTED);
@@ -103,6 +105,21 @@ public class SchemeMember {
     @Column(name = "source_batch_ref", length = 20)
     private String sourceBatchRef;
 
+    /** The actively-at-work declaration given on entry or the latest increase; null when none was given. */
+    @Column(name = "actively_at_work")
+    private Boolean activelyAtWork;
+
+    /** The status the member returns to when a suspended scheme is reactivated. */
+    @Column(name = "status_before_suspension", length = 30)
+    private String statusBeforeSuspension;
+
+    /** The latest suspension: first suspended day, and last suspended day once reactivated (open while suspended). */
+    @Column(name = "suspended_from")
+    private LocalDate suspendedFrom;
+
+    @Column(name = "suspended_until")
+    private LocalDate suspendedUntil;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -127,6 +144,20 @@ public class SchemeMember {
         applyCover(category.coverFor(salary), category.getFreeCoverLimit());
     }
 
+    /**
+     * A joiner whose free cover is withheld (not actively at work, or a late entrant): all requested cover is referred
+     * to underwriting and none is in force until an underwriter accepts it (AT-GL03-02).
+     */
+    SchemeMember(GroupScheme scheme, BenefitCategory category, String memberKey, String firstName, String lastName,
+            LocalDate dateOfBirth, BigDecimal salary, LocalDate joinDate, String sourceBatchRef, Boolean activelyAtWork,
+            boolean withholdFreeCover) {
+        this(scheme, category, memberKey, firstName, lastName, dateOfBirth, salary, joinDate, sourceBatchRef);
+        this.activelyAtWork = activelyAtWork;
+        if (withholdFreeCover) {
+            applyCover(category.coverFor(salary), BigDecimal.ZERO.setScale(2));
+        }
+    }
+
     /** Accepts cover up to the ceiling (free-cover limit or underwritten amount); the excess stays pending. */
     private void applyCover(BigDecimal requested, BigDecimal ceiling) {
         this.requestedCover = requested;
@@ -138,12 +169,58 @@ public class SchemeMember {
 
     /** A salary change recalculates cover from the category formula; an increase above the ceiling is pending. */
     void changeSalary(BigDecimal newSalary) {
+        changeSalary(newSalary, null);
+    }
+
+    /**
+     * A salary change with the actively-at-work declaration at the increase date: a member not actively at work keeps
+     * the cover already in force and any increase is referred to underwriting (NS-GL03-001).
+     */
+    void changeSalary(BigDecimal newSalary, Boolean activelyAtWorkNow) {
         this.salary = newSalary;
         BigDecimal ceiling = category.getFreeCoverLimit();
         if (underwrittenCover != null && underwrittenCover.compareTo(ceiling) > 0) {
             ceiling = underwrittenCover;
         }
+        if (Boolean.FALSE.equals(activelyAtWorkNow)) {
+            ceiling = ceiling.min(acceptedCover);
+        }
+        if (activelyAtWorkNow != null) {
+            this.activelyAtWork = activelyAtWorkNow;
+        }
         applyCover(category.coverFor(newSalary), ceiling);
+    }
+
+    public Boolean getActivelyAtWork() {
+        return activelyAtWork;
+    }
+
+    /** Suspends cover from the given day with the scheme; the status before it is kept for reactivation. */
+    void suspend(LocalDate from) {
+        this.statusBeforeSuspension = status;
+        this.status = SUSPENDED;
+        this.suspendedFrom = from;
+        this.suspendedUntil = null;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /** Cover resumes on the given day, in the status the member had before the suspension. */
+    void reactivate(LocalDate on) {
+        this.status = statusBeforeSuspension == null ? ACTIVE : statusBeforeSuspension;
+        this.statusBeforeSuspension = null;
+        LocalDate last = on.minusDays(1);
+        this.suspendedUntil = suspendedFrom != null && last.isBefore(suspendedFrom) ? suspendedFrom.minusDays(1) : last;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /** How many days of [from, to] fall in the member's latest suspension (no cover and no premium on them). */
+    int suspendedDays(LocalDate from, LocalDate to) {
+        if (suspendedFrom == null) {
+            return 0;
+        }
+        LocalDate start = suspendedFrom.isAfter(from) ? suspendedFrom : from;
+        LocalDate end = suspendedUntil == null || suspendedUntil.isAfter(to) ? to : suspendedUntil;
+        return end.isBefore(start) ? 0 : (int) java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1;
     }
 
     void cease(LocalDate exitDate) {
@@ -259,6 +336,20 @@ public class SchemeMember {
 
     public LocalDateTime getUnderwrittenAt() {
         return underwrittenAt;
+    }
+
+    public LocalDate getSuspendedFrom() {
+        return suspendedFrom;
+    }
+
+    public LocalDate getSuspendedUntil() {
+        return suspendedUntil;
+    }
+
+    /** Whether the member's episode covered the given day (joined, not yet exited, not suspended on it). */
+    public boolean coveredOn(LocalDate day) {
+        return !day.isBefore(joinDate) && (exitDate == null || !day.isAfter(exitDate)) && suspendedDays(day, day) == 0
+                && !DECLINED.equals(status);
     }
 
     public String getSourceBatchRef() {

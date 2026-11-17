@@ -89,6 +89,8 @@ public class SchemeBillingService {
 
         SchemeInvoice invoice = new SchemeInvoice(records.nextRef(SchemeInvoice.class, "GIN-", 5), scheme,
                 period.toString(), start, end, user.getUsername());
+        // Scheme years run from the inception anniversary (renewal moves the renewal date on by a year).
+        invoice.policyYear(Math.max(1, java.time.Period.between(scheme.getInceptionDate(), start).getYears() + 1));
         List<InvoiceLine> lines = new ArrayList<>();
         BigDecimal total = BigDecimal.ZERO.setScale(2);
         for (SchemeMember member : members) {
@@ -99,7 +101,9 @@ public class SchemeBillingService {
             // The exit date is the member's last day of cover.
             LocalDate to = member.getExitDate() != null && member.getExitDate().isBefore(end)
                     ? member.getExitDate() : end;
-            int days = (int) ChronoUnit.DAYS.between(from, to) + 1;
+            // Days the scheme was suspended are neither covered nor billed (NS-GL01-006).
+            int days = (int) ChronoUnit.DAYS.between(from, to) + 1 - (to.isBefore(from) ? 0
+                    : member.suspendedDays(from, to));
             if (days <= 0) {
                 continue;
             }
@@ -125,8 +129,81 @@ public class SchemeBillingService {
         data.put("schemeName", scheme.getName());
         data.put("invoiceRef", invoice.getRef());
         data.put("period", invoice.getPeriod());
+        data.put("policyYear", invoice.getPolicyYear());
         data.put("amount", total.toPlainString());
         outbox.publish(Events.SCHEME_INVOICE_ISSUED, invoice.getRef(), data, user.getUsername());
+        return records.invoiceView(invoice);
+    }
+
+    /**
+     * The arrears queue (GL05 workspace): every scheme invoice still owed after its billing period ended, oldest
+     * first, with the days overdue and any amount the sponsor disputes.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> arrears() {
+        security.authenticatedUser().validateHasPermissionTo("READ_SCHEME");
+        LocalDate today = LocalDate.now();
+        List<SchemeInvoice> owed = em.createQuery("select i from SchemeInvoice i join fetch i.scheme"
+                        + " where i.outstanding > 0 and i.periodEnd < :today order by i.periodEnd, i.id", SchemeInvoice.class)
+                .setParameter("today", today).getResultList();
+        Map<String, GroupViews.InvoiceView> views = new java.util.HashMap<>();
+        records.invoiceViews(owed).forEach(v -> views.put(v.ref(), v));
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (SchemeInvoice i : owed) {
+            Map<String, Object> v = new LinkedHashMap<>();
+            v.put("invoiceRef", i.getRef());
+            v.put("schemeRef", i.getScheme().getRef());
+            v.put("schemeName", i.getScheme().getName());
+            v.put("schemeStatus", i.getScheme().getStatus());
+            v.put("period", i.getPeriod());
+            v.put("policyYear", i.getPolicyYear());
+            v.put("amount", i.getAmount());
+            v.put("outstanding", i.getOutstanding());
+            v.put("disputedAmount", views.get(i.getRef()).disputedAmount());
+            v.put("status", i.getStatus());
+            v.put("daysOverdue", ChronoUnit.DAYS.between(i.getPeriodEnd(), today));
+            out.add(v);
+        }
+        return out;
+    }
+
+    /**
+     * {memberKey, action RAISE|RESOLVE, note}: the sponsor disputes (or settles a dispute about) one member's line.
+     * The dispute is tracked on the line and the invoice's disputed amount; it never changes the member's cover or the
+     * receivable by itself (NS-GL05-003).
+     */
+    @Transactional
+    public GroupViews.InvoiceView dispute(String invoiceRef, JsonNode body) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("BILL_SCHEME");
+        SchemeInvoice invoice = em.createQuery("select i from SchemeInvoice i join fetch i.scheme where i.ref = :ref",
+                        SchemeInvoice.class)
+                .setParameter("ref", invoiceRef)
+                .setLockMode(LockModeType.PESSIMISTIC_WRITE)
+                .getResultStream()
+                .findFirst()
+                .orElseThrow(() -> new NotFoundException("Invoice " + invoiceRef + " not found"));
+        String key = GroupRecords.requiredText(body, "memberKey", "Member key", 40);
+        String action = GroupRecords.requiredText(body, "action", "Action", 10).toUpperCase(java.util.Locale.ROOT);
+        String note = GroupRecords.requiredText(body, "note", "Note", 300);
+        InvoiceLine line = em.createQuery("select l from InvoiceLine l where l.invoice = :i and l.memberKey = :k",
+                        InvoiceLine.class)
+                .setParameter("i", invoice).setParameter("k", key).getResultStream().findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Invoice " + invoiceRef + " has no line for " + key));
+        if ("RAISE".equals(action)) {
+            if ("OPEN".equals(line.getDisputeStatus())) {
+                throw new com.nsure.common.exception.ConflictException(key + " is already disputed on " + invoiceRef);
+            }
+            line.dispute("OPEN", note, user.getUsername());
+        } else if ("RESOLVE".equals(action)) {
+            if (!"OPEN".equals(line.getDisputeStatus())) {
+                throw new IllegalArgumentException(key + " has no open dispute on " + invoiceRef);
+            }
+            line.dispute("RESOLVED", note, user.getUsername());
+        } else {
+            throw new IllegalArgumentException("Action must be RAISE or RESOLVE");
+        }
+        em.flush();
         return records.invoiceView(invoice);
     }
 

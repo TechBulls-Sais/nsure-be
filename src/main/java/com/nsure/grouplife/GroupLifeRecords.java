@@ -92,9 +92,19 @@ public final class GroupLifeRecords {
         String updatedBy;
         @Column(name = "updated_at", nullable = false)
         LocalDateTime updatedAt;
+        /** PENDING after a change until a second person approves the plan; APPROVED then. */
+        @Column(name = "approval_status", nullable = false, length = 20)
+        String approvalStatus = "APPROVED";
+        @Column(name = "approved_by", length = 100)
+        String approvedBy;
+        @Column(name = "approved_at")
+        LocalDateTime approvedAt;
     }
 
-    /** A renewal, suspension, closure or reactivation, requested with its impact and decided by a second person. */
+    /**
+     * A renewal, suspension, closure, transfer or reactivation, requested with its impact and decided by a second
+     * person. The full impact it was raised with (members, unpaid invoices, claims) is kept beside the summary.
+     */
     @Entity(name = "SchemeEvent")
     @Table(name = "grp_scheme_event")
     public static class SchemeEvent {
@@ -127,6 +137,11 @@ public final class GroupLifeRecords {
         LocalDateTime decidedAt;
         @Column(name = "decision_note", length = 500)
         String decisionNote;
+        @Column(name = "target_scheme_ref", length = 20)
+        String targetSchemeRef;
+        @jakarta.persistence.Lob
+        @Column(name = "impact_detail")
+        String impactDetail;
     }
 
     /** A borrower's loan under a lender's group credit scheme, with its certificate (NS-GL06-001). */

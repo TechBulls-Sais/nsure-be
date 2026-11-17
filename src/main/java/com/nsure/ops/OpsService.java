@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.nsure.audit.evidence.EvidenceChain;
 import com.nsure.common.exception.ConflictException;
 import com.nsure.common.exception.NotFoundException;
+import com.nsure.grouplife.GroupLifeService;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.service.PlatformSecurityContext;
@@ -48,11 +49,14 @@ public class OpsService {
     private final JdbcTemplate jdbc;
     private final PlatformSecurityContext security;
     private final EvidenceChain audit;
+    private final GroupLifeService groupLife;
 
-    public OpsService(JdbcTemplate jdbc, PlatformSecurityContext security, EvidenceChain audit) {
+    public OpsService(JdbcTemplate jdbc, PlatformSecurityContext security, EvidenceChain audit,
+            GroupLifeService groupLife) {
         this.jdbc = jdbc;
         this.security = security;
         this.audit = audit;
+        this.groupLife = groupLife;
     }
 
     // ── partner portals ───────────────────────────────────────────────────────────────────────────
@@ -97,6 +101,8 @@ public class OpsService {
                 out.put("invoices", jdbc.query("select i.record_ref, i.billing_period, i.amount, i.paid_amount,"
                         + " i.outstanding, i.invoice_status, i.member_count from grp_invoice i join ins_scheme s on"
                         + " s.id = i.scheme_id where s.record_ref = ? order by i.id desc", ROW, scope));
+                // Certificates of the sponsor's own scheme only: accepted cover, with pending cover shown as pending.
+                out.put("certificates", groupLife.sponsorCertificates(scope));
             }
             default -> {
                 out.put("partner", first("select record_ref, name, contact_email from crd_lender where record_ref = ?",

@@ -60,9 +60,18 @@ public class GroupLifeController {
         return groupLife.saveBenefit(ref, body);
     }
 
+    /** {note}: a second person approves the scheme's pending benefit changes (publishes SchemePlanApproved). */
+    @PostMapping("/schemes/{ref}/benefits/approval")
+    public List<Map<String, Object>> approvePlan(@PathVariable String ref, @RequestBody JsonNode body) {
+        return groupLife.approvePlan(ref, body);
+    }
+
     @GetMapping("/schemes/{ref}/impact")
-    public Map<String, Object> impact(@PathVariable String ref, @RequestParam String eventType) {
-        return groupLife.impact(ref, eventType);
+    public Map<String, Object> impact(@PathVariable String ref, @RequestParam String eventType,
+            @RequestParam(required = false) String effectiveDate,
+            @RequestParam(required = false) String targetSchemeRef,
+            @RequestParam(required = false) String rateChangePercent) {
+        return groupLife.impact(ref, eventType, effectiveDate, targetSchemeRef, rateChangePercent);
     }
 
     @GetMapping("/events")
@@ -70,7 +79,7 @@ public class GroupLifeController {
         return groupLife.events(schemeRef);
     }
 
-    /** {eventType, effectiveDate?, rateChangePercent?, reason} */
+    /** {eventType RENEWAL|SUSPENSION|CLOSURE|TRANSFER|REACTIVATION, effectiveDate?, rateChangePercent?, targetSchemeRef?, reason} */
     @PostMapping("/schemes/{ref}/events")
     public Map<String, Object> requestEvent(@PathVariable String ref, @RequestBody JsonNode body) {
         return groupLife.requestEvent(ref, body);
@@ -80,6 +89,21 @@ public class GroupLifeController {
     @PostMapping("/events/{ref}/decision")
     public Map<String, Object> decideEvent(@PathVariable String ref, @RequestBody JsonNode body) {
         return groupLife.decideEvent(ref, body);
+    }
+
+    @GetMapping("/schemes/{ref}/timeline")
+    public List<Map<String, Object>> timeline(@PathVariable String ref) {
+        return groupLife.timeline(ref);
+    }
+
+    @GetMapping("/schemes/{ref}/resolved-rules")
+    public Map<String, Object> resolvedRules(@PathVariable String ref) {
+        return groupLife.resolvedRules(ref);
+    }
+
+    @GetMapping("/schemes/{ref}/bordereaux")
+    public List<Map<String, Object>> bordereaux(@PathVariable String ref) {
+        return groupLife.bordereaux(ref);
     }
 
     @GetMapping("/schemes/{ref}/certificates")
@@ -96,6 +120,12 @@ public class GroupLifeController {
     @PostMapping("/schemes/{ref}/credit-loans")
     public Map<String, Object> bordereau(@PathVariable String ref, @RequestBody JsonNode body) {
         return groupLife.bordereau(ref, body);
+    }
+
+    @GetMapping("/credit-loans/{id}/settlement")
+    public Map<String, Object> settlementPreview(@PathVariable Long id,
+            @RequestParam(required = false) String settlementDate) {
+        return groupLife.settlementPreview(id, settlementDate);
     }
 
     @PostMapping("/credit-loans/{id}/settlement")
