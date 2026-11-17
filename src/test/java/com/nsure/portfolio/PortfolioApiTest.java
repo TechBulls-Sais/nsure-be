@@ -64,13 +64,24 @@ class PortfolioApiTest {
                 .andExpect(jsonPath("$.id").value("CUS-1007"))
                 .andExpect(jsonPath("$.status").value("Pending KYC"));
 
+        // A-33: no tier, no server price: a premium sent with the application is not taken as its price.
         mockMvc.perform(post("/portfolio/applications")
                         .with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"declarationAccepted":true,"disclosures":{"TOBACCO":"NO","TREATMENT":"NO"},"customerRef":"CUS-1007","product":"Term Life","amount":250000,"premium":180}
+                                {"declarationAccepted":true,"disclosures":{"TOBACCO":"NO","TREATMENT":"NO"},"customerRef":"CUS-1007","product":"Term Life","amount":1500000,"premium":900}
+                                """))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Choose a tier")));
+        mockMvc.perform(post("/portfolio/applications")
+                        .with(signedIn("admin", "password"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"declarationAccepted":true,"disclosures":{"TOBACCO":"NO","TREATMENT":"NO"},"customerRef":"CUS-1007","product":"Term Life","tier":"Bronze","amount":1500000,"premium":900}
                                 """))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.quoteRef").isNotEmpty())
+                .andExpect(jsonPath("$.premium").value(org.hamcrest.Matchers.not(900.0)))
                 .andExpect(jsonPath("$.id").value("APP-2049"))
                 // NS-IL01-003: identity verification is outstanding while the customer is Pending KYC.
                 .andExpect(jsonPath("$.status").value("Evidence needed"));

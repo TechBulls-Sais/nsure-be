@@ -390,6 +390,12 @@ public class PortfolioService {
             applyQuote(row, quote);
             lives = quotes.pricedLives(quote);
         } else {
+            // NS-IL01-004: the server prices every application from the product's tier; a premium sent with it is
+            // never taken as the price (A-33).
+            if (blank(optional(body, "tier")).isBlank()) {
+                throw new IllegalArgumentException("Choose a tier for " + row.getProduct() + ": an application is"
+                        + " priced from the product's tiers, not from a premium sent with it.");
+            }
             QuoteService.PricedOffer offer = applyTierOffer(row, body);
             lives = offer == null ? List.of() : offer.lines();
             if (offer != null) {
