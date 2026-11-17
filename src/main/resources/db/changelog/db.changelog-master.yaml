@@ -242,3 +242,6 @@ databaseChangeLog:
   - include:
       file: changes/097-access-review.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/098-security-event-handling.yaml
+      relativeToChangelogFile: true

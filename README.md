@@ -81,6 +81,12 @@ each one; nobody decides their own. The review closes only when every login is d
 alerted to the `UPDATE_USER` holders, who remove the access through the four-eyes change. Every step is audit evidence.
 Audit evidence can be filtered by record, type, actor and dates and downloaded as CSV (`/audits/evidence/export`).
 
+**Security events** (`/admin/security-events`, Access → Security events): emergency access granted/revoked, a control
+switched off, payment tampering, flagged access and a change applied without a second approver. Someone holding the
+permission the event was raised for takes it and alone resolves it with a written outcome (both are audit evidence).
+An event nobody takes within `nsure.security-events.escalate-after-hours` (4) is escalated once, as an alert to the
+security administrators (`GRANT_EMERGENCY_ACCESS`).
+
 ### Guards on the grant table (spec 04 §8)
 
 - A **protected role** (Policyholder / End User, Guest, All) never gets a permission, desk access or an approval limit,

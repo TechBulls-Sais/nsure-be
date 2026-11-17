@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # SH11: security events have an owner and an escalation route. The alert row stays immutable; its handling (owner,
+  # outcome, escalation) is kept beside it, one row per alert, created when the event is first taken or escalated.
+  - changeSet:
+      id: 098-security-event-handling
+      author: nsure
+      changes:
+        - createTable:
+            tableName: security_event_handling
+            columns:
+              - column: {name: alert_id, type: bigint, constraints: {primaryKey: true, nullable: false, foreignKeyName: fk_security_event_alert, references: staff_alert(id)}}
+              - column: {name: owner, type: varchar(100)}
+              - column: {name: owned_at, type: timestamp(6)}
+              - column: {name: resolved_by, type: varchar(100)}
+              - column: {name: resolved_at, type: timestamp(6)}
+              - column: {name: resolution, type: varchar(500)}
+              - column: {name: escalated_at, type: timestamp(6)}

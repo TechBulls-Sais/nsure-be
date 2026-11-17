@@ -211,6 +211,12 @@ public final class ApiAccessRules {
             rule(POST, "/admin/emergency-access", anyOf("GRANT_EMERGENCY_ACCESS")),
             rule(POST, "/admin/emergency-access/*/revoke", anyOf("GRANT_EMERGENCY_ACCESS")),
             rule(POST, "/admin/emergency-access/*/review", anyOf("REVIEW_EMERGENCY_ACCESS")),
+            // Security events with an owner and escalation route: auditors list; the service checks the event's code.
+            rule(GET, "/admin/security-events", anyOf("READ_AUDIT")),
+            rule(POST, "/admin/security-events/*/own", anyOf("READ_AUDIT", "READ_CONTROL", "READ_PAYMENT",
+                    "UPDATE_USER")),
+            rule(POST, "/admin/security-events/*/resolve", anyOf("READ_AUDIT", "READ_CONTROL", "READ_PAYMENT",
+                    "UPDATE_USER")),
             // Access recertification (NS-SH11-007): reviewers decide, auditors read.
             rule(GET, "/admin/access-reviews", anyOf("REVIEW_ACCESS", "READ_AUDIT")),
             rule(GET, "/admin/access-reviews/*", anyOf("REVIEW_ACCESS", "READ_AUDIT")),
