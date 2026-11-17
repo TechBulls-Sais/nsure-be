@@ -87,6 +87,17 @@ public class PaymentNotifications {
             problem = unconfirmed(provider, providerRef, amount, currency);
         }
         if (problem == null) {
+            // SH04: the provider confirmed it holds this money under this reference.
+            Map<String, Object> confirmed = new LinkedHashMap<>();
+            confirmed.put("receiptRef", provider + ":" + providerRef);
+            confirmed.put("provider", provider);
+            confirmed.put("providerRef", providerRef);
+            confirmed.put("policyRef", policyRef);
+            confirmed.put("amount", amount.toPlainString());
+            confirmed.put("currency", currency);
+            confirmed.put("method", method);
+            confirmed.put("source", "NOTIFICATION");
+            outbox.publish(Events.RECEIPT_CONFIRMED, providerRef, confirmed, user.getUsername());
             try {
                 policies.pay(policyRef, method, "integration:" + provider);
                 message.outcome(InboundMessage.APPLIED, policyRef, "Premium collected by " + method

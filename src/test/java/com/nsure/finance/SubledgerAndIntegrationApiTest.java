@@ -88,6 +88,13 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(status().isConflict());
         mockMvc.perform(get("/integration/inbound").with(signedIn("ops", "password")))
                 .andExpect(jsonPath("$[?(@.providerRef == 'OM-1001')]").value(org.hamcrest.Matchers.hasSize(1)));
+        // SH04: the provider's confirmation is a ReceiptConfirmed, once; unconfirmed notifications raise none.
+        String confirmed = mockMvc.perform(get("/integration/events?eventType=ReceiptConfirmed").with(signedIn("ops", "password")))
+                .andReturn().getResponse().getContentAsString();
+        assertThat((List<String>) JsonPath.read(confirmed, "$[?(@.aggregateRef == 'OM-1001')].payload")).singleElement()
+                .asString().contains("\"policyRef\":\"" + ref + "\"").contains("\"source\":\"NOTIFICATION\"");
+        assertThat((List<Object>) JsonPath.read(confirmed, "$[?(@.aggregateRef == 'OM-0998' || @.aggregateRef == 'OM-0999')]"))
+                .isEmpty();
 
         dispatch();
         dispatch();
@@ -404,6 +411,12 @@ class SubledgerAndIntegrationApiTest {
         mockMvc.perform(post("/finance/suspense/" + wrongAmount + "/clearance/approve").with(signedIn("secadmin", "password")))
                 .andExpect(jsonPath("$.status").value("REFUNDED"))
                 .andExpect(jsonPath("$.clearedBy").value("secadmin"));
+        // SH04: the refund paid out is a RefundSettled naming who asked and who approved.
+        String refunds = mockMvc.perform(get("/integration/events?eventType=RefundSettled").with(signedIn("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        assertThat((List<String>) JsonPath.read(refunds, "$[?(@.aggregateRef == 'BF-77')].payload")).singleElement()
+                .asString().contains("\"requestedBy\":\"admin\"").contains("\"approvedBy\":\"secadmin\"")
+                .contains("\"amount\":\"1.00\"");
 
         // A receipt quoting an unknown policy is allocated to the right one once approved; the premium is collected.
         mockMvc.perform(json(post("/integration/payment-notifications"), "admin", "{\"provider\":\"BankFeed\","

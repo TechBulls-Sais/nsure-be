@@ -87,6 +87,13 @@ public final class Events {
     public static final String INVOICE_ISSUED = "InvoiceIssued";
     public static final String RECEIPT_ALLOCATED = "ReceiptAllocated";
     public static final String PAYMENT_RETURNED = "PaymentReturned";
+    /**
+     * receiptRef, provider, providerRef, policyRef, amount, currency, method, source (CHECKOUT or NOTIFICATION). The
+     * provider confirmed it holds the money; allocation to the policy follows as ReceiptAllocated (SH04).
+     */
+    public static final String RECEIPT_CONFIRMED = "ReceiptConfirmed";
+    /** refundRef, source (e.g. SUSPENSE), providerRef, policyRef, amount, requestedBy, approvedBy. A refund paid out. */
+    public static final String REFUND_SETTLED = "RefundSettled";
     public static final String BENEFIT_LIMIT_CONSUMED = "BenefitLimitConsumed";
     // SH05 names for the claim contract, published alongside the older names that existing handlers consume:
     // ClaimRegistered with ClaimReceived, ClaimDeclined with ClaimRejected, ClaimPaymentSettled with ClaimPaid.
