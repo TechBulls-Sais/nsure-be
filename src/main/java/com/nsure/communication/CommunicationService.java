@@ -1,6 +1,8 @@
 package com.nsure.communication;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.nsure.audit.evidence.EvidenceChain;
+import com.nsure.common.exception.ConflictException;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.integration.DomainEvent;
 import com.nsure.integration.Events;
@@ -44,14 +46,16 @@ public class CommunicationService {
     private final EntityManager em;
     private final PlatformSecurityContext security;
     private final CommunicationDispatcher dispatcher;
+    private final EvidenceChain audit;
     private final String portalLink;
 
     public CommunicationService(EntityManager em, PlatformSecurityContext security,
-            CommunicationDispatcher dispatcher,
+            CommunicationDispatcher dispatcher, EvidenceChain audit,
             @Value("${nsure.communications.portal-link:http://127.0.0.1:5180}") String portalLink) {
         this.em = em;
         this.security = security;
         this.dispatcher = dispatcher;
+        this.audit = audit;
         this.portalLink = portalLink;
     }
 
@@ -115,10 +119,7 @@ public class CommunicationService {
     @Transactional
     public CommunicationViews.TemplateView approveTemplate(Long id) {
         AppUser user = user("APPROVE_TEMPLATE");
-        MessageTemplate template = em.find(MessageTemplate.class, id);
-        if (template == null) {
-            throw new NotFoundException("Template " + id + " not found");
-        }
+        MessageTemplate template = template(id);
         if (!MessageTemplate.DRAFT.equals(template.getStatus())) {
             throw new IllegalArgumentException("Only a draft can be approved; " + template.getCode() + " v"
                     + template.getVersion() + " is " + template.getStatus() + ".");
@@ -141,6 +142,81 @@ public class CommunicationService {
                 .forEach(MessageTemplate::retire);
         template.approve(user.getUsername());
         return CommunicationViews.TemplateView.of(template);
+    }
+
+    /**
+     * D-22, first step of withdrawing an approved version without a replacement: {reason}. The version keeps being used
+     * until another holder of APPROVE_TEMPLATE confirms, as with any approval of template content.
+     */
+    @Transactional
+    public CommunicationViews.TemplateView requestWithdrawal(Long id, JsonNode body) {
+        AppUser user = security.authenticatedUser();
+        if (!user.hasPermissionTo("MANAGE_COMMUNICATION") && !user.hasPermissionTo("APPROVE_TEMPLATE")) {
+            throw new NoAuthorizationException("User has no authority to withdraw message templates");
+        }
+        MessageTemplate template = template(id);
+        if (!MessageTemplate.APPROVED.equals(template.getStatus())) {
+            throw new IllegalArgumentException("Only an approved template can be withdrawn; " + template.getCode() + " v"
+                    + template.getVersion() + " is " + template.getStatus() + ".");
+        }
+        if (template.isWithdrawalPending()) {
+            throw new ConflictException(template.getCode() + " v" + template.getVersion()
+                    + " already has a withdrawal waiting for approval, asked by " + template.getWithdrawalRequestedBy()
+                    + ".");
+        }
+        String reason = text(body, "reason");
+        if (reason == null || reason.length() < 10 || reason.length() > 500) {
+            throw new IllegalArgumentException("Give the reason for withdrawing the template (10 to 500 characters).");
+        }
+        template.requestWithdrawal(user.getUsername(), reason);
+        audit.record(user.getUsername(), "Template withdrawal requested", "Message template",
+                template.getCode() + " v" + template.getVersion(), reason);
+        return CommunicationViews.TemplateView.of(template);
+    }
+
+    /** D-22, second step: someone other than the requester confirms; no new message uses the version from now on. */
+    @Transactional
+    public CommunicationViews.TemplateView approveWithdrawal(Long id) {
+        AppUser user = user("APPROVE_TEMPLATE");
+        MessageTemplate template = pendingWithdrawal(id);
+        if (template.getWithdrawalRequestedBy().equalsIgnoreCase(user.getUsername())) {
+            throw new NoAuthorizationException(
+                    "You asked for this withdrawal, so another user must approve it (maker-checker).");
+        }
+        template.withdraw(user.getUsername());
+        audit.record(user.getUsername(), "Template withdrawn", "Message template",
+                template.getCode() + " v" + template.getVersion(),
+                "Asked by " + template.getWithdrawalRequestedBy() + ": " + template.getWithdrawalReason());
+        return CommunicationViews.TemplateView.of(template);
+    }
+
+    /** D-22: the withdrawal is declined and the version stays approved. */
+    @Transactional
+    public CommunicationViews.TemplateView declineWithdrawal(Long id) {
+        AppUser user = user("APPROVE_TEMPLATE");
+        MessageTemplate template = pendingWithdrawal(id);
+        String asked = template.getWithdrawalRequestedBy() + ": " + template.getWithdrawalReason();
+        template.declineWithdrawal();
+        audit.record(user.getUsername(), "Template withdrawal declined", "Message template",
+                template.getCode() + " v" + template.getVersion(), "Asked by " + asked);
+        return CommunicationViews.TemplateView.of(template);
+    }
+
+    private MessageTemplate pendingWithdrawal(Long id) {
+        MessageTemplate template = template(id);
+        if (!template.isWithdrawalPending()) {
+            throw new ConflictException(template.getCode() + " v" + template.getVersion()
+                    + " has no withdrawal waiting for approval.");
+        }
+        return template;
+    }
+
+    private MessageTemplate template(Long id) {
+        MessageTemplate template = em.find(MessageTemplate.class, id);
+        if (template == null) {
+            throw new NotFoundException("Template " + id + " not found");
+        }
+        return template;
     }
 
     // ── messages ─────────────────────────────────────────────────────────────────────────────────────
@@ -175,7 +251,10 @@ public class CommunicationService {
         String subject = text(body, "subject");
         String content = text(body, "body");
         validateContent(channel, subject, content);
-        if (WHATSAPP.equals(channel)) {
+        // Consent first (AT-SH09B-02): an opted-out or not-opted-in channel is recorded as SUPPRESSED with the reason,
+        // whatever else would have stopped the send, so the opt-out is visible in the log (D-23).
+        Route route = route(customer, channel);
+        if (route.reason() == null && WHATSAPP.equals(channel)) {
             // Blueprint §5 / WhatsApp Business policy: a free-form message only within 24 hours of the customer's last
             // WhatsApp message; outside that window only approved templates are sent.
             java.time.LocalDateTime last = lastInbound(customer.getRef(), WHATSAPP);
@@ -188,7 +267,11 @@ public class CommunicationService {
                 SERVICE_MESSAGE, customer.getRef(), customer.getRef(), customer.getName(), channel,
                 user.getUsername());
         message.content(null, null, subject, content);
-        route(message, customer, channel);
+        if (route.reason() == null) {
+            message.queue(route.contact());
+        } else {
+            message.suppress(route.contact(), route.reason());
+        }
         save(message);
         return CommunicationViews.MessageView.of(message);
     }

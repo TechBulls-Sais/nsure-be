@@ -200,6 +200,23 @@ class CommunicationApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("QUEUED"));
 
+        // D-23 / AT-SH09B-02: once the customer opts out of WhatsApp, a new send is suppressed with the reason.
+        mockMvc.perform(json(put("/communications/preferences/" + ref), "service",
+                        "{\"channel\":\"WHATSAPP\",\"status\":\"OPTED_OUT\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.channels[1].deliverable").value(false));
+        mockMvc.perform(json(post("/communications/messages"), "service", whatsapp))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUPPRESSED"))
+                .andExpect(jsonPath("$.lastError").value("Customer opted out of WhatsApp messages."));
+        // The opt-out is checked before the 24-hour window, so it shows even when the window has closed.
+        jdbc.update("update com_inbound set received_at = ? where customer_ref = ?",
+                java.sql.Timestamp.valueOf(java.time.LocalDateTime.now().minusDays(3)), ref);
+        mockMvc.perform(json(post("/communications/messages"), "service", whatsapp))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUPPRESSED"))
+                .andExpect(jsonPath("$.lastError").value("Customer opted out of WhatsApp messages."));
+
         mockMvc.perform(get("/communications/messages?status=SUPPRESSED").with(signedIn("ops", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].status").value("SUPPRESSED"));
@@ -304,6 +321,72 @@ class CommunicationApiTest {
         mockMvc.perform(json(post("/communications/templates"), "service",
                         "{\"code\":\"POLICY_ISSUED_EMAIL\",\"channel\":\"WHATSAPP\",\"body\":\"x\"}"))
                 .andExpect(status().isUnprocessableEntity());
+    }
+
+    /** D-22: an approved template is withdrawn without a replacement, with a reason and a second person. */
+    @Test
+    void anApprovedTemplateIsWithdrawnWithAReasonAndASecondPerson() throws Exception {
+        String drafted = mockMvc.perform(json(post("/communications/templates"), "service",
+                        "{\"code\":\"CLAIM_REJECTED_EMAIL_D22\",\"eventType\":\"ClaimRejected\",\"channel\":\"EMAIL\","
+                                + "\"subject\":\"Claim {{claimRef}}\",\"body\":\"Dear {{customerName}}, see {{portalLink}}\"}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Number id = JsonPath.read(drafted, "$.id");
+        String path = "/communications/templates/" + id;
+
+        // A draft cannot be withdrawn: it is not in use.
+        mockMvc.perform(json(post(path + "/withdraw"), "service", "{\"reason\":\"Wrong wording for this event\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(post(path + "/approve").with(signedIn("ops", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"));
+
+        // A reason is required; the customer never reaches it.
+        mockMvc.perform(json(post(path + "/withdraw"), "service", "{\"reason\":\"short\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post(path + "/withdraw"), "customer", "{\"reason\":\"Wrong wording for this event\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post(path + "/withdraw"), "service", "{\"reason\":\"Wrong wording for this event\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.withdrawalRequestedBy").value("service"))
+                .andExpect(jsonPath("$.withdrawalReason").value("Wrong wording for this event"));
+        mockMvc.perform(json(post(path + "/withdraw"), "service", "{\"reason\":\"Wrong wording for this event\"}"))
+                .andExpect(status().isConflict());
+        // The requester cannot confirm (service lacks APPROVE_TEMPLATE; admin asking and confirming is refused too).
+        mockMvc.perform(post(path + "/withdraw/approve").with(signedIn("service", "password")))
+                .andExpect(status().isForbidden());
+        // Declined: still approved, the request cleared.
+        mockMvc.perform(post(path + "/withdraw/decline").with(signedIn("ops", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.withdrawalRequestedBy").value(""));
+
+        mockMvc.perform(json(post(path + "/withdraw"), "admin", "{\"reason\":\"Sends the wrong appeal address\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(post(path + "/withdraw/approve").with(signedIn("admin", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post(path + "/withdraw/approve").with(signedIn("ops", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("WITHDRAWN"))
+                .andExpect(jsonPath("$.withdrawnBy").value("ops"))
+                .andExpect(jsonPath("$.withdrawalReason").value("Sends the wrong appeal address"));
+        mockMvc.perform(post(path + "/withdraw/approve").with(signedIn("ops", "password")))
+                .andExpect(status().isConflict());
+        assertThat(jdbc.queryForObject("select count(*) from audit_evidence where entity_ref = ?", Long.class,
+                "CLAIM_REJECTED_EMAIL_D22 v1")).isGreaterThanOrEqualTo(4L);
+
+        // A withdrawn version sends nothing: the event finds no approved template for the code.
+        DomainEvent event = new DomainEvent(java.util.UUID.randomUUID().toString(), Events.CLAIM_REJECTED, "CLM-D22",
+                java.util.UUID.randomUUID().toString(), java.time.LocalDateTime.now(),
+                mapper.readTree("{\"claimRef\":\"CLM-D22\",\"customerName\":\"Nobody D22\"}"));
+        tx.executeWithoutResult(status -> handler.handle(event));
+        assertThat(messagesFor("CLM-D22")).noneMatch(m -> "CLAIM_REJECTED_EMAIL_D22".equals(m.get("templateCode")));
+        // A new version can still be drafted for the code.
+        mockMvc.perform(json(post("/communications/templates"), "service",
+                        "{\"code\":\"CLAIM_REJECTED_EMAIL_D22\",\"subject\":\"Claim {{claimRef}}\",\"body\":\"Corrected\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(2));
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────────

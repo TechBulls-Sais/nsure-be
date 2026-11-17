@@ -12,6 +12,10 @@ import java.time.LocalDateTime;
  * One version of a message template (NS-SH09B-003). Drafted by one user, approved by another; approving a version
  * retires the previously approved version of the same code. Approved content is never edited: a change is a new
  * version. The body holds {@code {{field}}} merge fields filled from the event payload.
+ *
+ * <p>An approved version can also be withdrawn without a replacement (D-22): one user asks with a reason, another
+ * holder of APPROVE_TEMPLATE confirms, and it becomes WITHDRAWN, so no new message uses it. Until then it is still
+ * used, and the request can be declined.
  */
 @Entity
 @Table(name = "com_template")
@@ -20,6 +24,7 @@ public class MessageTemplate {
     public static final String DRAFT = "DRAFT";
     public static final String APPROVED = "APPROVED";
     public static final String RETIRED = "RETIRED";
+    public static final String WITHDRAWN = "WITHDRAWN";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -61,6 +66,21 @@ public class MessageTemplate {
     @Column(name = "approved_at")
     private LocalDateTime approvedAt;
 
+    @Column(name = "withdrawal_reason", length = 500)
+    private String withdrawalReason;
+
+    @Column(name = "withdrawal_requested_by", length = 100)
+    private String withdrawalRequestedBy;
+
+    @Column(name = "withdrawal_requested_at")
+    private LocalDateTime withdrawalRequestedAt;
+
+    @Column(name = "withdrawn_by", length = 100)
+    private String withdrawnBy;
+
+    @Column(name = "withdrawn_at")
+    private LocalDateTime withdrawnAt;
+
     protected MessageTemplate() {
     }
 
@@ -86,6 +106,31 @@ public class MessageTemplate {
 
     void retire() {
         status = RETIRED;
+    }
+
+    /** First step of a withdrawal: the reason and who asked. The version stays in use until someone else confirms. */
+    void requestWithdrawal(String requester, String reason) {
+        withdrawalRequestedBy = requester;
+        withdrawalReason = reason;
+        withdrawalRequestedAt = LocalDateTime.now();
+    }
+
+    /** The request was declined: the version stays approved, and the declined request is cleared. */
+    void declineWithdrawal() {
+        withdrawalRequestedBy = null;
+        withdrawalReason = null;
+        withdrawalRequestedAt = null;
+    }
+
+    /** Second step: another person confirms, and no new message uses this version. */
+    void withdraw(String approver) {
+        status = WITHDRAWN;
+        withdrawnBy = approver;
+        withdrawnAt = LocalDateTime.now();
+    }
+
+    public boolean isWithdrawalPending() {
+        return APPROVED.equals(status) && withdrawalRequestedBy != null;
     }
 
     public Long getId() {
@@ -138,5 +183,25 @@ public class MessageTemplate {
 
     public LocalDateTime getApprovedAt() {
         return approvedAt;
+    }
+
+    public String getWithdrawalReason() {
+        return withdrawalReason;
+    }
+
+    public String getWithdrawalRequestedBy() {
+        return withdrawalRequestedBy;
+    }
+
+    public LocalDateTime getWithdrawalRequestedAt() {
+        return withdrawalRequestedAt;
+    }
+
+    public String getWithdrawnBy() {
+        return withdrawnBy;
+    }
+
+    public LocalDateTime getWithdrawnAt() {
+        return withdrawnAt;
     }
 }

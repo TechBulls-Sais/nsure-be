@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # SH09B communications controls (work package d2).
+  - changeSet:
+      id: 100-template-withdrawal
+      author: nsure
+      comment: >-
+        D-22: an approved template version can be withdrawn without a replacement. One user asks with a reason,
+        another holder of APPROVE_TEMPLATE confirms; the version then becomes WITHDRAWN and no new message uses it.
+      changes:
+        - addColumn:
+            tableName: com_template
+            columns:
+              - column: {name: withdrawal_reason, type: varchar(500)}
+              - column: {name: withdrawal_requested_by, type: varchar(100)}
+              - column: {name: withdrawal_requested_at, type: timestamp(6)}
+              - column: {name: withdrawn_by, type: varchar(100)}
+              - column: {name: withdrawn_at, type: timestamp(6)}

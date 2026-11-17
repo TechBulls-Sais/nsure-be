@@ -42,6 +42,23 @@ public class CommunicationController {
         return communications.approveTemplate(id);
     }
 
+    /** {reason}: asks to withdraw an approved version without a replacement; another user confirms (D-22). */
+    @PostMapping("/templates/{id}/withdraw")
+    public CommunicationViews.TemplateView requestWithdrawal(@PathVariable Long id,
+            @RequestBody(required = false) JsonNode body) {
+        return communications.requestWithdrawal(id, body);
+    }
+
+    @PostMapping("/templates/{id}/withdraw/approve")
+    public CommunicationViews.TemplateView approveWithdrawal(@PathVariable Long id) {
+        return communications.approveWithdrawal(id);
+    }
+
+    @PostMapping("/templates/{id}/withdraw/decline")
+    public CommunicationViews.TemplateView declineWithdrawal(@PathVariable Long id) {
+        return communications.declineWithdrawal(id);
+    }
+
     @GetMapping("/messages")
     public List<CommunicationViews.MessageView> messages(@RequestParam(required = false) String status) {
         return communications.messages(status);

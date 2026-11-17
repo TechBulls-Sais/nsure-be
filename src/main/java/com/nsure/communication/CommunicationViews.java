@@ -24,13 +24,21 @@ public final class CommunicationViews {
             String approvedBy,
             String approvedAt,
             List<String> placeholders,
-            List<String> knownFields) {
+            List<String> knownFields,
+            // D-22: a withdrawal asked for (pending while the status is still APPROVED) or confirmed (WITHDRAWN).
+            String withdrawalReason,
+            String withdrawalRequestedBy,
+            String withdrawalRequestedAt,
+            String withdrawnBy,
+            String withdrawnAt) {
 
         static TemplateView of(MessageTemplate t) {
             return new TemplateView(t.getId(), t.getCode(), t.getEventType(), t.getChannel(), t.getAudience(),
                     t.getVersion(), blank(t.getSubject()), t.getBody(), t.getStatus(), t.getCreatedBy(),
                     time(t.getCreatedAt()), blank(t.getApprovedBy()), time(t.getApprovedAt()),
-                    MergeFields.placeholders(t.getSubject(), t.getBody()), MergeFields.known(t.getEventType()));
+                    MergeFields.placeholders(t.getSubject(), t.getBody()), MergeFields.known(t.getEventType()),
+                    blank(t.getWithdrawalReason()), blank(t.getWithdrawalRequestedBy()),
+                    time(t.getWithdrawalRequestedAt()), blank(t.getWithdrawnBy()), time(t.getWithdrawnAt()));
         }
     }
 
