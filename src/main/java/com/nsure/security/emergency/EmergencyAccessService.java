@@ -11,6 +11,7 @@ import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.repository.AppUserRepository;
 import com.nsure.security.repository.EmergencyAccessGrantRepository;
 import com.nsure.security.service.PlatformSecurityContext;
+import com.nsure.security.service.PortalCustomerLinks;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Locale;
@@ -26,7 +27,8 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>Justified: a written reason is required.</li>
  *   <li>Alerted: every holder of READ_AUDIT sees an alert when it is granted or revoked.</li>
  *   <li>Reviewed: after it ends, someone other than the granter and the grantee records a review.</li>
- *   <li>Nobody grants emergency access to themselves, and only staff can receive it.</li>
+ *   <li>Nobody grants emergency access to themselves, and only the insurer's staff can receive it: never a customer
+ *       or a partner portal login (agent, employer, lender).</li>
  * </ul>
  */
 @Service
@@ -42,10 +44,13 @@ public class EmergencyAccessService {
     private final PlatformSecurityContext security;
     private final StaffAlertService alerts;
     private final EvidenceChain evidence;
+    private final PortalCustomerLinks partnerLinks;
 
     public EmergencyAccessService(EmergencyAccessGrantRepository grants, AppUserRepository users,
-            PlatformSecurityContext security, StaffAlertService alerts, EvidenceChain evidence) {
+            PlatformSecurityContext security, StaffAlertService alerts, EvidenceChain evidence,
+            PortalCustomerLinks partnerLinks) {
         this.evidence = evidence;
+        this.partnerLinks = partnerLinks;
         this.grants = grants;
         this.users = users;
         this.security = security;
@@ -79,6 +84,11 @@ public class EmergencyAccessService {
         if (!grantee.isEnabled() || !grantee.isStaffUser()) {
             throw new IllegalArgumentException(grantee.getUsername()
                     + " is not an enabled staff user, so it cannot receive emergency access.");
+        }
+        // D-07: a partner login (agent, employer, lender) signs in like staff but is never the insurer's own staff.
+        if (grantee.isPartnerLogin() || partnerLinks.isPartnerLinked(grantee.getUsername())) {
+            throw new IllegalArgumentException(grantee.getUsername() + " is a partner portal login (agent, employer"
+                    + " or lender), so it cannot receive emergency access. Only the insurer's own staff can.");
         }
         boolean alreadyActive = grants.findByUserIdAndPermissionCodeAndRevokedAtIsNull(grantee.getId(), code)
                 .stream().anyMatch(EmergencyAccessGrant::isActive);

@@ -96,6 +96,19 @@ class EmergencyAccessApiTest {
         assertThat(call(get("/admin/emergency-access"), "actuary", null).getStatus()).isEqualTo(403);
     }
 
+    @Test
+    void partnerPortalLoginsNeverReceiveEmergencyAccess() throws Exception {
+        // D-07: agent, employer and lender sign in like staff (their role has desk access) but are not insurer staff.
+        for (String partner : List.of("agent", "employer", "lender")) {
+            MockHttpServletResponse refused = grant("admin", partner, "UPDATE_CONTROL", 1,
+                    "Partner logins must never get break-glass access");
+            assertThat(refused.getStatus()).as(refused.getContentAsString()).isEqualTo(422);
+            assertThat(refused.getContentAsString()).contains("partner portal login");
+        }
+        List<String> holders = JsonPath.read(body(get("/admin/emergency-access"), "admin"), "$[*].username");
+        assertThat(holders).doesNotContain("agent", "employer", "lender");
+    }
+
     private MockHttpServletResponse grant(String granter, String username, String permission, int hours, String reason)
             throws Exception {
         return call(post("/admin/emergency-access"), granter, "{\"username\":\"" + username + "\",\"permission\":\""
