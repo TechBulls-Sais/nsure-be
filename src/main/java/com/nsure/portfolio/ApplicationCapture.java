@@ -241,7 +241,8 @@ public class ApplicationCapture {
                 app.getMandateDebitDay(), app.getChannel() == null ? "DIRECT" : app.getChannel(),
                 app.getIntermediaryCode(), app.getDeclaredBy(), app.getDeclaredAt(), app.getSubmittedBy(),
                 app.getSubmittedAt(), disclosures, items, draft ? submissionProblems(app) : List.of(),
-                missingEvidence(app, customer), preCapture, app.getPayerName(), app.getPayerRelationship());
+                missingEvidence(app, customer), preCapture, app.getPayerName(), app.getPayerRelationship(),
+                app.getRowVersion());
     }
 
     public List<PortfolioViews.DisclosureItem> questionsFor(String product) {

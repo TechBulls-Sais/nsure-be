@@ -73,6 +73,11 @@ public class CustomerAccount {
     @Column(name = "duplicate_review", length = 500)
     private String duplicateReview;
 
+    // Optimistic locking (NS-ARC-005): a write based on a stale copy fails with 409 instead of overwriting.
+    @jakarta.persistence.Version
+    @Column(name = "row_version", nullable = false)
+    private long rowVersion;
+
     protected CustomerAccount() {
     }
 
@@ -222,5 +227,9 @@ public class CustomerAccount {
 
     public void setDuplicateReview(String duplicateReview) {
         this.duplicateReview = duplicateReview;
+    }
+
+    public long getRowVersion() {
+        return rowVersion;
     }
 }

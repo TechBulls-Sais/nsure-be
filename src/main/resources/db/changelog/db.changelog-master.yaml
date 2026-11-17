@@ -239,3 +239,6 @@ databaseChangeLog:
   - include:
       file: changes/081-identity-documents.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/082-row-versions.yaml
+      relativeToChangelogFile: true

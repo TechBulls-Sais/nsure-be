@@ -426,6 +426,7 @@ public class PortfolioService {
             // NS-IL01-005: the rules accept an eligible case; anything else is referred to an underwriter.
             underwriting.getObject().assess(row, customer, actor.getUsername());
         }
+        em.flush(); // the returned row version is the stored one (If-Match on the next change)
         return cover(row);
     }
 
@@ -481,6 +482,7 @@ public class PortfolioService {
         AppUser actor = security.authenticatedUser();
         actor.validateHasPermissionTo("UPDATE_APPLICATION");
         InsuranceApplication app = one(InsuranceApplication.class, ref, "Application");
+        com.nsure.common.ExpectedVersion.check("Application " + ref, app.getRowVersion());
         if (!ApplicationCapture.DRAFT.equals(app.getStatus())) {
             throw new IllegalArgumentException(ref + " was submitted; its answers and declaration can no longer change.");
         }
@@ -497,6 +499,7 @@ public class PortfolioService {
             actor.validateHasPermissionTo("UPDATE_APPLICATION");
         }
         InsuranceApplication app = one(InsuranceApplication.class, ref, "Application");
+        com.nsure.common.ExpectedVersion.check("Application " + ref, app.getRowVersion());
         if (!ApplicationCapture.DRAFT.equals(app.getStatus())) {
             throw new com.nsure.common.exception.ConflictException(ref + " is already " + app.getStatus() + ".");
         }
@@ -513,6 +516,7 @@ public class PortfolioService {
             }
         }
         underwriting.getObject().assess(app, customer, actor.getUsername());
+        em.flush();
         return capture.checklist(app, customer);
     }
 
@@ -522,12 +526,14 @@ public class PortfolioService {
         AppUser actor = security.authenticatedUser();
         actor.validateHasPermissionTo("UPDATE_APPLICATION");
         InsuranceApplication app = one(InsuranceApplication.class, ref, "Application");
+        com.nsure.common.ExpectedVersion.check("Application " + ref, app.getRowVersion());
         CustomerAccount customer = customerOf(app);
         capture.recordEvidence(app, customer, text(body, "documentType"), optional(body, "note"), actor.getUsername());
         // The last piece of evidence on an application underwriting has already cleared makes it ready to issue.
         if (ApplicationCapture.UNDER_REVIEW.equals(app.getStatus()) && underwriting.getObject().isCleared(app.getRef())) {
             app.setStatus("Ready to issue");
         }
+        em.flush();
         return capture.checklist(app, customer);
     }
 
@@ -642,6 +648,7 @@ public class PortfolioService {
         if (!body.hasNonNull("status")) {
             return cover(row);
         }
+        com.nsure.common.ExpectedVersion.check("Application " + ref, row.getRowVersion());
         // The application's state follows its workflow; only these two moves are made by hand.
         String status = body.get("status").asText().trim();
         if ("Issued".equalsIgnoreCase(row.getStatus())) {
@@ -659,6 +666,7 @@ public class PortfolioService {
             throw new IllegalArgumentException("An application can only be moved to Ready to issue or Withdrawn here;"
                     + " its other states come from submission, underwriting and issue.");
         }
+        em.flush();
         return cover(row);
     }
 
@@ -686,6 +694,8 @@ public class PortfolioService {
         if (applicationRef != null && !applicationRef.isBlank()) {
             application = one(InsuranceApplication.class, applicationRef.trim(), "Application");
             em.lock(application, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+            // NS-TXN-001: issued from the application as the caller last saw it (If-Match), if they say which.
+            com.nsure.common.ExpectedVersion.check("Application " + application.getRef(), application.getRowVersion());
         }
         // Issued from an application, the customer is the application's; otherwise the request names them.
         boolean named = !blank(optional(body, "customerRef")).isBlank() || !blank(optional(body, "name")).isBlank();
@@ -750,6 +760,7 @@ public class PortfolioService {
         if (application != null) {
             application.setStatus("Issued");
         }
+        em.flush();
         return cover(row);
     }
 
@@ -834,6 +845,7 @@ public class PortfolioService {
         AppUser staff = security.authenticatedUser();
         staff.validateHasPermissionTo("UPDATE_POLICY");
         InsurancePolicy policy = one(InsurancePolicy.class, ref, "Policy");
+        com.nsure.common.ExpectedVersion.check("Policy " + ref, policy.getRowVersion());
         requireEddClear(customerOf(policy));
         // A premium staff collected offline: the MANUAL rail, through the same settlement path as every payment.
         com.nsure.payment.PaymentSettlementService.PaymentInitiation result = settlement.getObject()
@@ -848,6 +860,7 @@ public class PortfolioService {
     public PortfolioViews.CoverView cancelPolicy(String ref, JsonNode body) {
         AppUser staff = security.authenticatedUser();
         staff.validateHasPermissionTo("UPDATE_POLICY");
+        expectPolicyVersion(ref);
         return cover(policyWorkflow.cancel(ref, optional(body, "reason"), staff.getUsername()));
     }
 
@@ -855,6 +868,7 @@ public class PortfolioService {
     public PortfolioViews.CoverView addBeneficiary(String ref, JsonNode body) {
         AppUser staff = security.authenticatedUser();
         staff.validateHasPermissionTo("UPDATE_POLICY");
+        expectPolicyVersion(ref);
         policyWorkflow.addBeneficiary(ref, beneficiaryInput(body), staff.getUsername());
         return cover(one(InsurancePolicy.class, ref, "Policy"));
     }
@@ -863,8 +877,14 @@ public class PortfolioService {
     public PortfolioViews.CoverView removeBeneficiary(String ref, Long id) {
         AppUser staff = security.authenticatedUser();
         staff.validateHasPermissionTo("UPDATE_POLICY");
+        expectPolicyVersion(ref);
         policyWorkflow.removeBeneficiary(ref, id, staff.getUsername());
         return cover(one(InsurancePolicy.class, ref, "Policy"));
+    }
+
+    /** NS-TXN-001: a staff command sent with If-Match runs only on the policy version the caller saw. */
+    private void expectPolicyVersion(String ref) {
+        com.nsure.common.ExpectedVersion.check("Policy " + ref, one(InsurancePolicy.class, ref, "Policy").getRowVersion());
     }
 
     /** Runs the scheduled sweeps now: expire unpaid policies, lapse those past their grace period. */
@@ -1018,6 +1038,7 @@ public class PortfolioService {
         AppUser reviewer = security.authenticatedUser();
         reviewer.validateHasPermissionTo("EDD_CUSTOMER");
         CustomerAccount row = one(CustomerAccount.class, ref, "Customer");
+        com.nsure.common.ExpectedVersion.check("Customer " + ref, row.getRowVersion());
         if (!"VERIFIED".equals(row.getKycStatus())) {
             throw new IllegalArgumentException("Mark KYC successful before recording the EDD review.");
         }
@@ -1035,6 +1056,7 @@ public class PortfolioService {
         history.record(WorkflowHistory.EDD_REVIEW, row.getRef(), row.getName(),
                 "VERIFIED".equals(decision) ? "Approved" : "Rejected", previous, decision, reason, reviewer.getUsername());
         parties.kycChanged(row, "EDD", previous, decision, reviewer.getUsername());
+        em.flush();
         return customer(row);
     }
 
@@ -1128,6 +1150,7 @@ public class PortfolioService {
         AppUser reviewer = security.authenticatedUser();
         reviewer.validateHasPermissionTo("KYC_CUSTOMER");
         CustomerAccount row = one(CustomerAccount.class, ref, "Customer");
+        com.nsure.common.ExpectedVersion.check("Customer " + ref, row.getRowVersion());
         String decision = body == null ? "VERIFIED" : defaultText(body, "decision", "VERIFIED").toUpperCase(Locale.ROOT);
         if (!Set.of("VERIFIED", "FAILED").contains(decision)) {
             throw new IllegalArgumentException("KYC decision must be VERIFIED or FAILED.");
@@ -1140,6 +1163,7 @@ public class PortfolioService {
         history.record(WorkflowHistory.KYC_REVIEW, row.getRef(), row.getName(),
                 "VERIFIED".equals(decision) ? "Approved" : "Rejected", previous, decision, reason, reviewer.getUsername());
         parties.kycChanged(row, "KYC", previous, decision, reviewer.getUsername());
+        em.flush();
         return customer(row);
     }
 
@@ -1492,7 +1516,8 @@ public class PortfolioService {
                 tiers,
                 blank(row.getKycRejectionReason()),
                 blank(row.getEddRejectionReason()),
-                blank(row.getDuplicateReview()));
+                blank(row.getDuplicateReview()),
+                row.getRowVersion());
     }
 
     private String createCustomerLogin(String username, String password) {
@@ -1602,7 +1627,9 @@ public class PortfolioService {
                 policy != null ? policyWorkflow.terms(policy).getMaxBeneficiaries() : maxBeneficiaries(row.getProduct()),
                 row instanceof InsuranceApplication a ? blank(a.getQuoteRef()) : policy != null ? blank(policy.getQuoteRef()) : "",
                 row instanceof InsuranceApplication a2 ? a2.getQuoteVersion() : policy != null ? policy.getQuoteVersion() : null,
-                blank(row.getCustomerRef()));
+                blank(row.getCustomerRef()),
+                row instanceof InsuranceApplication a3 ? Long.valueOf(a3.getRowVersion())
+                        : policy != null ? Long.valueOf(policy.getRowVersion()) : null);
     }
 
     private int maxBeneficiaries(String product) {

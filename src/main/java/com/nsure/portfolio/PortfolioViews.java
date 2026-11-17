@@ -29,7 +29,9 @@ public final class PortfolioViews {
             String kycRejectionReason,
             String eddRejectionReason,
             // Created although another customer holds the same identity number: the match and why (NS-SH01-002).
-            String duplicateReview
+            String duplicateReview,
+            // Row version: send it back as If-Match with a KYC or EDD decision (NS-TXN-001).
+            long version
     ) {
     }
 
@@ -86,7 +88,9 @@ public final class PortfolioViews {
             String quoteRef,
             Integer quoteVersion,
             // The customer record it belongs to: screens link records by this reference, never by name.
-            String customerRef
+            String customerRef,
+            // Row version of an application or policy (null otherwise): send it back as If-Match (NS-TXN-001).
+            Long version
     ) {
     }
 
@@ -117,7 +121,9 @@ public final class PortfolioViews {
             // Submitted before disclosures and the declaration were captured: they were never recorded for it.
             boolean preCapture,
             // The payer as captured, so a draft can be reopened in the application form (NS-UX-001).
-            String payerName, String payerRelationship) {
+            String payerName, String payerRelationship,
+            // The application's row version, for If-Match on the next change (NS-TXN-001).
+            long version) {
     }
 
     /** A stored quote priced again under its own rate version: whether it reproduces the booked amount. */

@@ -8,6 +8,15 @@ import jakarta.persistence.Table;
 @Table(name = "ins_application")
 public class InsuranceApplication extends CoverRecord implements TieredCover {
 
+    // Optimistic locking (NS-ARC-005): a write based on a stale copy fails with 409 instead of overwriting.
+    @jakarta.persistence.Version
+    @Column(name = "row_version", nullable = false)
+    private long rowVersion;
+
+    public long getRowVersion() {
+        return rowVersion;
+    }
+
     @Column(length = 60)
     private String tier;
 

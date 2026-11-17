@@ -1,0 +1,15 @@
+# NS-ARC-005 / NS-TXN-001: customers and applications get a row version like policies and claims, so a stale write
+# (or one based on a screen opened before someone else's change, sent with If-Match) is refused with 409.
+databaseChangeLog:
+  - changeSet:
+      id: 082-customer-application-row-version
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ins_customer
+            columns:
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - addColumn:
+            tableName: ins_application
+            columns:
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
