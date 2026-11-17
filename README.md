@@ -142,3 +142,22 @@ sees. A release is recorded as `RELEASED_UNSCANNED` and in the evidence chain; n
 scanner said so. An installation that connects a scanner registers one `UploadScanner` bean: a clean verdict then
 releases the file at once, an infected one rejects it, and a scanner failure leaves it waiting for a person.
 
+
+Policy schedules are rendered from a frozen snapshot (policy, customer, terms and the approved wording clauses for
+the product), stored as JSON beside the PDF; the document row records the snapshot hash, the wording clause versions
+and the policy's data version, so a later wording revision never changes an issued schedule. The register
+(`/ops/documents`) shows policy documents to `READ_POLICY` holders and claim evidence to `READ_CLAIM` holders only,
+filters by customer, record, class and date, searches the text of generated and released PDFs (no OCR), and logs every
+search in the evidence chain.
+
+## Communications (SH09B)
+
+A message moves QUEUED → SUBMITTED (handed to the provider) → ACCEPTED (the provider's id; not delivery) → DELIVERED /
+READ, which only a delivery report sets: a signed callback, or the simulated provider's report on its next dispatcher
+run (`nsure.communications.simulated-delivery-reports`, on by default because no real provider ships). Every step,
+staff action and raw provider report is kept in the message's trail (`GET /communications/messages/{id}`), with the
+message's purpose and the basis on which its recipient was chosen. Approved `INTERMEDIARY` templates go to the active
+agent servicing the policy and may use references only. An approved template is withdrawn by one user and confirmed by
+another. A reply from an unverified sender is a verification task: it is linked to a customer only once someone records
+how the sender was verified. The bus carries `CommunicationRequested`, `MessageDelivered`, `MessageFailed` and
+`InboundMessageReceived`, with references only.
