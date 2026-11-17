@@ -86,9 +86,13 @@ public class UnderwritingService {
     private final ReferenceNumbers numbers;
     private final EvidenceChain audit;
     private final RoleRepository roles;
+    /** The application's quote takes each accepted offer's premium as a new version (AT-IL02-02). */
+    private final com.nsure.portfolio.QuoteService quotes;
 
     public UnderwritingService(EntityManager em, PlatformSecurityContext security, Outbox outbox,
-            ReferenceNumbers numbers, EvidenceChain audit, RoleRepository roles) {
+            ReferenceNumbers numbers, EvidenceChain audit, RoleRepository roles,
+            com.nsure.portfolio.QuoteService quotes) {
+        this.quotes = quotes;
         this.em = em;
         this.security = security;
         this.outbox = outbox;
@@ -426,9 +430,10 @@ public class UnderwritingService {
         c.decidedBy = user.getUsername();
         c.decidedAt = now;
         c.updatedAt = now;
-        // NS-IL02-005, AT-IL02-02: any earlier acceptance belonged to earlier terms.
+        // NS-IL02-005, AT-IL02-02: any earlier acceptance belonged to earlier terms, and so did its price.
         c.offerAcceptedBy = null;
         c.offerAcceptedAt = null;
+        restorePrice(c, app, user.getUsername(), reason);
         switch (decision) {
             case ACCEPT_STANDARD -> {
                 c.status = ACCEPTED;
@@ -496,6 +501,15 @@ public class UnderwritingService {
             c.offerStatus = OFFER_ACCEPTED;
             c.status = ACCEPTED;
             app.setStatus(applicationStatusWhenCleared(app));
+            // The application and its price trace take the accepted offer's premium, as a new quote version.
+            if (c.offerPremium != null && (app.getPremium() == null || c.offerPremium.compareTo(app.getPremium()) != 0)) {
+                if (app.getQuoteRef() != null) {
+                    com.nsure.portfolio.Quote version = quotes.underwritten(app.getQuoteRef(), c.appliedPremium,
+                            c.offerPremium, c.loadingPercent, c.ref, c.offerVersion, user.getUsername(), note);
+                    app.setQuote(version.getRef(), version.getVersionNo());
+                }
+                app.setPremium(c.offerPremium);
+            }
         } else {
             c.offerStatus = OFFER_REFUSED;
             c.status = DECLINED;
@@ -511,6 +525,22 @@ public class UnderwritingService {
         audit.record(user.getUsername(), accept ? "Offer accepted" : "Offer refused", "UnderwritingCase", c.ref,
                 "Offer v" + c.offerVersion + ": " + note);
         return detail(c, user);
+    }
+
+    /**
+     * Terms accepted earlier no longer stand (a new decision, or the case reopened): the application's price goes back
+     * to the one quoted before them, as a new version of its quote (AT-IL02-02).
+     */
+    private void restorePrice(Case c, InsuranceApplication app, String actor, String reason) {
+        if (app.getQuoteRef() != null) {
+            com.nsure.portfolio.Quote restored = quotes.withdrawUnderwriting(app.getQuoteRef(), c.ref, actor, reason);
+            if (restored != null) {
+                app.setQuote(restored.getRef(), restored.getVersionNo());
+                app.setPremium(restored.getPremium());
+            }
+        } else if (c.appliedPremium != null) {
+            app.setPremium(c.appliedPremium);
+        }
     }
 
     /** {reason}: reopens a decided case for reassessment (NS-IL02-006). Earlier decisions stay on the record. */
@@ -545,6 +575,7 @@ public class UnderwritingService {
         c.referralReasons = (c.referralReasons == null ? "" : c.referralReasons + "\n") + "Reopened: " + reason;
         c.updatedAt = now;
         app.setStatus("Under review");
+        restorePrice(c, app, user.getUsername(), reason);
         audit.record(user.getUsername(), "Underwriting reopened", "UnderwritingCase", c.ref, reason);
         return detail(c, user);
     }

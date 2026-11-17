@@ -102,10 +102,32 @@ class UnderwritingApiTest {
                         "{\"accept\":true,\"note\":\"Signed revised offer received\"}"))
                 .andExpect(status().isOk());
 
+        // A-19: each accepted offer is a new version of the price trace, and the application shows that price.
+        String application = mockMvc.perform(get("/portfolio/applications").with(signedIn("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        String quote = JsonPath.<java.util.List<String>>read(application, "$[?(@.id == '" + app + "')].quoteRef").get(0);
+        assertThat(JsonPath.<java.util.List<Object>>read(application, "$[?(@.id == '" + app + "')].premium").get(0)
+                .toString()).isEqualTo("345.0");
+        // v1 priced 230; v2 the accepted offer v1 (287.50); v3 back to 230 when the terms changed; v4 offer v2.
+        mockMvc.perform(get("/portfolio/quotes/" + quote).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$[0].version").value(4))
+                .andExpect(jsonPath("$[0].premium").value(345.0))
+                .andExpect(jsonPath("$[0].status").value("ACCEPTED"))
+                .andExpect(jsonPath("$[0].trace.underwriting.caseRef").value(ref))
+                .andExpect(jsonPath("$[0].trace.underwriting.loadingPercent").value("50"))
+                .andExpect(jsonPath("$[0].differences").value(containsString("underwriting offer v2")))
+                .andExpect(jsonPath("$[1].premium").value(230.0))
+                .andExpect(jsonPath("$[2].premium").value(287.5))
+                .andExpect(jsonPath("$[3].premium").value(230.0));
+        mockMvc.perform(get("/portfolio/quotes/" + quote + "/replay").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.reproduced").value(true));
+
         // NS-IL02-005: the accepted offer's loaded premium and exclusion are what the contract carries.
         String policy = JsonPath.read(mockMvc.perform(json(post("/portfolio/policies"), "admin", issue))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.premium").value(345))
+                .andExpect(jsonPath("$.quoteVersion").value(4))
                 .andReturn().getResponse().getContentAsString(), "$.id");
         assertThat(jdbc.queryForObject("select uw_terms from ins_policy where record_ref = ?", String.class, policy))
                 .contains("50%").contains("Respiratory conditions").contains("Offer v2");

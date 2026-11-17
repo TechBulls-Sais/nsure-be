@@ -138,6 +138,34 @@ public class Quote {
         this.createdAt = LocalDateTime.now();
     }
 
+    /**
+     * The next version of {@code from} with the same facts, rates and validity but another premium and trace: the
+     * price underwriting set on it (AT-IL02-02). The caller records its acceptance.
+     */
+    Quote(Quote from, int versionNo, BigDecimal premium, String traceJson, String inputHash, String createdBy) {
+        this.ref = from.ref;
+        this.versionNo = versionNo;
+        this.customerRef = from.customerRef;
+        this.customerName = from.customerName;
+        this.product = from.product;
+        this.tier = from.tier;
+        this.sumAssured = from.sumAssured;
+        this.premium = premium;
+        this.currency = from.currency;
+        this.pricingMethod = from.pricingMethod;
+        this.rateVersion = from.rateVersion;
+        this.pricedOn = from.pricedOn;
+        this.validUntil = from.validUntil;
+        this.inputsJson = from.inputsJson;
+        this.traceJson = traceJson;
+        this.inputHash = inputHash;
+        this.serviceVersion = from.serviceVersion;
+        this.status = QUOTED;
+        this.applicationRef = from.applicationRef;
+        this.createdBy = createdBy;
+        this.createdAt = LocalDateTime.now();
+    }
+
     public boolean isExpired(LocalDate today) {
         return validUntil.isBefore(today);
     }

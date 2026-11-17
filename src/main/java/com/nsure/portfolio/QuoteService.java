@@ -125,15 +125,94 @@ public class QuoteService {
                     + ". Re-quote it, show the customer what changed, and accept the revised offer.");
         }
         quote.accept(actor, note);
+        publishAccepted(quote, actor);
+        return quote;
+    }
+
+    // ── underwriting terms on the price (NS-IL02-005, AT-IL02-02) ────────────────────────────────
+
+    /**
+     * The applicant accepted an underwriting offer that changes the premium: the next version of the quote carries
+     * that premium, with the loading, the case and the offer on its trace, and is recorded as accepted. Each accepted
+     * offer is its own version, so the price trace always matches what the policy will be issued at. Returns the
+     * latest version unchanged when its premium already is the offer's.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Quote underwritten(String ref, BigDecimal basePremium, BigDecimal premium, BigDecimal loadingPercent,
+            String caseRef, int offerVersion, String actor, String note) {
+        Quote latest = latest(ref);
+        if (latest.getPremium().compareTo(premium) == 0 && underwriting(latest) != null) {
+            return latest;
+        }
+        Quote base = priced(ref);
+        ObjectNode trace = (ObjectNode) read(base.getTraceJson()).deepCopy();
+        ObjectNode uw = trace.putObject("underwriting");
+        uw.put("caseRef", caseRef);
+        uw.put("offerVersion", offerVersion);
+        uw.put("basePremium", basePremium.toPlainString());
+        if (loadingPercent != null) {
+            uw.put("loadingPercent", loadingPercent.stripTrailingZeros().toPlainString());
+        }
+        uw.put("premium", premium.toPlainString());
+        uw.put("step", "Underwriting offer v" + offerVersion + " on " + caseRef
+                + (loadingPercent == null ? "" : ": loading " + loadingPercent.stripTrailingZeros().toPlainString()
+                + "% on BWP " + Money.text(basePremium)) + " → BWP " + Money.text(premium));
+        trace.put("premium", premium.toPlainString());
+        Quote next = new Quote(latest, latest.getVersionNo() + 1, premium, write(trace),
+                sha256(base.getInputsJson() + "|" + base.getRateVersion() + "|" + caseRef + "#" + offerVersion), actor);
+        next.differences("Premium BWP " + Money.text(latest.getPremium()) + " → BWP " + Money.text(premium)
+                + " (underwriting offer v" + offerVersion + " on " + caseRef + ")");
+        next.accept(actor, clip("Underwriting offer v" + offerVersion + " accepted: " + note, 300));
+        em.persist(next);
+        publishAccepted(next, actor);
+        return next;
+    }
+
+    /**
+     * Underwriting was reopened: the terms the applicant accepted no longer stand, so the price goes back to the
+     * version priced before them, as a new accepted version. Returns null when no underwriting terms were on it.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Quote withdrawUnderwriting(String ref, String caseRef, String actor, String reason) {
+        Quote latest = latest(ref);
+        if (underwriting(latest) == null) {
+            return null;
+        }
+        Quote base = priced(ref);
+        Quote next = new Quote(latest, latest.getVersionNo() + 1, base.getPremium(), base.getTraceJson(),
+                base.getInputHash(), actor);
+        next.differences("Premium BWP " + Money.text(latest.getPremium()) + " → BWP " + Money.text(base.getPremium())
+                + " (underwriting on " + caseRef + " reopened; its offer terms are withdrawn)");
+        next.accept(actor, clip("Price before underwriting terms, reinstated when " + caseRef + " was reopened: "
+                + reason, 300));
+        em.persist(next);
+        return next;
+    }
+
+    /** The newest version priced from the rates alone, without underwriting terms. */
+    private Quote priced(String ref) {
+        return versions(ref).stream().filter(q -> underwriting(q) == null).findFirst()
+                .orElseThrow(() -> new IllegalStateException(ref + " has no priced version"));
+    }
+
+    private JsonNode underwriting(Quote quote) {
+        JsonNode uw = read(quote.getTraceJson()).get("underwriting");
+        return uw == null || uw.isNull() ? null : uw;
+    }
+
+    private void publishAccepted(Quote quote, String actor) {
         Map<String, Object> data = new LinkedHashMap<>();
-        data.put("quoteRef", ref);
+        data.put("quoteRef", quote.getRef());
         data.put("version", quote.getVersionNo());
         data.put("customerRef", quote.getCustomerRef());
         data.put("product", quote.getProduct());
         data.put("premium", quote.getPremium().toPlainString());
         data.put("rateVersion", quote.getRateVersion());
-        outbox.publish(Events.OFFER_ACCEPTED, ref, data, actor);
-        return quote;
+        outbox.publish(Events.OFFER_ACCEPTED, quote.getRef(), data, actor);
+    }
+
+    private static String clip(String value, int max) {
+        return value.length() <= max ? value : value.substring(0, max);
     }
 
     /**
@@ -223,11 +302,12 @@ public class QuoteService {
      */
     public PortfolioViews.QuoteReplayView replay(Quote quote) {
         JsonNode inputs = read(quote.getInputsJson());
+        JsonNode uw = underwriting(quote);
         if (Quote.FLAT_TIER.equals(quote.getPricingMethod())) {
-            BigDecimal recorded = new BigDecimal(read(quote.getTraceJson()).path("flatTierPremium").asText("0"));
+            BigDecimal recorded = loaded(new BigDecimal(read(quote.getTraceJson()).path("flatTierPremium").asText("0")), uw);
             return new PortfolioViews.QuoteReplayView(quote.getRef(), quote.getVersionNo(), quote.getRateVersion(),
                     quote.getPremium(), recorded, recorded.compareTo(quote.getPremium()) == 0,
-                    "Flat tier premium recorded on the trace.");
+                    "Flat tier premium recorded on the trace" + (uw == null ? "." : ", with the underwriting loading."));
         }
         CoverTier tier = em.createQuery("select t from CoverTier t where t.product.name = :product and t.name = :tier",
                         CoverTier.class)
@@ -242,7 +322,7 @@ public class QuoteService {
         }
         Optional<RateTableService.PolicyPrice> price = rates.priceAtVersion(tier, lives, quote.getPricedOn(),
                 quote.getRateVersion());
-        BigDecimal replayed = price.map(RateTableService.PolicyPrice::monthlyTotal).orElse(null);
+        BigDecimal replayed = price.map(RateTableService.PolicyPrice::monthlyTotal).map(p -> loaded(p, uw)).orElse(null);
         return new PortfolioViews.QuoteReplayView(quote.getRef(), quote.getVersionNo(), quote.getRateVersion(),
                 quote.getPremium(), replayed, replayed != null && replayed.compareTo(quote.getPremium()) == 0,
                 replayed == null ? "Rate version " + quote.getRateVersion() + " is no longer on file."
@@ -260,6 +340,16 @@ public class QuoteService {
     }
 
     // ── internals ────────────────────────────────────────────────────────────────────────────────
+
+    /** A replayed premium with the underwriting loading on the trace, rounded as underwriting rounds it. */
+    private static BigDecimal loaded(BigDecimal premium, JsonNode uw) {
+        if (uw == null || !uw.hasNonNull("loadingPercent")) {
+            return premium;
+        }
+        BigDecimal hundred = BigDecimal.valueOf(100);
+        return premium.multiply(hundred.add(new BigDecimal(uw.get("loadingPercent").asText())))
+                .divide(hundred, 2, java.math.RoundingMode.HALF_UP);
+    }
 
     private Quote build(String ref, int version, CustomerAccount customer, String product, PricedOffer offer,
             String actor) {
