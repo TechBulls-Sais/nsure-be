@@ -179,7 +179,29 @@ public final class ServicingViews {
             List<ScheduledBenefit> schedule,
             List<BenefitEventView> benefitEvents,
             List<LifeReviewView> reviews,
-            List<String> endorsementTypes) {
+            List<String> endorsementTypes,
+            // IL04 roster: per-life limits and use, claims, underwriting outcome and eligibility warnings.
+            Roster roster) {
+    }
+
+    /** One life's standing on the roster (NS-IL04-004): benefit limit, use, claims, underwriting, warnings. */
+    public record LifeStanding(
+            Long lifeId,
+            BigDecimal limit,
+            BigDecimal used,
+            BigDecimal remaining,
+            long claims,
+            String underwriting,
+            List<String> warnings) {
+    }
+
+    /** The policy-level aggregate limit every life shares, plan count warnings, and each life's standing. */
+    public record Roster(
+            BigDecimal policyLimit,
+            BigDecimal policyUsed,
+            BigDecimal policyRemaining,
+            List<String> warnings,
+            List<LifeStanding> lives) {
     }
 
     public record RunResult(int created, List<String> refs) {

@@ -198,6 +198,19 @@ class ServicingApiTest {
         // NS-IL04-005: a child nearing the review age gets a dated task; ceasing them reduces the premium.
         jdbc.update("update ins_policy_life_cover set date_of_birth = ? where full_name = 'Tumo Family'",
                 LocalDate.now().minusYears(21).plusDays(30));
+        // IL04 roster: the warning shows on the roster before any review task is run, with the life's limit and
+        // its underwriting outcome (added by an endorsement underwriting approved).
+        String roster = mockMvc.perform(get(base).with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Integer tumo = ((List<Integer>) JsonPath.read(roster, "$.lives[?(@.fullName == 'Tumo Family')].id")).get(0);
+        assertThat((List<List<String>>) JsonPath.read(roster, "$.roster.lives[?(@.lifeId == " + tumo + ")].warnings"))
+                .singleElement().satisfies(w -> assertThat(String.join(" ", w)).contains("child review age of 21"));
+        assertThat((List<String>) JsonPath.read(roster, "$.roster.lives[?(@.lifeId == " + tumo + ")].underwriting"))
+                .singleElement().satisfies(u -> assertThat(u).contains("approved by underwriter"));
+        assertThat((List<Number>) JsonPath.read(roster, "$.roster.lives[?(@.lifeId == " + tumo + ")].used"))
+                .singleElement().satisfies(u -> assertThat(u.doubleValue()).isZero());
+        assertThat(((Number) JsonPath.read(roster, "$.roster.policyLimit")).doubleValue()).isPositive();
         mockMvc.perform(post("/servicing/life-reviews/run").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.created").value(1));

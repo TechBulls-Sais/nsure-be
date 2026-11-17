@@ -256,6 +256,13 @@ public class RateTableService {
         return byTier;
     }
 
+    /** One plan's life assured rules (R-7): each relationship it covers, its entry ages and how many may be covered. */
+    @Transactional(readOnly = true)
+    public List<RateTableViews.LifeRule> lifeRules(CoverTier tier) {
+        return rules(tier).stream().map(rule -> new RateTableViews.LifeRule(rule.getRelationship().getRelationshipName(),
+                rule.getMinAge(), rule.getMaxAge(), rule.getMaxCount())).toList();
+    }
+
     /** A life to price: its relationship to the main insured (a Relationship Type name), name and birth date. */
     public record LifeToPrice(String relationship, String fullName, LocalDate dateOfBirth) {
     }

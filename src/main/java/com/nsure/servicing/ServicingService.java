@@ -141,7 +141,148 @@ public class ServicingService {
                         .setParameter("ref", policyRef).getResultList().stream().map(this::benefitView).toList(),
                 em.createQuery("select r from LifeReview r where r.policyRef = :ref order by r.dueDate", LifeReview.class)
                         .setParameter("ref", policyRef).getResultList().stream().map(this::reviewView).toList(),
-                TYPES);
+                TYPES,
+                roster(policy));
+    }
+
+    // ── the family roster (IL04 records and workspace) ────────────────────────────────────────────
+
+    /**
+     * Per-life and policy limits with what claims have used of them (as the claim limit check counts them), each
+     * life's claims and underwriting outcome, and eligibility warnings: ages approaching or past the product's review
+     * and cessation ages, plan count limits reached, limits used up and open age reviews.
+     */
+    private ServicingViews.Roster roster(InsurancePolicy policy) {
+        List<PolicyLifeCover> all = lives(policy);
+        Map<String, BigDecimal> used = new LinkedHashMap<>();
+        for (Object[] row : em.createQuery("select e.lifeKey, e.entry, sum(e.amount) from ClaimLimitEntry e"
+                        + " where e.policyRef = :ref group by e.lifeKey, e.entry", Object[].class)
+                .setParameter("ref", policy.getRef()).getResultList()) {
+            BigDecimal sum = (BigDecimal) row[2];
+            used.merge((String) row[0], "RELEASED".equals(row[1]) ? sum.negate() : sum, BigDecimal::add);
+        }
+        BigDecimal policyUsed = used.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal livesTotal = all.stream().map(l -> l.getCoverAmount() == null ? BigDecimal.ZERO : l.getCoverAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal policyLimit = policy.getAmount().max(livesTotal);
+
+        ServicingRule rule = servicingRule(policy.getProduct());
+        LocalDate today = LocalDate.now();
+        LocalDate horizon = today.plusDays(REVIEW_LEAD_DAYS);
+        List<String> policyWarnings = new ArrayList<>();
+        if (policyLimit.subtract(policyUsed).signum() <= 0 && policyUsed.signum() > 0) {
+            policyWarnings.add("The policy's aggregate benefit limit is used up.");
+        }
+        List<com.nsure.rating.RateTableViews.LifeRule> planRules = List.of();
+        if (policy.getTier() != null) {
+            try {
+                planRules = rates.lifeRules(tier(policy.getProduct(), policy.getTier()));
+            } catch (IllegalArgumentException retiredPlan) {
+                planRules = List.of();
+            }
+        }
+        for (com.nsure.rating.RateTableViews.LifeRule plan : planRules) {
+            long covered = all.stream().filter(l -> l.isActiveLife() && plan.lifeType().equalsIgnoreCase(l.getLifeType()))
+                    .count();
+            if (plan.maxCount() > 0 && covered > plan.maxCount()) {
+                policyWarnings.add(covered + " " + plan.lifeType() + " lives are covered; the plan allows "
+                        + plan.maxCount() + ".");
+            } else if (plan.maxCount() > 0 && covered == plan.maxCount() && !"self".equalsIgnoreCase(plan.lifeType())) {
+                policyWarnings.add("At the plan's limit of " + plan.maxCount() + " " + plan.lifeType()
+                        + (plan.maxCount() == 1 ? " life" : " lives") + ": another cannot be added.");
+            }
+        }
+        Map<Long, List<LifeReview>> openReviews = new LinkedHashMap<>();
+        em.createQuery("select r from LifeReview r where r.policyRef = :ref and r.status = 'OPEN'", LifeReview.class)
+                .setParameter("ref", policy.getRef()).getResultList()
+                .forEach(r -> openReviews.computeIfAbsent(r.lifeId, k -> new ArrayList<>()).add(r));
+        String issueOutcome = issueUnderwriting(policy);
+        List<Endorsement> lifeEndorsements = em.createQuery("select e from Endorsement e where e.policyRef = :ref"
+                        + " and e.type in ('ADD_LIFE', 'REPLACE_LIFE') and e.status = 'APPLIED' order by e.id",
+                        Endorsement.class)
+                .setParameter("ref", policy.getRef()).getResultList();
+
+        List<ServicingViews.LifeStanding> standing = new ArrayList<>();
+        for (PolicyLifeCover life : all) {
+            BigDecimal limit = life.getCoverAmount() != null && life.getCoverAmount().signum() > 0
+                    ? life.getCoverAmount() : policy.getAmount();
+            BigDecimal lifeUsed = used.getOrDefault("LIFE-" + life.getId(), BigDecimal.ZERO)
+                    .add(life.isMainInsured() ? used.getOrDefault("PRINCIPAL", BigDecimal.ZERO) : BigDecimal.ZERO);
+            long claims = em.createQuery("select count(c) from InsuranceClaim c where c.policyRef = :ref and"
+                            + (life.isMainInsured() ? " (c.coveredLifeId = :id or c.coveredLifeId is null)"
+                                    : " c.coveredLifeId = :id"), Long.class)
+                    .setParameter("ref", policy.getRef()).setParameter("id", life.getId()).getSingleResult();
+            List<String> warnings = new ArrayList<>();
+            if (life.isActiveLife()) {
+                if (lifeUsed.signum() > 0 && limit.subtract(lifeUsed).signum() <= 0) {
+                    warnings.add("Benefit limit used up.");
+                }
+                if (life.getDateOfBirth() != null) {
+                    boolean child = life.getLifeType() != null
+                            && life.getLifeType().toLowerCase(Locale.ROOT).contains("child");
+                    if (child) {
+                        ageWarning(warnings, life.getDateOfBirth().plusYears(rule.childReviewAge), today, horizon,
+                                "the child review age of " + rule.childReviewAge);
+                    }
+                    ageWarning(warnings, life.getDateOfBirth().plusYears(rule.maxCoverAge), today, horizon,
+                            "the cover cessation age of " + rule.maxCoverAge);
+                }
+                for (LifeReview r : openReviews.getOrDefault(life.getId(), List.of())) {
+                    warnings.add("Open review (" + r.reviewType.toLowerCase(Locale.ROOT).replace('_', ' ') + ") due "
+                            + r.dueDate + ".");
+                }
+            }
+            standing.add(new ServicingViews.LifeStanding(life.getId(), limit, lifeUsed, limit.subtract(lifeUsed).max(
+                    BigDecimal.ZERO), claims, lifeUnderwriting(life, lifeEndorsements, issueOutcome), warnings));
+        }
+        return new ServicingViews.Roster(policyLimit, policyUsed, policyLimit.subtract(policyUsed).max(BigDecimal.ZERO),
+                policyWarnings, standing);
+    }
+
+    private static void ageWarning(List<String> warnings, LocalDate reaches, LocalDate today, LocalDate horizon,
+            String what) {
+        if (!reaches.isAfter(today)) {
+            warnings.add("Past " + what + " (on " + reaches + ").");
+        } else if (!reaches.isAfter(horizon)) {
+            warnings.add("Reaches " + what + " on " + reaches + ".");
+        }
+    }
+
+    /** The underwriting outcome of the application the policy was issued from, if it had a case. */
+    private String issueUnderwriting(InsurancePolicy policy) {
+        if (policy.getApplicationRef() == null) {
+            return "Issued without an underwriting case";
+        }
+        return em.createQuery("select c.decision, c.status, c.decidedBy from UwCase c where c.applicationRef = :ref"
+                        + " order by c.id desc", Object[].class)
+                .setParameter("ref", policy.getApplicationRef()).setMaxResults(1).getResultStream().findFirst()
+                .map(row -> {
+                    String outcome = row[0] != null ? (String) row[0] : (String) row[1];
+                    String label = outcome == null ? "Unknown" : outcome.charAt(0)
+                            + outcome.substring(1).toLowerCase(Locale.ROOT).replace('_', ' ');
+                    return "At issue: " + label + (row[2] == null ? "" : " by " + row[2]);
+                })
+                .orElse("Issued without an underwriting case");
+    }
+
+    /** A life added by endorsement carries that endorsement's decision; the others, the outcome at issue. */
+    private String lifeUnderwriting(PolicyLifeCover life, List<Endorsement> endorsements, String issueOutcome) {
+        for (Endorsement e : endorsements) {
+            JsonNode changes;
+            try {
+                changes = mapper.readTree(e.changesJson);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException unreadable) {
+                continue;
+            }
+            // The life the endorsement created: same name, covered from the endorsement's effective date.
+            if (life.getFullName().equalsIgnoreCase(changes.path("fullName").asText())
+                    && e.effectiveDate.equals(life.getEffectiveFrom())) {
+                return e.decidedBy == null ? "Added by " + e.ref + " without referral"
+                        : "Added by " + e.ref + ": approved by " + e.decidedBy
+                                + (e.decisionNote == null || e.decisionNote.isBlank() ? "" : " (" + e.decisionNote + ")");
+            }
+        }
+        return issueOutcome;
     }
 
     @Transactional(readOnly = true)
