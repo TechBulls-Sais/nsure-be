@@ -108,6 +108,25 @@ public class PolicyDocumentService {
         return views(em, policy.getId());
     }
 
+    /**
+     * SH09A template preview: the schedule as it would be issued now, from the current policy data and wording, marked
+     * as a preview. Nothing is filed, hashed or sent; it is not a document of record.
+     */
+    @Transactional(readOnly = true)
+    public ClaimDocumentService.StoredFile previewSchedule(String ref) {
+        AppUser staff = security.authenticatedUser();
+        if (STAFF_GENERATE.stream().noneMatch(staff::hasPermissionTo)) {
+            throw new NoAuthorizationException("User has no authority to preview policy documents");
+        }
+        InsurancePolicy policy = policies.policy(ref);
+        CustomerAccount customer = customerOf(policy);
+        byte[] pdf = PolicySchedulePdf.render(portfolio.policyView(policy), customer, productOf(policy),
+                policies.terms(policy), policies.months(policy),
+                staff.getUsername() + " · PREVIEW, NOT ISSUED", wording(policy.getProduct()));
+        return new ClaimDocumentService.StoredFile(policy.getRef() + "-schedule-PREVIEW.pdf", "application/pdf",
+                pdf.length, new org.springframework.core.io.ByteArrayResource(pdf));
+    }
+
     /** Who downloaded this policy's documents, and when (READ_AUDIT). */
     @Transactional(readOnly = true)
     public List<DocumentCustody.AccessView> accessLog(String ref) {
@@ -258,20 +277,8 @@ public class PolicyDocumentService {
      * hashes, the wording versions and the policy's data version (NS-SH09A-003). Records it in the policy history.
      */
     private PolicyDocument issue(InsurancePolicy policy, String generatedBy, String note) {
-        CustomerAccount customer = policy.getCustomerRef() == null ? null : em.createQuery(
-                        "select c from CustomerAccount c where c.ref = :ref", CustomerAccount.class)
-                .setParameter("ref", policy.getCustomerRef())
-                .setMaxResults(1)
-                .getResultStream()
-                .findFirst()
-                .orElse(null);
-        InsuranceProduct product = em.createQuery(
-                        "select p from InsuranceProduct p where p.name = :name", InsuranceProduct.class)
-                .setParameter("name", policy.getProduct())
-                .setMaxResults(1)
-                .getResultStream()
-                .findFirst()
-                .orElse(null);
+        CustomerAccount customer = customerOf(policy);
+        InsuranceProduct product = productOf(policy);
         PortfolioViews.CoverView view = portfolio.policyView(policy);
         ProductVersion terms = policies.terms(policy);
         int months = policies.months(policy);
@@ -300,6 +307,25 @@ public class PolicyDocumentService {
                 policy.getStatus(), policy.getStatus(),
                 SCHEDULE_TYPE + ": " + fileName + (note == null ? "" : " · " + note), generatedBy);
         return document;
+    }
+
+    private CustomerAccount customerOf(InsurancePolicy policy) {
+        return policy.getCustomerRef() == null ? null : em.createQuery(
+                        "select c from CustomerAccount c where c.ref = :ref", CustomerAccount.class)
+                .setParameter("ref", policy.getCustomerRef())
+                .setMaxResults(1)
+                .getResultStream()
+                .findFirst()
+                .orElse(null);
+    }
+
+    private InsuranceProduct productOf(InsurancePolicy policy) {
+        return em.createQuery("select p from InsuranceProduct p where p.name = :name", InsuranceProduct.class)
+                .setParameter("name", policy.getProduct())
+                .setMaxResults(1)
+                .getResultStream()
+                .findFirst()
+                .orElse(null);
     }
 
     /** The approved, effective wording clauses for the product, in reference order (NS-SH09A-001). */

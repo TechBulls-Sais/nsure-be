@@ -122,6 +122,7 @@ public final class ApiAccessRules {
             // The declaration consent log is evidence: audit.read (spec 04 §7).
             rule(GET, "/portfolio/policies/*/declarations", anyOf("READ_AUDIT")),
             rule(GET, "/portfolio/policies/*/documents", anyOf("READ_POLICY")),
+            rule(GET, "/portfolio/policies/*/documents/schedule/preview", anyOf("CREATE_POLICY", "UPDATE_POLICY")),
             rule(GET, "/portfolio/policies/*/documents/*", anyOf("READ_POLICY")),
             rule(POST, "/portfolio/policies/*/documents/schedule", anyOf("CREATE_POLICY", "UPDATE_POLICY")),
             // Blueprint §8: a controlled replacement with a reason (the old schedule is kept), and the download log.

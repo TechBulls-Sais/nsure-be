@@ -33,6 +33,12 @@ public class PolicyDocumentController {
         return documents.generateSchedule(ref);
     }
 
+    /** The schedule as it would be issued now, marked as a preview; nothing is filed. */
+    @GetMapping("/policies/{ref}/documents/schedule/preview")
+    public ResponseEntity<Resource> previewSchedule(@PathVariable String ref) {
+        return ClaimDocumentController.file(documents.previewSchedule(ref));
+    }
+
     /** A controlled replacement of the current schedule, with a reason; the old one is kept as superseded. */
     @PostMapping("/policies/{ref}/documents/{id}/reissue")
     public List<PortfolioViews.DocumentView> reissue(@PathVariable String ref, @PathVariable Long id,

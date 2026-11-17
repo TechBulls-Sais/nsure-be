@@ -295,6 +295,25 @@ class PolicyDocumentApiTest {
         assertThat(download(policy, id)).isEqualTo(before);
     }
 
+    /** SH09A template preview: the schedule as it would be issued, marked as a preview, and nothing is filed. */
+    @Test
+    void aSchedulePreviewIsMarkedAndNeverFiled() throws Exception {
+        String policy = customerPolicy("Onkemetse Tau", "onkemetse");
+        byte[] pdf = mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/schedule/preview")
+                        .with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType("application/pdf"))
+                .andReturn().getResponse().getContentAsByteArray();
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            assertThat(new PDFTextStripper().getText(doc)).contains("PREVIEW, NOT ISSUED", "Policy wording", policy);
+        }
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/schedule/preview")
+                        .with(signedIn("assessor", "password")))
+                .andExpect(status().isForbidden());
+        assertThat(jdbc.queryForObject("select count(*) from ins_policy_document d join ins_policy p on p.id = d.policy_id"
+                + " where p.record_ref = ?", Long.class, policy)).isZero();
+    }
+
     private byte[] download(String policy, Integer id) throws Exception {
         return mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + id).with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
