@@ -41,8 +41,12 @@ class CareCashApiTest {
         mockMvc.perform(json(post(base + "/assessment"), "admin", event("ADMISSION", "ILLNESS", 11, 10, 0, false)))
                 .andExpect(jsonPath("$.amount").value(0.0))
                 .andExpect(jsonPath("$.trace", hasItem(containsString("qualifies from 2 consecutive nights"))));
+        // NS-UX-003 (B-26): the trace shows money as the workspace does, not as raw numbers.
+        String formatted = new java.text.DecimalFormat("#,##0", java.text.DecimalFormatSymbols.getInstance(java.util.Locale.ENGLISH))
+                .format(2 * daily);
         mockMvc.perform(json(post(base + "/assessment"), "admin", event("ADMISSION", "ILLNESS", 12, 10, 0, false)))
-                .andExpect(jsonPath("$.amount").value(2 * daily));
+                .andExpect(jsonPath("$.amount").value(2 * daily))
+                .andExpect(jsonPath("$.trace", hasItem("Payable: BWP " + formatted + ".")));
 
         // 12 nights, 3 in ICU, with surgery: 9 ward + 3 ICU at 150% + surgery + long-stay 3x, and a premium waiver.
         String recorded = mockMvc.perform(json(post(base + "/events"), "admin", event("ADMISSION", "ILLNESS", 42, 30, 3, true)))

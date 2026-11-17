@@ -193,7 +193,7 @@ public class ClaimWorkflow {
             claim.resolve(null);
             financials.reserveLimit(claim, policy, claim.getAmount(), WorkflowHistory.SYSTEM);
             history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Auto Approved", INITIATED,
-                    APPROVED, "Straight-through: all five checks passed · payout BWP " + Money.text(claim.getAmount()),
+                    APPROVED, "Straight-through: all five checks passed · payout " + Money.display(claim.getAmount()),
                     WorkflowHistory.SYSTEM);
             outbox.publish(Events.CLAIM_APPROVED, claim.getRef(), decisionPayload(claim, null), WorkflowHistory.SYSTEM);
         } else {
@@ -237,8 +237,8 @@ public class ClaimWorkflow {
                 ? product.getStpCeiling()
                 : controls.valueOf(ControlKey.CLAIM_STP_CEILING.key());
         if (claim.getAmount().compareTo(ceiling) > 0) {
-            return new StpDecision(STP_OVER_CEILING, "Payout of BWP " + Money.text(claim.getAmount())
-                    + " is over the straight-through ceiling of BWP " + ceiling.stripTrailingZeros().toPlainString());
+            return new StpDecision(STP_OVER_CEILING, "Payout of " + Money.display(claim.getAmount())
+                    + " is over the straight-through ceiling of " + Money.display(ceiling));
         }
         boolean needsVerifiedPayout = controls.isEnabled(ControlKey.CLAIM_STP_REQUIRES_VERIFIED_PAYOUT.key())
                 && (product == null || product.isRequiresVerifiedPayout());
@@ -247,9 +247,9 @@ public class ClaimWorkflow {
         }
         ClaimFinancials.Limits limits = financials.limits(claim, policy);
         if (claim.getAmount().compareTo(limits.lifeRemaining().min(limits.policyRemaining())) > 0) {
-            return new StpDecision(STP_OVER_LIMIT, "Payout of BWP " + Money.text(claim.getAmount())
-                    + " is more than what is left of the benefit limit (BWP "
-                    + Money.text(limits.lifeRemaining().min(limits.policyRemaining())) + ")");
+            return new StpDecision(STP_OVER_LIMIT, "Payout of " + Money.display(claim.getAmount())
+                    + " is more than what is left of the benefit limit ("
+                    + Money.display(limits.lifeRemaining().min(limits.policyRemaining())) + ")");
         }
         if (product != null && product.getMaxClaimsPerPolicyPerYear() != null) {
             long recent = em.createQuery("select count(c) from InsuranceClaim c where c.policyRef = :policy"
@@ -371,7 +371,7 @@ public class ClaimWorkflow {
         // the approver must give a reason to approve without it.
         List<String> missing = financials.missingMandatory(claim);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Assessed", previous, RECOMMENDED,
-                "Recommended for payout of BWP " + Money.text(claim.getAmount()) + (trim(note).isEmpty() ? "" : " · " + trim(note))
+                "Recommended for payout of " + Money.display(claim.getAmount()) + (trim(note).isEmpty() ? "" : " · " + trim(note))
                         + (missing.isEmpty() ? "" : " · evidence outstanding: " + String.join(", ", missing)),
                 actor.getUsername());
         return claim;
@@ -438,7 +438,7 @@ public class ClaimWorkflow {
         }
         if (payout.compareTo(claim.getAmount()) > 0) {
             throw new IllegalArgumentException(
-                    "Payout of BWP " + Money.text(payout) + " exceeds the policy cover of BWP " + Money.text(claim.getAmount()));
+                    "Payout of " + Money.display(payout) + " exceeds the policy cover of " + Money.display(claim.getAmount()));
         }
         approvalLimits.assertWithinLimit(actor, payout);
         List<String> missing = financials.missingMandatory(claim);
@@ -464,7 +464,7 @@ public class ClaimWorkflow {
         }
         recordDecision(claim, ClaimDecision.APPROVED, decisionReason, payout, actor.getUsername());
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Approved", previous, APPROVED,
-                clip("Payout: BWP " + Money.text(payout) + (softFailed.isEmpty() ? ""
+                clip("Payout: " + Money.display(payout) + (softFailed.isEmpty() ? ""
                         : " · approved despite " + String.join(", ", softFailed) + ": " + reason) + switch (separation) {
                             case OVERRIDDEN -> " · FOUR-EYES OVERRIDDEN by the assessor: " + fourEyesReason;
                             case CONTROL_OFF -> " · four-eyes control OFF: separation not enforced";
@@ -518,7 +518,7 @@ public class ClaimWorkflow {
         claim.setStatus(PAYOUT_SENT);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(),
                 PAYOUT_FAILED.equals(previous) ? "Payout Resent" : "Payout Sent", previous, PAYOUT_SENT,
-                "BWP " + Money.text(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
+                Money.display(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
                         + claim.getPayeePayoutMethod() + " " + mask(claim.getPayeeAccountRef()) + " · " + reference
                         + " · awaiting the provider's confirmation",
                 actor.getUsername());
@@ -633,7 +633,7 @@ public class ClaimWorkflow {
         financials.reserve(claim, BigDecimal.ZERO, "Released: payout settled", actor.getUsername());
         claim.setStatus(PAID);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Paid", previous, PAID,
-                "BWP " + Money.text(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
+                Money.display(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
                         + claim.getPayeePayoutMethod() + " " + mask(claim.getPayeeAccountRef()) + " · " + reference
                         + " · settlement confirmed",
                 actor.getUsername());

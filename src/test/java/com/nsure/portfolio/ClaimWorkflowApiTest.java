@@ -113,7 +113,7 @@ class ClaimWorkflowApiTest {
         mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].status").value("Under Review"))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].stpIneligibleReason").value(
-                        "Payout of BWP 50000 is over the straight-through ceiling of BWP 5000"));
+                        "Payout of BWP 50,000 is over the straight-through ceiling of BWP 5,000"));
 
         mockMvc.perform(post("/portfolio/claims/" + claim + "/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isUnprocessableEntity())
@@ -133,7 +133,7 @@ class ClaimWorkflowApiTest {
                 .andExpect(status().isForbidden());
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":60000}"))
                 .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.message").value("Payout of BWP 60000 exceeds the policy cover of BWP 50000"));
+                .andExpect(jsonPath("$.message").value("Payout of BWP 60,000 exceeds the policy cover of BWP 50,000"));
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":45000," + EVIDENCE + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Approved"))

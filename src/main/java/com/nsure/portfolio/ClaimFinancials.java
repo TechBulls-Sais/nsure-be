@@ -93,12 +93,12 @@ public class ClaimFinancials {
         em.lock(policy, LockModeType.PESSIMISTIC_WRITE);
         Limits limits = limits(claim, policy);
         if (amount.compareTo(limits.lifeRemaining()) > 0) {
-            throw new IllegalArgumentException("A payout of BWP " + Money.text(amount) + " is more than the BWP "
-                    + Money.text(limits.lifeRemaining()) + " left of " + nameOf(claim) + "'s benefit limit.");
+            throw new IllegalArgumentException("A payout of " + Money.display(amount) + " is more than the "
+                    + Money.display(limits.lifeRemaining()) + " left of " + nameOf(claim) + "'s benefit limit.");
         }
         if (amount.compareTo(limits.policyRemaining()) > 0) {
-            throw new IllegalArgumentException("A payout of BWP " + Money.text(amount) + " is more than the BWP "
-                    + Money.text(limits.policyRemaining()) + " left of policy " + policy.getRef() + "'s limit.");
+            throw new IllegalArgumentException("A payout of " + Money.display(amount) + " is more than the "
+                    + Money.display(limits.policyRemaining()) + " left of policy " + policy.getRef() + "'s limit.");
         }
         em.persist(new ClaimLedgers.LimitEntry(policy.getRef(), limits.lifeKey(), claim.getRef(),
                 ClaimLedgers.LimitEntry.RESERVED, amount, actor == null ? WorkflowHistory.SYSTEM : actor));

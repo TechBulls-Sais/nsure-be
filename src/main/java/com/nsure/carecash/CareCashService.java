@@ -214,7 +214,7 @@ public class CareCashService {
                             + " admission days (" + ref + ")", user.getUsername());
         }
         audit.record(user.getUsername(), "Care Cash event " + e.status.toLowerCase(Locale.ROOT), "Policy", e.policyRef,
-                ref + " " + Money.text(e.amount) + ": " + note);
+                ref + " " + Money.display(e.amount) + ": " + note);
         return view(e);
     }
 
@@ -264,8 +264,8 @@ public class CareCashService {
         e.paymentFailure = null;
         e.paidAt = null;
         e.status = PAYMENT_SENT;
-        audit.record(user.getUsername(), "Care Cash payment sent", "Policy", e.policyRef, ref + " BWP "
-                + Money.text(e.amount) + " to " + payee + " by " + method + " " + mask(account) + " · "
+        audit.record(user.getUsername(), "Care Cash payment sent", "Policy", e.policyRef, ref + " "
+                + Money.display(e.amount) + " to " + payee + " by " + method + " " + mask(account) + " · "
                 + e.paymentReference + (previous == null ? "" : " (replaces failed " + previous + ")")
                 + " · awaiting the provider's confirmation");
         return view(e);
@@ -301,8 +301,8 @@ public class CareCashService {
         data.put("amount", e.amount.toPlainString());
         data.put("paymentReference", e.paymentReference);
         outbox.publish(Events.BENEFIT_PAID, e.ref, data, user.getUsername());
-        audit.record(user.getUsername(), "Care Cash payment settled", "Policy", e.policyRef, ref + " BWP "
-                + Money.text(e.amount) + " · " + e.paymentReference + " · settlement confirmed");
+        audit.record(user.getUsername(), "Care Cash payment settled", "Policy", e.policyRef, ref + " "
+                + Money.display(e.amount) + " · " + e.paymentReference + " · settlement confirmed");
         return view(e);
     }
 
@@ -372,7 +372,7 @@ public class CareCashService {
         e.status = "ASSESSED";
         e.createdBy = actor;
         e.createdAt = LocalDateTime.now();
-        trace.add("Daily benefit " + Money.text(daily) + " on " + p.getRef() + ".");
+        trace.add("Daily benefit " + Money.display(daily) + " on " + p.getRef() + ".");
 
         LocalDate start = p.getCoverStartDate();
         if (start == null || admit.isBefore(start) || !Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.CLAIMED,
@@ -396,10 +396,11 @@ public class CareCashService {
             if (!"ACCIDENT".equals(cause)) {
                 trace.add("Not payable: the accidental death benefit needs an accidental cause.");
             } else if (daily.compareTo(ACCIDENTAL_DEATH_MIN_TIER) < 0) {
-                trace.add("Not payable: accidental death applies to daily tiers of 1,000 and above.");
+                trace.add("Not payable: accidental death applies to daily tiers of "
+                        + Money.display(ACCIDENTAL_DEATH_MIN_TIER) + " and above.");
             } else {
                 e.amount = ACCIDENTAL_DEATH;
-                trace.add("Accidental death benefit " + Money.text(ACCIDENTAL_DEATH) + ".");
+                trace.add("Accidental death benefit " + Money.display(ACCIDENTAL_DEATH) + ".");
             }
             return finish(e, trace);
         }
@@ -410,7 +411,7 @@ public class CareCashService {
                 trace.add("Not payable: " + life + " has already had " + MATERNITY_MAX + " maternity claims.");
             } else {
                 e.amount = Money.of(daily.multiply(BigDecimal.valueOf(5)));
-                trace.add("Maternity: 5 × daily benefit = " + Money.text(e.amount) + " (claim " + (had + 1) + " of "
+                trace.add("Maternity: 5 × daily benefit = " + Money.display(e.amount) + " (claim " + (had + 1) + " of "
                         + MATERNITY_MAX + ").");
             }
             return finish(e, trace);
@@ -428,10 +429,10 @@ public class CareCashService {
             }
             e.paidDays = 1;
             e.amount = Money.of(daily.multiply(new BigDecimal("0.5")));
-            trace.add("Day case: 50% of the daily benefit = " + Money.text(e.amount) + "; counts 1 day against limits.");
+            trace.add("Day case: 50% of the daily benefit = " + Money.display(e.amount) + "; counts 1 day against limits.");
             if (e.surgery) {
                 e.amount = e.amount.add(daily);
-                trace.add("Surgical benefit: 100% of the daily benefit, once per event = " + Money.text(daily) + ".");
+                trace.add("Surgical benefit: 100% of the daily benefit, once per event = " + Money.display(daily) + ".");
             }
             return finish(e, trace);
         }
@@ -463,25 +464,25 @@ public class CareCashService {
         }
         int ward = payable - icu;
         BigDecimal total = daily.multiply(BigDecimal.valueOf(ward));
-        trace.add(ward + " ward day(s) × " + Money.text(daily) + " = " + Money.text(total) + ".");
+        trace.add(ward + " ward day(s) × " + Money.display(daily) + " = " + Money.display(total) + ".");
         if (icu > 0) {
             BigDecimal icuAmount = daily.multiply(new BigDecimal("1.5")).multiply(BigDecimal.valueOf(icu));
             total = total.add(icuAmount);
-            trace.add(icu + " ICU day(s) × 150% = " + Money.text(icuAmount) + " (instead of the ward rate, not on top).");
+            trace.add(icu + " ICU day(s) × 150% = " + Money.display(icuAmount) + " (instead of the ward rate, not on top).");
         }
         if (e.surgery) {
             total = total.add(daily);
-            trace.add("Surgical benefit: 100% of the daily benefit, once per event = " + Money.text(daily) + ".");
+            trace.add("Surgical benefit: 100% of the daily benefit, once per event = " + Money.display(daily) + ".");
         }
         if (nights > 7) {
             BigDecimal uplift = daily.multiply(BigDecimal.valueOf(3));
             total = total.add(uplift);
-            trace.add("Long stay beyond 7 days: 3 × daily benefit = " + Money.text(uplift) + ".");
+            trace.add("Long stay beyond 7 days: 3 × daily benefit = " + Money.display(uplift) + ".");
         }
         if (nights > 21) {
             BigDecimal uplift = daily.multiply(BigDecimal.valueOf(7));
             total = total.add(uplift);
-            trace.add("Long stay beyond 21 days: a further 7 × daily benefit = " + Money.text(uplift) + ".");
+            trace.add("Long stay beyond 21 days: a further 7 × daily benefit = " + Money.display(uplift) + ".");
         }
         if (nights >= WAIVER_AFTER_DAYS) {
             e.waiverMonths = WAIVER_MONTHS;
@@ -501,7 +502,7 @@ public class CareCashService {
     }
 
     private static CareCashEvent finish(CareCashEvent e, List<String> trace) {
-        trace.add("Payable: " + Money.text(e.amount) + ".");
+        trace.add("Payable: " + Money.display(e.amount) + ".");
         e.trace = String.join("\n", trace);
         return e;
     }
