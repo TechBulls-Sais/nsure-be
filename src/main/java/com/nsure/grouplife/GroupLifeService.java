@@ -487,12 +487,27 @@ public class GroupLifeService {
     @Transactional(readOnly = true)
     public List<Map<String, Object>> certificates(String schemeRef) {
         user("READ_SCHEME");
-        GroupScheme s = scheme(schemeRef);
+        return certificatesOf(scheme(schemeRef));
+    }
+
+    /**
+     * The sponsor's own certificates for the employer portal (NS-GL01-005, role "its own scheme's members, invoices
+     * and certificates"). The caller passes the one scheme the partner login is tied to; nothing else is reachable.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> sponsorCertificates(String schemeRef) {
+        user("USE_PARTNER_PORTAL");
+        return certificatesOf(scheme(schemeRef));
+    }
+
+    private List<Map<String, Object>> certificatesOf(GroupScheme s) {
+        String schemeRef = s.getRef();
         List<String> benefits = em.createQuery("select b.benefitType from SchemeBenefit b where b.schemeRef = :ref"
                 + " order by b.benefitType", String.class).setParameter("ref", schemeRef).getResultList();
         return em.createQuery("select m from SchemeMember m where m.scheme = :s order by m.lastName, m.firstName",
                         SchemeMember.class).setParameter("s", s).getResultList().stream()
-                .filter(m -> Set.of(SchemeMember.ACTIVE, SchemeMember.PARTIALLY_ACCEPTED).contains(m.getStatus()))
+                // A member awaiting underwriting is certified for the free cover already in force (AT-GL03-01).
+                .filter(m -> SchemeMember.ON_COVER.contains(m.getStatus()) && m.getAcceptedCover().signum() > 0)
                 .map(m -> {
                     Map<String, Object> c = new LinkedHashMap<>();
                     c.put("certificateNo", s.getRef() + "-" + m.getMemberKey());
