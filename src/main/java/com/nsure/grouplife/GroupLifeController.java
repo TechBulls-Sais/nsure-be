@@ -60,6 +60,12 @@ public class GroupLifeController {
         return groupLife.saveBenefit(ref, body);
     }
 
+    /** {note}: a second person approves the scheme's pending benefit changes (publishes SchemePlanApproved). */
+    @PostMapping("/schemes/{ref}/benefits/approval")
+    public List<Map<String, Object>> approvePlan(@PathVariable String ref, @RequestBody JsonNode body) {
+        return groupLife.approvePlan(ref, body);
+    }
+
     @GetMapping("/schemes/{ref}/impact")
     public Map<String, Object> impact(@PathVariable String ref, @RequestParam String eventType,
             @RequestParam(required = false) String effectiveDate,
@@ -98,6 +104,12 @@ public class GroupLifeController {
     @PostMapping("/schemes/{ref}/credit-loans")
     public Map<String, Object> bordereau(@PathVariable String ref, @RequestBody JsonNode body) {
         return groupLife.bordereau(ref, body);
+    }
+
+    @GetMapping("/credit-loans/{id}/settlement")
+    public Map<String, Object> settlementPreview(@PathVariable Long id,
+            @RequestParam(required = false) String settlementDate) {
+        return groupLife.settlementPreview(id, settlementDate);
     }
 
     @PostMapping("/credit-loans/{id}/settlement")

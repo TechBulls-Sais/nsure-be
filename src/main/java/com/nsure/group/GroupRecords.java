@@ -27,9 +27,49 @@ public class GroupRecords {
     static final Pattern ISO_DATE = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
 
     private final EntityManager em;
+    private final com.nsure.integration.Outbox outbox;
 
-    public GroupRecords(EntityManager em) {
+    public GroupRecords(EntityManager em, com.nsure.integration.Outbox outbox) {
         this.em = em;
+        this.outbox = outbox;
+    }
+
+    /**
+     * Records a member change and publishes it (GL04 MemberCoverChanged); a change that leaves cover waiting for
+     * underwriting is also published as a referral (GL03 MemberUnderwritingReferred).
+     */
+    void memberChanged(MemberChange change) {
+        em.persist(change);
+        SchemeMember m = change.getMember();
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("schemeRef", m.getScheme().getRef());
+        data.put("memberKey", m.getMemberKey());
+        data.put("memberId", m.getId());
+        data.put("changeType", change.getChangeType());
+        data.put("effectiveDate", change.getEffectiveDate().toString());
+        data.put("coverBefore", change.getCoverBefore() == null ? null : change.getCoverBefore().toPlainString());
+        data.put("coverAfter", change.getCoverAfter().toPlainString());
+        data.put("pendingAfter", change.getPendingAfter().toPlainString());
+        data.put("status", m.getStatus());
+        data.put("sourceRef", change.getBatchRef());
+        outbox.publish(com.nsure.integration.Events.MEMBER_COVER_CHANGED, m.getMemberKey(), data, change.getChangedBy());
+        if (java.util.Set.of("JOIN", "SALARY", "TRANSFER_IN").contains(change.getChangeType())
+                && SchemeMember.UNDERWRITING_PENDING.equals(m.getStatus()) && m.getPendingCover().signum() > 0) {
+            Map<String, Object> referral = new java.util.LinkedHashMap<>();
+            referral.put("schemeRef", m.getScheme().getRef());
+            referral.put("memberKey", m.getMemberKey());
+            referral.put("memberId", m.getId());
+            referral.put("changeType", change.getChangeType());
+            referral.put("requestedCover", m.getRequestedCover().toPlainString());
+            referral.put("acceptedCover", m.getAcceptedCover().toPlainString());
+            referral.put("pendingCover", m.getPendingCover().toPlainString());
+            outbox.publish(com.nsure.integration.Events.MEMBER_UNDERWRITING_REFERRED, m.getMemberKey(), referral,
+                    change.getChangedBy());
+        }
+    }
+
+    void publish(String type, String ref, Map<String, ?> data, String actor) {
+        outbox.publish(type, ref, data, actor);
     }
 
     // ── lookups ────────────────────────────────────────────────────────────────────────────────────

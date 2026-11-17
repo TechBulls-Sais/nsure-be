@@ -203,8 +203,8 @@ public class GroupLifeService {
         ObjectNode scheme = mapper.createObjectNode();
         scheme.put("name", q.sponsorName).put("sector", q.sector).put("inceptionDate", inception.toString())
                 .put("renewalDate", inception.plusYears(1).toString());
-        String schemeRef = schemes.createScheme(scheme).scheme().ref();
-        scheme(schemeRef).setQuoteRef(ref);
+        // SchemeActivated is published by the scheme's creation, with the quote it came from.
+        String schemeRef = schemes.createScheme(scheme, ref).scheme().ref();
         q.status = "ACTIVATED";
         q.schemeRef = schemeRef;
         for (String type : q.benefits.split(",")) {
@@ -219,10 +219,15 @@ public class GroupLifeService {
             b.terms = defaultTerms(b.benefitType);
             b.updatedBy = user.getUsername();
             b.updatedAt = LocalDateTime.now();
+            // The plan comes from the quote the underwriter approved.
+            b.approvalStatus = "APPROVED";
+            b.approvedBy = q.decidedBy;
+            b.approvedAt = LocalDateTime.now();
             em.persist(b);
         }
-        outbox.publish(Events.SCHEME_ACTIVATED, schemeRef, Map.of("schemeRef", schemeRef, "quoteRef", ref,
-                "sponsor", q.sponsorName, "inceptionDate", inception.toString()), user.getUsername());
+        outbox.publish(Events.SCHEME_PLAN_APPROVED, schemeRef, Map.of("schemeRef", schemeRef, "benefits",
+                List.of(q.benefits.split(",")), "approvedBy", q.decidedBy == null ? "" : q.decidedBy,
+                "source", ref + " v" + q.versionNo), user.getUsername());
         audit.record(user.getUsername(), "Scheme activated", "Scheme", schemeRef, "From " + ref + " v" + q.versionNo);
         return quoteView(q);
     }
@@ -314,10 +319,39 @@ public class GroupLifeService {
         b.terms = optional(body, "terms") == null ? defaultTerms(type) : optional(body, "terms");
         b.updatedBy = user.getUsername();
         b.updatedAt = LocalDateTime.now();
+        // GL02: a changed benefit waits for a second person to approve the plan; only that publishes SchemePlanApproved.
+        b.approvalStatus = "PENDING";
+        b.approvedBy = null;
+        b.approvedAt = null;
         em.persist(b);
-        outbox.publish(Events.SCHEME_PLAN_APPROVED, schemeRef, Map.of("schemeRef", schemeRef, "benefitType", type),
-                user.getUsername());
         return benefitView(b);
+    }
+
+    /** {note}: approves every benefit change waiting on the scheme; not by the person who made any of them. */
+    @Transactional
+    public List<Map<String, Object>> approvePlan(String schemeRef, JsonNode body) {
+        AppUser user = user("UNDERWRITE_MEMBER");
+        scheme(schemeRef);
+        String note = required(body, "note");
+        List<Benefit> pending = em.createQuery("select b from SchemeBenefit b where b.schemeRef = :ref"
+                + " and b.approvalStatus = 'PENDING' order by b.benefitType", Benefit.class)
+                .setParameter("ref", schemeRef).getResultList();
+        if (pending.isEmpty()) {
+            throw new ConflictException(schemeRef + " has no benefit change waiting for approval.");
+        }
+        if (pending.stream().anyMatch(b -> user.getUsername().equalsIgnoreCase(b.updatedBy))) {
+            throw new NoAuthorizationException("You changed this plan, so someone else must approve it.");
+        }
+        for (Benefit b : pending) {
+            b.approvalStatus = "APPROVED";
+            b.approvedBy = user.getUsername();
+            b.approvedAt = LocalDateTime.now();
+        }
+        outbox.publish(Events.SCHEME_PLAN_APPROVED, schemeRef, Map.of("schemeRef", schemeRef, "benefits",
+                pending.stream().map(b -> b.benefitType).toList(), "approvedBy", user.getUsername(), "source", note),
+                user.getUsername());
+        audit.record(user.getUsername(), "Scheme plan approved", "Scheme", schemeRef, note);
+        return benefits(schemeRef);
     }
 
     private static String defaultTerms(String type) {
@@ -760,6 +794,39 @@ public class GroupLifeService {
         return out;
     }
 
+    /**
+     * The early-settlement preview (GL06): the refund a settlement on the date would give, without settling. The
+     * formula is the one settlement applies (unearned months pro rata, less 10%); the insurer confirms it.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> settlementPreview(Long id, String settlementDate) {
+        user("READ_SCHEME");
+        CreditLoan l = em.find(CreditLoan.class, id);
+        if (l == null) {
+            throw new NotFoundException("Loan not found");
+        }
+        LocalDate date = settlementDate == null || settlementDate.isBlank() ? LocalDate.now()
+                : LocalDate.parse(settlementDate.trim());
+        long used = monthsUsed(l, date);
+        Map<String, Object> v = loanView(l);
+        v.put("settlementDate", date);
+        v.put("monthsUsed", used);
+        v.put("monthsUnearned", l.termMonths - used);
+        v.put("refundPreview", "SETTLED".equals(l.status) ? l.refund : refund(l, used));
+        v.put("alreadySettled", "SETTLED".equals(l.status));
+        return v;
+    }
+
+    private static long monthsUsed(CreditLoan l, LocalDate date) {
+        return Math.min(l.termMonths, Math.max(0, ChronoUnit.MONTHS.between(l.startDate, date))
+                + (date.isAfter(l.startDate.plusMonths(ChronoUnit.MONTHS.between(l.startDate, date))) ? 1 : 0));
+    }
+
+    private static BigDecimal refund(CreditLoan l, long used) {
+        return l.premium.multiply(BigDecimal.valueOf(l.termMonths - used)).divide(BigDecimal.valueOf(l.termMonths),
+                2, RoundingMode.HALF_UP).multiply(new BigDecimal("0.90")).setScale(2, RoundingMode.HALF_UP);
+    }
+
     /** {settlementDate?}: closes the borrower's cover and refunds the unearned premium, once. */
     @Transactional
     public Map<String, Object> settleLoan(Long id, JsonNode body) {
@@ -773,10 +840,8 @@ public class GroupLifeService {
         }
         LocalDate date = optional(body, "settlementDate") == null ? LocalDate.now()
                 : LocalDate.parse(optional(body, "settlementDate"));
-        long used = Math.min(l.termMonths, Math.max(0, ChronoUnit.MONTHS.between(l.startDate, date))
-                + (date.isAfter(l.startDate.plusMonths(ChronoUnit.MONTHS.between(l.startDate, date))) ? 1 : 0));
-        l.refund = l.premium.multiply(BigDecimal.valueOf(l.termMonths - used)).divide(BigDecimal.valueOf(l.termMonths),
-                2, RoundingMode.HALF_UP).multiply(new BigDecimal("0.90")).setScale(2, RoundingMode.HALF_UP);
+        long used = monthsUsed(l, date);
+        l.refund = refund(l, used);
         l.status = "SETTLED";
         l.settledOn = date;
         l.note = "Settled early: " + (l.termMonths - used) + " of " + l.termMonths + " months unearned, less 10%.";
@@ -787,6 +852,13 @@ public class GroupLifeService {
             data.put("customerName", l.borrowerName);
             data.put("amount", l.refund.toPlainString());
             outbox.publish(Events.GROUP_PREMIUM_REFUNDED, l.certificateNo, data, user.getUsername());
+            // GL06: the settling administrator (BILL_SCHEME) approves the refund as previewed.
+            Map<String, Object> approved = new LinkedHashMap<>();
+            approved.put("schemeRef", l.schemeRef);
+            approved.put("certificateNo", l.certificateNo);
+            approved.put("settlementDate", date.toString());
+            approved.put("amount", l.refund.toPlainString());
+            outbox.publish(Events.UNEARNED_PREMIUM_REFUND_APPROVED, l.certificateNo, approved, user.getUsername());
         }
         audit.record(user.getUsername(), "Group credit loan settled", "Scheme", l.schemeRef, l.certificateNo
                 + " refund " + Money.text(l.refund));
@@ -851,6 +923,9 @@ public class GroupLifeService {
         v.put("productMaximum", PRODUCT_MAXIMUM.get(b.benefitType));
         v.put("updatedBy", b.updatedBy);
         v.put("updatedAt", b.updatedAt);
+        v.put("approvalStatus", b.approvalStatus);
+        v.put("approvedBy", b.approvedBy);
+        v.put("approvedAt", b.approvedAt);
         return v;
     }
 

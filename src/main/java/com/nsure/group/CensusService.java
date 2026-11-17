@@ -125,6 +125,15 @@ public class CensusService {
             }
         }
         batch.validated(total, valid);
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("schemeRef", scheme.getRef());
+        data.put("batchRef", batch.getRef());
+        data.put("externalBatchId", externalId);
+        data.put("mode", mode);
+        data.put("totalRows", total);
+        data.put("validRows", valid);
+        data.put("invalidRows", total - valid);
+        records.publish(com.nsure.integration.Events.CENSUS_BATCH_VALIDATED, batch.getRef(), data, user.getUsername());
         return records.batchView(batch);
     }
 
@@ -190,6 +199,13 @@ public class CensusService {
         }
         batch.committed(accepted, rejected, user.getUsername());
         records.refreshTotals(scheme);
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("schemeRef", scheme.getRef());
+        data.put("batchRef", batch.getRef());
+        data.put("externalBatchId", batch.getExternalBatchId());
+        data.put("acceptedRows", accepted);
+        data.put("rejectedRows", rejected);
+        records.publish(com.nsure.integration.Events.CENSUS_BATCH_COMPLETED, batch.getRef(), data, user.getUsername());
         return records.batchView(batch);
     }
 
@@ -212,7 +228,7 @@ public class CensusService {
                             + "-day window): all cover is referred to underwriting"
                     : SchemeMember.UNDERWRITING_PENDING.equals(member.getStatus())
                             ? "Cover above the free-cover limit is pending underwriting" : null;
-            em.persist(new MemberChange(member, JOIN, effective, null, null, batch.getRef(), note, actor));
+            records.memberChanged(new MemberChange(member, JOIN, effective, null, null, batch.getRef(), note, actor));
             return member.getId();
         }
         SchemeMember member = validator.members.get(row.getMemberKey().trim());
@@ -227,7 +243,7 @@ public class CensusService {
                 note = "Not actively at work on the increase date: the increase is referred to underwriting";
             }
         }
-        em.persist(new MemberChange(member, action, effective, salaryBefore, coverBefore, batch.getRef(), note, actor));
+        records.memberChanged(new MemberChange(member, action, effective, salaryBefore, coverBefore, batch.getRef(), note, actor));
         return member.getId();
     }
 

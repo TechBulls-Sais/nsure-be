@@ -92,6 +92,13 @@ public final class GroupLifeRecords {
         String updatedBy;
         @Column(name = "updated_at", nullable = false)
         LocalDateTime updatedAt;
+        /** PENDING after a change until a second person approves the plan; APPROVED then. */
+        @Column(name = "approval_status", nullable = false, length = 20)
+        String approvalStatus = "APPROVED";
+        @Column(name = "approved_by", length = 100)
+        String approvedBy;
+        @Column(name = "approved_at")
+        LocalDateTime approvedAt;
     }
 
     /**

@@ -89,6 +89,15 @@ public class GroupSchemeService {
 
     @Transactional
     public GroupViews.SchemeDetailView createScheme(JsonNode body) {
+        return createScheme(body, null);
+    }
+
+    /**
+     * Creates the scheme's master record, directly or from an accepted quote, and publishes SchemeActivated once for
+     * either path (GL01).
+     */
+    @Transactional
+    public GroupViews.SchemeDetailView createScheme(JsonNode body, String quoteRef) {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("MANAGE_SCHEME");
         String name = GroupRecords.requiredText(body, "name", "Scheme name", 100);
@@ -115,7 +124,16 @@ public class GroupSchemeService {
         GroupScheme scheme = new GroupScheme(records.nextRef(GroupScheme.class, "SCH-", 3), name, sector,
                 initials(name), COLORS[(order - 1) % COLORS.length], order, inception, renewal,
                 renewal.format(DISPLAY), frequency);
+        if (quoteRef != null) {
+            scheme.setQuoteRef(quoteRef);
+        }
         em.persist(scheme);
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("schemeRef", scheme.getRef());
+        data.put("quoteRef", quoteRef);
+        data.put("sponsor", name);
+        data.put("inceptionDate", inception.toString());
+        records.publish(com.nsure.integration.Events.SCHEME_ACTIVATED, scheme.getRef(), data, user.getUsername());
         return detail(scheme);
     }
 
@@ -147,6 +165,10 @@ public class GroupSchemeService {
         em.createQuery("delete from BenefitCategory c where c.scheme = :s").setParameter("s", scheme).executeUpdate();
         em.remove(scheme);
         audit.record(user.getUsername(), "Scheme deleted", "Scheme", ref, "No contractual or financial activity");
+        // Its SchemeActivated was published, so downstream consumers hear that it has gone.
+        records.publish(com.nsure.integration.Events.SCHEME_CLOSED, ref, Map.of("schemeRef", ref, "closedOn",
+                LocalDate.now().toString(), "reason", "Deleted before any contractual or financial activity"),
+                user.getUsername());
     }
 
     private void count(List<String> activity, String label, String jpql, GroupScheme scheme) {
@@ -238,6 +260,7 @@ public class GroupSchemeService {
         BenefitCategory category = new BenefitCategory(scheme, code);
         define(category, body, user.getUsername());
         em.persist(category);
+        termsChanged(scheme, category, "ADDED", user.getUsername());
         return GroupRecords.categoryView(category, 0);
     }
 
@@ -261,7 +284,22 @@ public class GroupSchemeService {
                 .getSingleResult();
         // The rate applies to future invoices, so the dashboard premium follows it.
         records.refreshTotals(scheme);
+        termsChanged(scheme, category, "AMENDED", user.getUsername());
         return GroupRecords.categoryView(category, active.intValue());
+    }
+
+    /** GL02 CategoryTermsChanged: the category's terms as they now stand, for downstream rating and documents. */
+    private void termsChanged(GroupScheme scheme, BenefitCategory c, String change, String actor) {
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("schemeRef", scheme.getRef());
+        data.put("categoryCode", c.getCode());
+        data.put("change", change);
+        data.put("benefitBasis", c.getBenefitBasis());
+        data.put("salaryMultiple", c.getSalaryMultiple() == null ? null : c.getSalaryMultiple().toPlainString());
+        data.put("fixedCover", c.getFixedCover() == null ? null : c.getFixedCover().toPlainString());
+        data.put("freeCoverLimit", c.getFreeCoverLimit().toPlainString());
+        data.put("ratePerMille", c.getRatePerMille().toPlainString());
+        records.publish(com.nsure.integration.Events.CATEGORY_TERMS_CHANGED, scheme.getRef(), data, actor);
     }
 
     private BenefitCategory findCategory(GroupScheme scheme, String code) {
@@ -365,8 +403,17 @@ public class GroupSchemeService {
         } else {
             throw new IllegalArgumentException("Decision must be ACCEPT or DECLINE");
         }
-        em.persist(new MemberChange(member, "UNDERWRITING", LocalDate.now(), member.getSalary(), coverBefore, null,
-                decision + (reason == null ? "" : ": " + reason), user.getUsername()));
+        records.memberChanged(new MemberChange(member, "UNDERWRITING", LocalDate.now(), member.getSalary(), coverBefore,
+                null, decision + (reason == null ? "" : ": " + reason), user.getUsername()));
+        Map<String, Object> authorised = new java.util.LinkedHashMap<>();
+        authorised.put("schemeRef", member.getScheme().getRef());
+        authorised.put("memberKey", member.getMemberKey());
+        authorised.put("memberId", member.getId());
+        authorised.put("decision", decision);
+        authorised.put("acceptedCover", member.getAcceptedCover().toPlainString());
+        authorised.put("effectiveDate", LocalDate.now().toString());
+        records.publish(com.nsure.integration.Events.MEMBER_COVER_AUTHORISED, member.getMemberKey(), authorised,
+                user.getUsername());
         records.refreshTotals(member.getScheme());
         em.flush(); // so the view carries the member's new version (NS-TXN-001)
         return GroupRecords.memberView(member);

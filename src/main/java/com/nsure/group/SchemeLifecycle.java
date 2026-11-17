@@ -156,7 +156,7 @@ public class SchemeLifecycle {
         for (SchemeMember m : members(scheme, "SUSPENSION")) {
             BigDecimal cover = m.getAcceptedCover();
             m.suspend(effective);
-            em.persist(new MemberChange(m, "SUSPENSION", effective, m.getSalary(), cover, requestRef,
+            records.memberChanged(new MemberChange(m, "SUSPENSION", effective, m.getSalary(), cover, requestRef,
                     "Scheme suspended", actor));
             n++;
         }
@@ -169,7 +169,7 @@ public class SchemeLifecycle {
         int n = 0;
         for (SchemeMember m : members(scheme, "REACTIVATION")) {
             m.reactivate(effective);
-            em.persist(new MemberChange(m, "REACTIVATION", effective, m.getSalary(), m.getAcceptedCover(), requestRef,
+            records.memberChanged(new MemberChange(m, "REACTIVATION", effective, m.getSalary(), m.getAcceptedCover(), requestRef,
                     "Scheme reactivated", actor));
             n++;
         }
@@ -193,7 +193,7 @@ public class SchemeLifecycle {
                 m.reactivate(effective);
             }
             m.cease(effective.minusDays(1));
-            em.persist(new MemberChange(m, "CLOSURE", effective, m.getSalary(), cover, requestRef,
+            records.memberChanged(new MemberChange(m, "CLOSURE", effective, m.getSalary(), cover, requestRef,
                     "Scheme closed; cover ended " + effective.minusDays(1), actor));
             n++;
         }
@@ -218,12 +218,12 @@ public class SchemeLifecycle {
         for (SchemeMember m : members(source, "TRANSFER")) {
             BigDecimal cover = m.getAcceptedCover();
             m.cease(effective.minusDays(1));
-            em.persist(new MemberChange(m, "TRANSFER_OUT", effective, m.getSalary(), cover, requestRef,
+            records.memberChanged(new MemberChange(m, "TRANSFER_OUT", effective, m.getSalary(), cover, requestRef,
                     "Transferred to " + target.getRef(), actor));
             SchemeMember moved = new SchemeMember(target, categories.get(m.getCategory().getCode()), m.getMemberKey(),
                     m.getFirstName(), m.getLastName(), m.getDateOfBirth(), m.getSalary(), effective, requestRef);
             em.persist(moved);
-            em.persist(new MemberChange(moved, "TRANSFER_IN", effective, null, null, requestRef,
+            records.memberChanged(new MemberChange(moved, "TRANSFER_IN", effective, null, null, requestRef,
                     "Transferred from " + source.getRef() + (SchemeMember.UNDERWRITING_PENDING.equals(moved.getStatus())
                             ? "; cover above the free-cover limit is pending underwriting" : ""), actor));
             n++;

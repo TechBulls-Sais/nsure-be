@@ -304,6 +304,7 @@ public final class ApiAccessRules {
             rule(POST, "/group-life/quotes/**", anyOf("MANAGE_SCHEME")),
             rule(POST, "/group-life/quotes", anyOf("MANAGE_SCHEME")),
             rule(PUT, "/group-life/schemes/*/benefits", anyOf("MANAGE_SCHEME")),
+            rule(POST, "/group-life/schemes/*/benefits/approval", anyOf("UNDERWRITE_MEMBER")),
             rule(POST, "/group-life/schemes/*/events", anyOf("MANAGE_SCHEME")),
             rule(POST, "/group-life/events/*/decision", anyOf("UNDERWRITE_MEMBER")),
             rule(POST, "/group-life/schemes/*/credit-loans", anyOf("PROCESS_CENSUS")),
