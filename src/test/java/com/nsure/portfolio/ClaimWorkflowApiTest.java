@@ -585,6 +585,42 @@ class ClaimWorkflowApiTest {
                 .andExpect(jsonPath("$.evidenceOverrideReason").value(""));
     }
 
+    /** SH05: the claim contract's events under the specification's names, beside the older names handlers use. */
+    @Test
+    void theClaimLifecyclePublishesTheSpecificationEvents() throws Exception {
+        customer("Ditiro Events", "ditiroevents");
+        String policy = activePolicy("Ditiro Events", 50000, 60);
+        beneficiary(policy, "Mpho Events");
+        String paid = staffLodge(policy, "Mpho Events");
+        assertThat(eventTypes(paid)).containsExactly("ClaimReceived", "ClaimRegistered");
+        mockMvc.perform(post("/portfolio/claims/" + paid + "/assess").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk());
+        assertThat(eventTypes(paid)).endsWith("ClaimAssessed");
+        mockMvc.perform(json(post("/portfolio/claims/" + paid + "/approve"), "admin", "{" + EVIDENCE + "}"))
+                .andExpect(status().isOk());
+        String sent = mockMvc.perform(post("/portfolio/claims/" + paid + "/pay").with(signedIn("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        assertThat(eventTypes(paid)).doesNotContain("ClaimPaymentSettled");
+        mockMvc.perform(json(post("/portfolio/claims/" + paid + "/confirm-payout"), "admin",
+                        "{\"providerReference\":\"" + JsonPath.read(sent, "$.payoutReference") + "\"}"))
+                .andExpect(status().isOk());
+        assertThat(eventTypes(paid)).containsSubsequence("ClaimApproved", "ClaimPaid", "ClaimPaymentSettled");
+
+        String declined = staffLodge(policy, "Mpho Events");
+        mockMvc.perform(json(post("/portfolio/claims/" + declined + "/reject"), "assessor",
+                        "{\"reason\":\"Same event as an earlier claim.\"}"))
+                .andExpect(status().isOk());
+        assertThat(eventTypes(declined)).endsWith("ClaimRejected", "ClaimDeclined");
+        String payload = tx.execute(s -> em.createQuery("select e.payload from OutboxEvent e where e.aggregateRef = :ref"
+                + " and e.eventType = 'ClaimDeclined'", String.class).setParameter("ref", declined).getSingleResult());
+        assertThat(payload).contains("Same event as an earlier claim.").contains(policy);
+    }
+
+    private List<String> eventTypes(String claim) {
+        return tx.execute(s -> em.createQuery("select e.eventType from OutboxEvent e where e.aggregateRef = :ref"
+                + " order by e.aggregateVersion", String.class).setParameter("ref", claim).getResultList());
+    }
+
     @Test
     void concurrentApprovalsCannotTogetherExceedTheSharedLimit() throws Exception {
         customer("Lorato Limit", "loratolimit");

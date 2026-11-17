@@ -168,8 +168,6 @@ public class CareCashService {
         CareCashEvent e = calculate(p, body, user.getUsername());
         e.ref = numbers.next("CCE-", 6, () -> 0);
         em.persist(e);
-        outbox.publish(Events.BENEFIT_LIMIT_CONSUMED, e.ref, Map.of("policyRef", policyRef, "lifeName", e.lifeName,
-                "days", e.paidDays, "eventRef", e.ref), user.getUsername());
         return view(e);
     }
 
@@ -212,6 +210,12 @@ public class CareCashService {
             history.record(WorkflowHistory.POLICY, p.getRef(), p.getCustomerName(), "Premium Waived", p.getStatus(),
                     p.getStatus(), e.waiverMonths + " months of premium waived after " + e.stayDays
                             + " admission days (" + ref + ")", user.getUsername());
+        }
+        if (approve) {
+            // SH05: the days are consumed by the approved event, not by recording an assessment that may be declined.
+            outbox.publish(Events.BENEFIT_LIMIT_CONSUMED, e.ref, Map.of("policyRef", e.policyRef, "lifeName",
+                    e.lifeName, "days", e.paidDays, "eventRef", e.ref, "amount", e.amount.toPlainString()),
+                    user.getUsername());
         }
         audit.record(user.getUsername(), "Care Cash event " + e.status.toLowerCase(Locale.ROOT), "Policy", e.policyRef,
                 ref + " " + Money.display(e.amount) + ": " + note);

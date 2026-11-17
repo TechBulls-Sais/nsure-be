@@ -88,6 +88,16 @@ public final class Events {
     public static final String RECEIPT_ALLOCATED = "ReceiptAllocated";
     public static final String PAYMENT_RETURNED = "PaymentReturned";
     public static final String BENEFIT_LIMIT_CONSUMED = "BenefitLimitConsumed";
+    // SH05 names for the claim contract, published alongside the older names that existing handlers consume:
+    // ClaimRegistered with ClaimReceived, ClaimDeclined with ClaimRejected, ClaimPaymentSettled with ClaimPaid.
+    /** claimRef, policyRef, customerName, product, amount, reason, claimType, eventDate. Raised when a claim is lodged. */
+    public static final String CLAIM_REGISTERED = "ClaimRegistered";
+    /** claimRef, policyRef, customerName, product, amount, reason (assessor's note), evidenceOutstanding. */
+    public static final String CLAIM_ASSESSED = "ClaimAssessed";
+    /** claimRef, policyRef, customerName, product, amount, reason (the decline reason). */
+    public static final String CLAIM_DECLINED = "ClaimDeclined";
+    /** claimRef, policyRef, customerName, product, amount, payoutRef. The payout is confirmed settled. */
+    public static final String CLAIM_PAYMENT_SETTLED = "ClaimPaymentSettled";
 
     private Events() {
     }

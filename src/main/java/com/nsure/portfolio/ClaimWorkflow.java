@@ -185,6 +185,10 @@ public class ClaimWorkflow {
         claim.setStpEligible(stp == null);
         claim.setStpIneligibleCode(stp == null ? null : stp.code());
         outbox.publish(Events.CLAIM_RECEIVED, claim.getRef(), decisionPayload(claim, null), actor);
+        Map<String, Object> registered = decisionPayload(claim, null);
+        registered.put("claimType", claim.getClaimType());
+        registered.put("eventDate", claim.getEventDate());
+        outbox.publish(Events.CLAIM_REGISTERED, claim.getRef(), registered, actor);
         if (stp == null) {
             claim.verifyPayout(SYSTEM_VERIFIER);
             claim.setStatus(APPROVED);
@@ -374,6 +378,9 @@ public class ClaimWorkflow {
                 "Recommended for payout of " + Money.display(claim.getAmount()) + (trim(note).isEmpty() ? "" : " · " + trim(note))
                         + (missing.isEmpty() ? "" : " · evidence outstanding: " + String.join(", ", missing)),
                 actor.getUsername());
+        Map<String, Object> assessed = decisionPayload(claim, trim(note).isEmpty() ? null : trim(note));
+        assessed.put("evidenceOutstanding", missing.size());
+        outbox.publish(Events.CLAIM_ASSESSED, ref, assessed, actor.getUsername());
         return claim;
     }
 
@@ -495,6 +502,7 @@ public class ClaimWorkflow {
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Rejected", previous, REJECTED,
                 "Reason: " + text, actor.getUsername());
         publishDecision(Events.CLAIM_REJECTED, claim, text, actor);
+        publishDecision(Events.CLAIM_DECLINED, claim, text, actor);
         return claim;
     }
 
@@ -645,6 +653,7 @@ public class ClaimWorkflow {
         paid.put("amount", claim.getPayoutAmount().toPlainString());
         paid.put("payoutRef", reference);
         outbox.publish(Events.CLAIM_PAID, ref, paid, actor.getUsername());
+        outbox.publish(Events.CLAIM_PAYMENT_SETTLED, ref, paid, actor.getUsername());
         if (claim.getPolicyRef() != null) {
             policies.terminateIfClaimEndsCover(policies.policy(claim.getPolicyRef()), claim, actor.getUsername());
         }

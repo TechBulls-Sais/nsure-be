@@ -56,6 +56,8 @@ class CareCashApiTest {
                 .andExpect(jsonPath("$.waiverMonths").value(3))
                 .andReturn().getResponse().getContentAsString();
         String ref = JsonPath.read(recorded, "$.ref");
+        // SH05: recording an assessment consumes nothing yet; the approval does.
+        org.assertj.core.api.Assertions.assertThat(events(ref, "BenefitLimitConsumed")).isZero();
         mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policyDaysUsed").value(12))
                 .andExpect(jsonPath("$.lives[0].usedThisYear").value(12));
@@ -75,6 +77,7 @@ class CareCashApiTest {
         mockMvc.perform(json(post("/care-cash/events/" + ref + "/decision"), "assessor", "{\"approve\":true,\"note\":\"Hospital bill checked\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPROVED"));
+        org.assertj.core.api.Assertions.assertThat(events(ref, "BenefitLimitConsumed")).isEqualTo(1);
         org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
                 "select next_premium_due from ins_policy where record_ref = ?", String.class, policy))
                 .isEqualTo(LocalDate.parse(due.substring(0, 10)).plusMonths(3).toString());
@@ -133,8 +136,12 @@ class CareCashApiTest {
     }
 
     private int benefitPaidEvents(String ref) {
-        return jdbc.queryForObject("select count(*) from int_outbox_event where event_type = 'ContractualBenefitPaid'"
-                + " and aggregate_ref = ?", Integer.class, ref);
+        return events(ref, "ContractualBenefitPaid");
+    }
+
+    private int events(String ref, String type) {
+        return jdbc.queryForObject("select count(*) from int_outbox_event where event_type = ? and aggregate_ref = ?",
+                Integer.class, type, ref);
     }
 
     @Test
