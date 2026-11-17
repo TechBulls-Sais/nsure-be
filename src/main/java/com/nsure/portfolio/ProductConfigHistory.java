@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.nsure.audit.evidence.EvidenceChain;
+import com.nsure.integration.Events;
+import com.nsure.integration.Outbox;
 import com.nsure.security.exception.NoAuthorizationException;
 import jakarta.persistence.EntityManager;
 import java.nio.charset.StandardCharsets;
@@ -14,7 +16,10 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,17 +31,22 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class ProductConfigHistory {
 
+    /** The review step every configuration passes before it can be activated (NS-SH02-003). */
+    static final String IN_REVIEW = "In review";
+
     public record VersionView(int version, String status, String savedBy, LocalDateTime savedAt, JsonNode snapshot) {
     }
 
     private final EntityManager em;
     private final ObjectMapper mapper;
     private final EvidenceChain evidence;
+    private final Outbox outbox;
 
-    public ProductConfigHistory(EntityManager em, ObjectMapper mapper, EvidenceChain evidence) {
+    public ProductConfigHistory(EntityManager em, ObjectMapper mapper, EvidenceChain evidence, Outbox outbox) {
         this.em = em;
         this.mapper = mapper;
         this.evidence = evidence;
+        this.outbox = outbox;
     }
 
     /** The configuration's content, without its status, version or display order. */
@@ -63,10 +73,12 @@ public class ProductConfigHistory {
     }
 
     /**
-     * Refuses an activation that is not independent: content changed in the same request, or the user activating is
-     * the one who made the content as it stands.
+     * Refuses an activation that is not independent: content changed in the same request, the configuration has not
+     * been through review (NS-SH02-003: draft → in review → active), or the user activating is the one who made the
+     * content as it stands.
      */
-    void requireIndependentActivation(String ref, JsonNode before, JsonNode after, String actor) {
+    void requireIndependentActivation(String ref, String currentStatus, JsonNode before, JsonNode after,
+            String actor) {
         if (ref == null || before == null) {
             throw new NoAuthorizationException("A new configuration cannot be created Active. Save it for review;"
                     + " another user activates it.");
@@ -75,11 +87,21 @@ public class ProductConfigHistory {
             throw new IllegalArgumentException("Activation cannot include changes. Save the changes for review first;"
                     + " another user then activates the configuration as reviewed.");
         }
+        if (!IN_REVIEW.equalsIgnoreCase(currentStatus) && !"active".equalsIgnoreCase(currentStatus)) {
+            throw new IllegalArgumentException(ref + " is " + (currentStatus == null ? "not submitted" : currentStatus)
+                    + ". Only a configuration in review can be activated: submit it for review first, then another"
+                    + " user activates it.");
+        }
         String author = contentAuthor(ref, hash(before));
         if (author != null && author.equalsIgnoreCase(actor)) {
             throw new NoAuthorizationException("You made the current version of " + ref
                     + ", so another user must activate it (maker-checker).");
         }
+    }
+
+    /** Who made the configuration's content as it stands, or null when no saved history records it (seed data). */
+    String madeBy(ProductConfiguration row) {
+        return row.getRef() == null ? null : contentAuthor(row.getRef(), hash(content(row)));
     }
 
     /** Keeps the saved state, and evidence of what changed. */
@@ -92,6 +114,33 @@ public class ProductConfigHistory {
         evidence.record(actor, before == null ? "Created product configuration" : "Saved product configuration",
                 "ProductConfiguration", row.getRef() + " v" + row.getVersionNo(),
                 "status " + row.getStatus() + (before == null ? "" : "; " + changes(before, after)));
+    }
+
+    /**
+     * SH02 events, in the save's transaction: ProductActivated when a configuration becomes Active, ProductWithdrawn
+     * when an active one leaves Active (it is no longer offered for new business).
+     */
+    void publishStatusChange(ProductConfiguration row, String previousStatus, String actor) {
+        boolean wasActive = isActive(previousStatus);
+        boolean isActive = isActive(row.getStatus());
+        if (wasActive == isActive) {
+            return;
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("configRef", row.getRef());
+        data.put("code", row.getCode());
+        data.put("name", row.getName());
+        data.put("version", row.getVersionNo());
+        data.put("status", row.getStatus());
+        data.put("previousStatus", previousStatus);
+        data.put(isActive ? "activatedBy" : "withdrawnBy", actor);
+        data.put("source", "ProductConfiguration");
+        outbox.publish(isActive ? Events.PRODUCT_ACTIVATED : Events.PRODUCT_WITHDRAWN, row.getRef(), data, actor);
+    }
+
+    static boolean isActive(String status) {
+        String s = status == null ? "" : status.trim().toLowerCase(Locale.ROOT);
+        return s.equals("active") || s.equals("demo active");
     }
 
     @Transactional(readOnly = true)

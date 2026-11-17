@@ -45,6 +45,9 @@ class ServicingApiTest {
     @Autowired
     private PolicyWorkflow policies;
 
+    @Autowired
+    private com.nsure.integration.OutboxDispatcher dispatcher;
+
     @Test
     void anEndorsementIsPreviewedThenAppliedOrHeldForTheRightReview() throws Exception {
         String policy = activePolicy("Onalenna Payer", "Term Life", "Bronze", "");
@@ -52,6 +55,10 @@ class ServicingApiTest {
 
         // NS-IL03-003: the preview changes nothing and names the route.
         String payer = "{\"type\":\"PAYER\",\"payerName\":\"Kabelo Payer\",\"payerRelationship\":\"Spouse\",\"reason\":\"Spouse now pays\"}";
+        // Test C-42: a missing value is named in plain language, not by its API field name.
+        mockMvc.perform(json(post(base + "/endorsements/preview"), "admin", payer.replace("Kabelo Payer", " ")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value("Enter the payer's name."));
         mockMvc.perform(json(post(base + "/endorsements/preview"), "admin", payer))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.route").value("APPLY"))
@@ -67,6 +74,22 @@ class ServicingApiTest {
         mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policy.payerName").value("Kabelo Payer"));
         assertThat(events("PolicyChanged", policy)).isEqualTo(1);
+
+        // IL03 workspace: beneficiary history keeps a removed designation with its dates, not only current ones.
+        String added = mockMvc.perform(json(post("/portfolio/policies/" + policy + "/beneficiaries"), "admin",
+                        "{\"fullName\":\"Lesedi Beneficiary\",\"relationship\":\"Child\"}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Integer beneficiary = ((List<Integer>) JsonPath.read(added, "$..beneficiaries[?(@.fullName == 'Lesedi Beneficiary')].id"))
+                .get(0);
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .delete("/portfolio/policies/" + policy + "/beneficiaries/" + beneficiary)
+                        .with(signedIn("admin", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.beneficiaryHistory[?(@.fullName == 'Lesedi Beneficiary')].removedFrom")
+                        .value(LocalDate.now().toString()))
+                .andExpect(jsonPath("$.beneficiaryHistory[?(@.fullName == 'Lesedi Beneficiary')].removedBy").value("admin"));
 
         // A material increase in risk is decided by underwriting, by someone other than the requester.
         String increase = "{\"type\":\"SUM_ASSURED\",\"tier\":\"Silver\",\"reason\":\"Customer wants more cover\"}";
@@ -191,6 +214,19 @@ class ServicingApiTest {
         // NS-IL04-005: a child nearing the review age gets a dated task; ceasing them reduces the premium.
         jdbc.update("update ins_policy_life_cover set date_of_birth = ? where full_name = 'Tumo Family'",
                 LocalDate.now().minusYears(21).plusDays(30));
+        // IL04 roster: the warning shows on the roster before any review task is run, with the life's limit and
+        // its underwriting outcome (added by an endorsement underwriting approved).
+        String roster = mockMvc.perform(get(base).with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Integer tumo = ((List<Integer>) JsonPath.read(roster, "$.lives[?(@.fullName == 'Tumo Family')].id")).get(0);
+        assertThat((List<List<String>>) JsonPath.read(roster, "$.roster.lives[?(@.lifeId == " + tumo + ")].warnings"))
+                .singleElement().satisfies(w -> assertThat(String.join(" ", w)).contains("child review age of 21"));
+        assertThat((List<String>) JsonPath.read(roster, "$.roster.lives[?(@.lifeId == " + tumo + ")].underwriting"))
+                .singleElement().satisfies(u -> assertThat(u).contains("approved by underwriter"));
+        assertThat((List<Number>) JsonPath.read(roster, "$.roster.lives[?(@.lifeId == " + tumo + ")].used"))
+                .singleElement().satisfies(u -> assertThat(u.doubleValue()).isZero());
+        assertThat(((Number) JsonPath.read(roster, "$.roster.policyLimit")).doubleValue()).isPositive();
         mockMvc.perform(post("/servicing/life-reviews/run").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.created").value(1));
@@ -204,6 +240,39 @@ class ServicingApiTest {
                 .andExpect(jsonPath("$.status").value("CEASED"));
         mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.lives[?(@.fullName == 'Tumo Family')].status").value("CEASED"));
+        // IL04 events: raising the review and closing it both change the dependant's eligibility.
+        assertThat(events("DependantEligibilityChanged", policy)).isEqualTo(2);
+        assertThat(jdbc.queryForList("select payload from int_outbox_event where event_type = 'DependantEligibilityChanged'"
+                + " and aggregate_ref = ? order by id", String.class, policy).get(1)).contains("\"outcome\":\"CEASED\"");
+    }
+
+    @Test
+    void livesCapturedAtApplicationAreAnnouncedAtIssueAndCeaseWithThePolicy() throws Exception {
+        String policy = activePolicy("Goitse Roster", "Family Funeral", "Bronze",
+                ",\"lives\":[{\"relationship\":\"Spouse\",\"fullName\":\"Mpho Roster\",\"dateOfBirth\":\""
+                        + LocalDate.now().minusYears(31) + "\"}]");
+        assertThat(events("InsuredLifeAdded", policy)).isZero();
+        // PolicyIssued announces both lives captured at application, once however often it is delivered.
+        dispatcher.dispatch();
+        assertThat(events("InsuredLifeAdded", policy)).isEqualTo(2);
+        tx.executeWithoutResult(s -> em.createQuery("update EventDelivery d set d.status = 'PENDING', d.attempts = 0,"
+                        + " d.nextAttemptAt = :now where d.handler = 'servicing.insured-lives' and d.event.id in"
+                        + " (select e.id from OutboxEvent e where e.aggregateRef = :ref)")
+                .setParameter("now", java.time.LocalDateTime.now().minusSeconds(1)).setParameter("ref", policy)
+                .executeUpdate());
+        dispatcher.dispatch();
+        assertThat(events("InsuredLifeAdded", policy)).isEqualTo(2);
+
+        // Ending the policy ends the lives it covers, each with InsuredLifeCeased.
+        mockMvc.perform(json(post("/servicing/policies/" + policy + "/termination"), "admin",
+                        "{\"reason\":\"DEATH\",\"note\":\"Death certificate received\"}"))
+                .andExpect(status().isOk());
+        dispatcher.dispatch();
+        dispatcher.dispatch();
+        assertThat(events("InsuredLifeCeased", policy)).isEqualTo(2);
+        mockMvc.perform(get("/servicing/policies/" + policy).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.lives[?(@.status == 'ACTIVE')]").isEmpty())
+                .andExpect(jsonPath("$.lives[?(@.fullName == 'Mpho Roster')].effectiveTo").value(LocalDate.now().toString()));
     }
 
     @Test
@@ -298,17 +367,47 @@ class ServicingApiTest {
                 .andExpect(jsonPath("$.contractStatus").value("Active"));
         assertThat(events("PolicyReinstated", policy)).isEqualTo(1);
 
-        // A termination states its cause.
+        // A termination states its cause; lapse keeps its own process.
         mockMvc.perform(json(post("/servicing/policies/" + policy + "/termination"), "admin",
-                        "{\"reason\":\"CANCELLATION\",\"note\":\"wrong route\"}"))
+                        "{\"reason\":\"LAPSE\",\"note\":\"wrong route\"}"))
                 .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/servicing/policies/" + policy + "/termination"), "admin",
                         "{\"reason\":\"OTHER\",\"note\":\"Court order received\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.contractStatus").value("Terminated"))
-                .andExpect(jsonPath("$.terminationReason").value("OTHER"));
+                .andExpect(jsonPath("$.terminationReason").value("OTHER"))
+                // Test C-37: an ended contract has no premium due.
+                .andExpect(jsonPath("$.nextPremiumDue").doesNotExist())
+                .andExpect(jsonPath("$.paymentStatus").value("Closed"));
         mockMvc.perform(json(put("/servicing/rules/" + rule), "admin", "{\"reinstatementNeedsApproval\":false}"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void terminationCausesDistinguishCancellationAndExpiry() throws Exception {
+        // Test C-37 / IL03: cancellation and expiry are causes too; a cancellation takes the cancellation process.
+        String cancelled = activePolicy("Mpho Cancel", "Term Life", "Bronze", "");
+        mockMvc.perform(json(post("/servicing/policies/" + cancelled + "/termination"), "support",
+                        "{\"reason\":\"CANCELLATION\",\"note\":\"Written request\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/servicing/policies/" + cancelled + "/termination"), "admin",
+                        "{\"reason\":\"CANCELLATION\",\"note\":\"Written request from the policyholder\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contractStatus").value("Cancelled"))
+                .andExpect(jsonPath("$.terminationReason").value("CANCELLATION"))
+                .andExpect(jsonPath("$.nextPremiumDue").doesNotExist());
+        assertThat(events("PolicyCancelled", cancelled)).isEqualTo(1);
+        assertThat(events("PolicyTerminated", cancelled)).isEqualTo(1);
+
+        String expired = activePolicy("Kagiso Expiry", "Term Life", "Bronze", "");
+        mockMvc.perform(json(post("/servicing/policies/" + expired + "/termination"), "admin",
+                        "{\"reason\":\"expiry\",\"note\":\"Contract term ended\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contractStatus").value("Terminated"))
+                .andExpect(jsonPath("$.terminationReason").value("EXPIRY"))
+                .andExpect(jsonPath("$.coverStatus").value("Ended"));
+        mockMvc.perform(json(post("/servicing/policies/" + expired + "/termination"), "admin", "{\"reason\":\"OTHER\"}"))
+                .andExpect(status().isUnprocessableEntity());
     }
 
     private String activePolicy(String name, String product, String tier, String extra) throws Exception {

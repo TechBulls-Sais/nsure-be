@@ -369,7 +369,9 @@ public final class PortfolioViews {
             String wording,
             boolean approvals,
             String status,
-            int version
+            int version,
+            // Who made the content as it stands (the maker); they cannot activate it (NS-SH02-003). Null if unknown.
+            String madeBy
     ) {
     }
 }

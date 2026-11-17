@@ -55,7 +55,13 @@ public final class CreditViews {
             BigDecimal lenderAmount,
             BigDecimal estateAmount,
             String refinancedFrom,
-            LocalDateTime createdAt) {
+            LocalDateTime createdAt,
+            // The claim's payee breakdown (NS-IL05-005): the benefit, event date and who verified the payee.
+            String claimCause,
+            Boolean claimAccidental,
+            LocalDate claimEventDate,
+            String payeeVerifiedBy,
+            LocalDateTime payeeVerifiedAt) {
     }
 
     public record BalanceView(Long id, String sourceReference, LocalDate effectiveDate, BigDecimal balance,
