@@ -141,12 +141,14 @@ public final class CommunicationViews {
 
     /** Inbound correspondence (Blueprint §5): matched to a customer and linked to a case, or waiting in triage. */
     public record InboundView(Long id, String channel, String sender, String body, String receivedAt, String status,
-            String customerRef, String caseRef, String note, String handledBy) {
+            String customerRef, String caseRef, String note, String handledBy, String verificationStatus,
+            String verificationMethod, String verificationNote, String taskOwner, String taskDueAt) {
 
         static InboundView of(InboundCorrespondence m) {
             return new InboundView(m.getId(), m.getChannel(), mask(m.getSender()), m.getBody(), time(m.getReceivedAt()),
                     m.getStatus(), blank(m.getCustomerRef()), blank(m.getCaseRef()), blank(m.getNote()),
-                    blank(m.getHandledBy()));
+                    blank(m.getHandledBy()), blank(m.getVerificationStatus()), blank(m.getVerificationMethod()),
+                    blank(m.getVerificationNote()), blank(m.getTaskOwner()), time(m.getTaskDueAt()));
         }
     }
 

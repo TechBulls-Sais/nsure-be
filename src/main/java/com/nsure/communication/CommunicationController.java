@@ -129,7 +129,19 @@ public class CommunicationController {
         return webhooks.list(status);
     }
 
-    /** Body: {@code {"customerRef": "CUS-1001"}}: who an unmatched message is from. */
+    /** How a sender may be verified before a triage message is linked (AT-SH09B-03). */
+    @GetMapping("/inbound/verification-methods")
+    public List<String> verificationMethods() {
+        return MessagingWebhooks.VERIFICATION_METHODS;
+    }
+
+    /** Body {@code {}} takes the verification task; {@code {"release": true}} gives it back. */
+    @PostMapping("/inbound/{id}/owner")
+    public CommunicationViews.InboundView ownInbound(@PathVariable Long id, @RequestBody(required = false) JsonNode body) {
+        return webhooks.own(id, body);
+    }
+
+    /** Body: {@code {"customerRef": "CUS-1001", "method": "...", "note": "..."}}: who sent it, and how that was verified. */
     @PostMapping("/inbound/{id}/assign")
     public CommunicationViews.InboundView assign(@PathVariable Long id, @RequestBody(required = false) JsonNode body) {
         return webhooks.assign(id, body);

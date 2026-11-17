@@ -51,3 +51,23 @@ databaseChangeLog:
         - sql:
             comment: Messages from before this change were all customer messages.
             sql: UPDATE com_message SET recipient_role = 'CUSTOMER' WHERE recipient_role IS NULL;
+  - changeSet:
+      id: 100-inbound-verification-task
+      author: nsure
+      comment: >-
+        AT-SH09B-03: a reply from an unverified sender waits as an identity-verification task with an owner and a due
+        time; a person links it to a customer only after recording how the sender was verified.
+      changes:
+        - addColumn:
+            tableName: com_inbound
+            columns:
+              - column: {name: verification_status, type: varchar(20)}
+              - column: {name: verification_method, type: varchar(100)}
+              - column: {name: verification_note, type: varchar(500)}
+              - column: {name: task_owner, type: varchar(100)}
+              - column: {name: task_due_at, type: timestamp(6)}
+        - sql:
+            comment: Messages waiting in triage become verification tasks; earlier links recorded no verification.
+            sql: |
+              UPDATE com_inbound SET verification_status = 'REQUIRED' WHERE status = 'TRIAGE';
+              UPDATE com_inbound SET verification_status = 'NOT_RECORDED' WHERE status = 'LINKED';

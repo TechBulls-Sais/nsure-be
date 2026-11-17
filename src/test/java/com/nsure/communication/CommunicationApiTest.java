@@ -715,14 +715,34 @@ class CommunicationApiTest {
                 .andReturn().getResponse().getContentAsString();
         Integer triageId = JsonPath.<List<Integer>>read(triage, "$[*].id").get(0);
         assertThat(JsonPath.read(unknown, "$.caseRef") == null).isTrue();
-        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "ops", "{\"customerRef\":\"" + ref + "\"}"))
+        // AT-SH09B-03: an unverified sender is a verification task with a due time; nothing is linked or disclosed.
+        assertThat(JsonPath.<List<String>>read(triage, "$[*].verificationStatus")).containsOnly("REQUIRED");
+        assertThat(JsonPath.<List<String>>read(triage, "$[*].taskDueAt")).allSatisfy(due -> assertThat(due).isNotBlank());
+        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/owner"), "service", "{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.taskOwner").value("service"));
+        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/owner"), "admin", "{}"))
+                .andExpect(status().isConflict());
+        String verified = "{\"customerRef\":\"" + ref + "\",\"method\":\"Called back on the registered number\","
+                + "\"note\":\"Confirmed she wrote from a work address\"}";
+        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "ops", verified))
                 .andExpect(status().isForbidden());
+        // Linking needs a recorded verification method.
         mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "service", "{\"customerRef\":\"" + ref + "\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("verified the sender")));
+        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "service", verified))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("LINKED"))
-                .andExpect(jsonPath("$.handledBy").value("service"));
-        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "service", "{\"customerRef\":\"" + ref + "\"}"))
+                .andExpect(jsonPath("$.handledBy").value("service"))
+                .andExpect(jsonPath("$.verificationStatus").value("VERIFIED"))
+                .andExpect(jsonPath("$.verificationMethod").value("Called back on the registered number"));
+        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "service", verified))
                 .andExpect(status().isConflict());
+        assertThat(jdbc.queryForObject("select count(*) from audit_evidence where action = 'Inbound sender verified'",
+                Long.class)).isEqualTo(1L);
+        mockMvc.perform(get("/communications/inbound/verification-methods").with(signedIn("ops", "password")))
+                .andExpect(jsonPath("$.length()").value(4));
 
         // A bulk operational notice is requested by one person and released by another.
         String templates = mockMvc.perform(get("/communications/templates").with(signedIn("ops", "password")))

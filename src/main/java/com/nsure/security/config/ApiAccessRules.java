@@ -361,6 +361,7 @@ public final class ApiAccessRules {
             rule(POST, "/communications/dispatch", anyOf("MANAGE_COMMUNICATION")),
             rule(PUT, "/communications/preferences/*", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/inbound/*/assign", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/inbound/*/owner", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/bulk-notices", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/bulk-notices/*/approve", anyOf("APPROVE_TEMPLATE")),
             rule(POST, "/communications/bulk-notices/*/reject", anyOf("APPROVE_TEMPLATE")),

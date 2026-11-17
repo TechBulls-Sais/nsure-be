@@ -103,7 +103,7 @@ public class MessagingWebhooks {
         if (matches.size() == 1) {
             CustomerAccount customer = matches.get(0);
             String caseRef = serviceDesk.linkCorrespondence(customer.getRef(), channel, message.getBody(), "system");
-            message.linked(customer.getRef(), caseRef, "Matched by sender", "system");
+            message.matched(customer.getRef(), caseRef, "system");
         } else {
             message.triage(matches.isEmpty() ? "No customer has this " + label(channel) + " on file."
                     : matches.size() + " customers share this " + label(channel) + "; a person must choose.");
@@ -136,11 +136,55 @@ public class MessagingWebhooks {
         return query.setMaxResults(200).getResultStream().map(CommunicationViews.InboundView::of).toList();
     }
 
-    /** A person decides who an ambiguous message is from; it is then linked to that customer's case. */
+    /** How a person may verify who sent an unverified reply before linking it (AT-SH09B-03). */
+    static final List<String> VERIFICATION_METHODS = List.of("Called back on the registered number",
+            "Replied to the registered email address and got a confirmation", "Security questions answered",
+            "Identity document checked in person");
+
+    /**
+     * Completes the verification task (AT-SH09B-03): {customerRef, method, note}. The person records how they verified
+     * that the customer sent the message; only then is it linked to that customer's case. Written to the evidence chain.
+     */
     @Transactional
     public CommunicationViews.InboundView assign(Long id, JsonNode body) {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("MANAGE_COMMUNICATION");
+        InboundCorrespondence message = triageTask(id);
+        String customerRef = required(body, "customerRef").toUpperCase(Locale.ROOT);
+        String method = text(body, "method");
+        if (method == null || !VERIFICATION_METHODS.contains(method)) {
+            throw new IllegalArgumentException("Record how you verified the sender: " + String.join("; ",
+                    VERIFICATION_METHODS) + ".");
+        }
+        String note = text(body, "note");
+        if (note != null && note.length() > 500) {
+            throw new IllegalArgumentException("Keep the note to 500 characters.");
+        }
+        String caseRef = serviceDesk.linkCorrespondence(customerRef, message.getChannel(), message.getBody(),
+                user.getUsername());
+        message.verified(customerRef, caseRef, method, note, user.getUsername());
+        audit.record(user.getUsername(), "Inbound sender verified", "Customer", customerRef,
+                "Inbound " + message.getId() + " by " + message.getChannel() + ": " + method
+                        + (note == null ? "" : " · " + note));
+        return CommunicationViews.InboundView.of(message);
+    }
+
+    /** {release?}: takes the verification task, or gives it back. */
+    @Transactional
+    public CommunicationViews.InboundView own(Long id, JsonNode body) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("MANAGE_COMMUNICATION");
+        InboundCorrespondence message = triageTask(id);
+        boolean release = body != null && body.path("release").asBoolean(false);
+        if (!release && message.getTaskOwner() != null && !message.getTaskOwner().equalsIgnoreCase(user.getUsername())) {
+            throw new ConflictException("This verification task is already being worked by " + message.getTaskOwner()
+                    + ".");
+        }
+        message.own(release ? null : user.getUsername());
+        return CommunicationViews.InboundView.of(message);
+    }
+
+    private InboundCorrespondence triageTask(Long id) {
         InboundCorrespondence message = em.find(InboundCorrespondence.class, id);
         if (message == null) {
             throw new NotFoundException("Inbound message " + id + " not found");
@@ -148,11 +192,7 @@ public class MessagingWebhooks {
         if (!InboundCorrespondence.TRIAGE.equals(message.getStatus())) {
             throw new ConflictException("This message is already linked to " + message.getCaseRef() + ".");
         }
-        String customerRef = required(body, "customerRef").toUpperCase(Locale.ROOT);
-        String caseRef = serviceDesk.linkCorrespondence(customerRef, message.getChannel(), message.getBody(),
-                user.getUsername());
-        message.linked(customerRef, caseRef, "Assigned in triage", user.getUsername());
-        return CommunicationViews.InboundView.of(message);
+        return message;
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────────
