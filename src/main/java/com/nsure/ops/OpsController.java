@@ -3,7 +3,6 @@ package com.nsure.ops;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Map;
-import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -13,7 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Partner portals, the work queue with its definitions and calendar, the document register, and payouts. */
+/** Partner portals, workflow definitions and calendar, the document register, and payouts (queue: WorkQueueController). */
 @RestController
 @RequestMapping("/ops")
 public class OpsController {
@@ -67,21 +66,6 @@ public class OpsController {
     @PutMapping("/workflow/calendar")
     public Map<String, Object> saveCalendar(@RequestBody JsonNode body) {
         return ops.saveCalendar(body);
-    }
-
-    @GetMapping("/queue")
-    public List<Map<String, Object>> queue() {
-        return ops.queue();
-    }
-
-    @PostMapping("/queue/claim")
-    public Map<String, Object> claim(@RequestParam String key) {
-        return ops.claim(key);
-    }
-
-    @DeleteMapping("/queue/claim")
-    public Map<String, Object> release(@RequestParam String key) {
-        return ops.release(key);
     }
 
     @GetMapping("/documents")

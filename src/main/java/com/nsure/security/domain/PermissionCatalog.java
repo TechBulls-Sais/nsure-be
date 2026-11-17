@@ -61,6 +61,8 @@ public enum PermissionCatalog {
     MANAGE_CREDIT_RULE(null),
     // Partner portals (specification section 04): scoped to one intermediary, scheme or lender.
     USE_PARTNER_PORTAL(null),
+    // SH10 work queue: a supervisor assigns work to someone else and sees every team's work (NS-SH10-002).
+    ASSIGN_WORK(null),
 
     // ── spec 04 capabilities ────────────────────────────────────────────────────────────────────────────
     READ_DASHBOARD("dashboard.read"),

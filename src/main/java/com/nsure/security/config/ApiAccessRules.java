@@ -330,6 +330,8 @@ public final class ApiAccessRules {
             rule(GET, "/ops/queue", staff()),
             rule(POST, "/ops/queue/claim", staff()),
             rule(DELETE, "/ops/queue/claim", staff()),
+            rule(POST, "/ops/queue/assign", anyOf("ASSIGN_WORK")),
+            rule(GET, "/ops/queue/assignees", anyOf("ASSIGN_WORK")),
             rule(GET, "/ops/documents", anyOf("READ_POLICY")),
             rule(PUT, "/ops/documents/hold", anyOf("UPDATE_POLICY")),
             rule(PUT, "/ops/documents/retention", anyOf("MANAGE_CONFIG")),

@@ -118,6 +118,20 @@ Support Representative (`support`) and Compliance & Auditor (`compliance`) come 
 
 Partner portal logins come from migration 077: `agent` (intermediary INT-00001), `employer` (scheme SCH-001) and `lender` (LND-0001), each with only `USE_PARTNER_PORTAL` and tied to that one partner through `portal_account`. The same migration adds the work queue (`/ops/queue`), workflow definitions and business calendar (`/ops/workflow`), the document register with retention and legal hold (`/ops/documents`; the upload scan result is fixed at Clean because no scanner is connected) and the combined benefit payouts list (`/ops/payouts`).
 
+### Work queue (SH10)
+
+`/ops/queue` lists the open work across the modules that the signed-in user may act on: the codes the module's own
+endpoint checks for that step (claims by stage — assessment, approval, payout including failed payouts — underwriting
+referrals, endorsements, benefits, hospital cash, scheme events and quotes, partner requests, service requests and
+complaints, manual journals, treaties, template versions and access changes awaiting a checker). A maker never gets
+their own approval; read-only roles get an empty queue and cannot take work (403); an unknown key is 404. Each item
+has its team, priority (the workflow's, or the case's own), age, working-hours due time, owner, linked contract and
+next action. `ASSIGN_WORK` (Super Admin) sees everything and assigns work (`POST /ops/queue/assign?key=&to=`) to
+someone who may act on it. Ownership binds: while someone owns an item, the module refuses anyone else's action on it
+with 409 (`WorkOwnershipGuard`; service desk cases check their own owner). Events: `TaskAssigned` (take/assign),
+`SlaBreached` (once per item, checked every 10 minutes, `nsure.workflow.sla-check-cron`), `CaseOpened`/`CaseClosed`
+(service desk, alongside `ServiceCaseOpened`) and `ApprovalGranted` (maker-checker approvals).
+
 ### Adding an endpoint
 
 1. Add the controller method.

@@ -33,8 +33,8 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>Partner portals (specification section 04): an agent, employer or lender login sees only the one
  *       intermediary, scheme or lender it is tied to, and never medical evidence. Requests it raises get a reference
  *       and land in the operations queue.</li>
- *   <li>Workflow (SH10): a definition per kind of work with its team, steps and SLA; one queue across the modules
- *       with ownership claimed atomically; SLA due times counted in working hours from the business calendar.</li>
+ *   <li>Workflow (SH10): a definition per kind of work with its team, steps, priority and SLA, and the business
+ *       calendar SLA due times are counted in. The queue across the modules is {@link WorkQueueService}.</li>
  *   <li>Documents (SH09A): one register of policy and claim documents with scan status, retention date, legal hold
  *       and search. A held document is never eligible for disposal.</li>
  *   <li>Payouts: hospital cash, credit claim and contractual benefit payouts in one list beside the claims register.</li>
@@ -183,7 +183,10 @@ public class OpsService {
         return out;
     }
 
-    /** {name?, team?, slaHours?, steps?}: changes a definition; the version moves on so older work is traceable. */
+    /**
+     * {name?, team?, slaHours?, steps?, priority?}: changes a definition; the version moves on so older work is
+     * traceable. The queue itself is {@link WorkQueueService}.
+     */
     @Transactional
     public Map<String, Object> saveDefinition(String code, JsonNode body) {
         AppUser user = user("MANAGE_CONFIG");
@@ -195,11 +198,17 @@ public class OpsService {
         if (sla < 1 || sla > 2000) {
             throw new IllegalArgumentException("The SLA must be between 1 and 2000 working hours.");
         }
-        jdbc.update("update wf_definition set name = ?, team = ?, sla_hours = ?, steps = ?, version_no = version_no + 1,"
-                + " updated_by = ?, updated_at = ? where code = ?", textOr(body, "name", (String) d.get("name")),
-                textOr(body, "team", (String) d.get("team")), sla, textOr(body, "steps", (String) d.get("steps")),
-                user.getUsername(), LocalDateTime.now(), code);
-        audit.record(user.getUsername(), "Workflow definition changed", "Workflow", code, "SLA " + sla + "h");
+        String priority = textOr(body, "priority", (String) d.get("priority")).toUpperCase(Locale.ROOT);
+        if (!Set.of("HIGH", "NORMAL", "LOW").contains(priority)) {
+            throw new IllegalArgumentException("Priority must be HIGH, NORMAL or LOW.");
+        }
+        jdbc.update("update wf_definition set name = ?, team = ?, sla_hours = ?, steps = ?, priority = ?,"
+                + " version_no = version_no + 1, updated_by = ?, updated_at = ? where code = ?",
+                textOr(body, "name", (String) d.get("name")), textOr(body, "team", (String) d.get("team")), sla,
+                textOr(body, "steps", (String) d.get("steps")), priority, user.getUsername(), LocalDateTime.now(),
+                code);
+        audit.record(user.getUsername(), "Workflow definition changed", "Workflow", code,
+                "SLA " + sla + "h, priority " + priority);
         return workflow();
     }
 
@@ -217,81 +226,6 @@ public class OpsService {
                 textOr(body, "holidays", ""));
         audit.record(user.getUsername(), "Business calendar changed", "Calendar", "1", null);
         return workflow();
-    }
-
-    /** Every open piece of work across the modules, with its team, owner, age and SLA due time. */
-    @Transactional(readOnly = true)
-    public List<Map<String, Object>> queue() {
-        staff();
-        Map<String, Map<String, Object>> definitions = jdbc.query("select * from wf_definition", ROW).stream()
-                .collect(Collectors.toMap(d -> (String) d.get("code"), d -> d));
-        Map<String, Object> calendar = first("select * from wf_calendar where id = 1");
-        Map<String, String> owners = new LinkedHashMap<>();
-        jdbc.query("select item_key, owner from wf_assignment", rs -> {
-            owners.put(rs.getString(1), rs.getString(2));
-        });
-        List<Map<String, Object>> items = new ArrayList<>();
-        add(items, "UNDERWRITING", "underwriting", "select record_ref as ref, customer_name as subject, product as detail,"
-                + " created_at as opened from uw_case where status in ('REFERRED', 'EVIDENCE_PENDING')");
-        add(items, "ENDORSEMENT", "servicing", "select record_ref as ref, policy_ref as subject, endorsement_type as"
-                + " detail, requested_at as opened from pol_endorsement where status in ('PENDING_APPROVAL',"
-                + " 'REFERRED_UNDERWRITING', 'IMPACT_REVIEW')");
-        add(items, "BENEFIT", "servicing", "select record_ref as ref, policy_ref as subject, benefit_type as detail,"
-                + " created_at as opened from pol_benefit_event where status = 'DUE'");
-        add(items, "CARE_CASH", "care-cash", "select record_ref as ref, life_name as subject, event_type as detail,"
-                + " created_at as opened from cc_event where status = 'ASSESSED'");
-        add(items, "SCHEME_EVENT", "scheme-lifecycle", "select record_ref as ref, scheme_ref as subject, event_type as"
-                + " detail, requested_at as opened from grp_scheme_event where status = 'PENDING'");
-        add(items, "GROUP_QUOTE", "scheme-lifecycle", "select record_ref as ref, sponsor_name as subject, benefits as"
-                + " detail, created_at as opened from grp_quote where status = 'SUBMITTED'");
-        add(items, "PORTAL_REQUEST", "work-queue", "select record_ref as ref, created_by as subject, request_type as"
-                + " detail, created_at as opened from portal_request where status = 'OPEN'");
-        LocalDateTime now = LocalDateTime.now();
-        for (Map<String, Object> item : items) {
-            Map<String, Object> d = definitions.get((String) item.get("workflow"));
-            LocalDateTime opened = (LocalDateTime) item.get("opened");
-            LocalDateTime due = addWorkingHours(opened, (Integer) d.get("slaHours"), calendar);
-            item.put("workflowName", d.get("name"));
-            item.put("team", d.get("team"));
-            item.put("slaHours", d.get("slaHours"));
-            item.put("dueAt", due);
-            item.put("breached", now.isAfter(due));
-            item.put("owner", owners.get(item.get("key")));
-        }
-        items.sort(Comparator.comparing(i -> (LocalDateTime) i.get("dueAt")));
-        return items;
-    }
-
-    private void add(List<Map<String, Object>> items, String workflow, String page, String sql) {
-        for (Map<String, Object> r : jdbc.query(sql, ROW)) {
-            r.put("workflow", workflow);
-            r.put("page", page);
-            r.put("key", workflow + ":" + r.get("ref"));
-            items.add(r);
-        }
-    }
-
-    /** Takes ownership of one item. Two people cannot both take it: the second is told who has it. */
-    @Transactional
-    public Map<String, Object> claim(String key) {
-        AppUser user = staff();
-        try {
-            jdbc.update("insert into wf_assignment (item_key, owner, claimed_at) values (?, ?, ?)", key,
-                    user.getUsername(), LocalDateTime.now());
-        } catch (org.springframework.dao.DuplicateKeyException taken) {
-            String owner = jdbc.queryForObject("select owner from wf_assignment where item_key = ?", String.class, key);
-            if (!user.getUsername().equals(owner)) {
-                throw new ConflictException("This work is already owned by " + owner + ".");
-            }
-        }
-        return Map.of("key", key, "owner", user.getUsername());
-    }
-
-    @Transactional
-    public Map<String, Object> release(String key) {
-        AppUser user = staff();
-        jdbc.update("delete from wf_assignment where item_key = ? and owner = ?", key, user.getUsername());
-        return Map.of("key", key);
     }
 
     /** Adds working hours to a start time, skipping nights, non-working days and holidays. */

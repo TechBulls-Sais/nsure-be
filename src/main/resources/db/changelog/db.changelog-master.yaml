@@ -236,3 +236,6 @@ databaseChangeLog:
   - include:
       file: changes/095-user-four-eyes.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/096-work-queue.yaml
+      relativeToChangelogFile: true

@@ -6,9 +6,13 @@ import com.nsure.audit.domain.CommandStatus;
 import com.nsure.audit.repository.CommandSourceRepository;
 import com.nsure.common.exception.ConflictException;
 import com.nsure.common.exception.NotFoundException;
+import com.nsure.integration.Events;
+import com.nsure.integration.Outbox;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.service.PlatformSecurityContext;
 import jakarta.persistence.EntityManager;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,6 +29,7 @@ public class MakerCheckerService {
     private final MakerCheckerPolicy policy;
     private final EntityManager entityManager;
     private final EvidenceChain evidence;
+    private final Outbox outbox;
 
     public MakerCheckerService(
             CommandSourceRepository commands,
@@ -32,8 +37,10 @@ public class MakerCheckerService {
             PlatformSecurityContext security,
             MakerCheckerPolicy policy,
             EntityManager entityManager,
-            EvidenceChain evidence) {
+            EvidenceChain evidence,
+            Outbox outbox) {
         this.evidence = evidence;
+        this.outbox = outbox;
         this.commands = commands;
         this.handlers = handlers;
         this.security = security;
@@ -61,6 +68,15 @@ public class MakerCheckerService {
                 "Command " + pending.getId() + ", made by user " + pending.getMakerId());
         pending.setResourceId(result.resourceId());
         pending.setResultJson(result.json());
+        // Spec SH10 ApprovalGranted: references only, never the command body (which may hold a password hash).
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("commandId", pending.getId());
+        event.put("permissionCode", pending.getPermissionCode());
+        event.put("entity", pending.getEntityName());
+        event.put("resourceId", result.resourceId());
+        event.put("makerId", pending.getMakerId());
+        event.put("checker", checker.getUsername());
+        outbox.publish(Events.APPROVAL_GRANTED, "COMMAND-" + pending.getId(), event, checker.getUsername());
         return new CommandOutcome(pending.getId(), result.resourceId(), pending.getStatus(), result.json(), false);
     }
 
