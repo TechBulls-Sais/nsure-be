@@ -1,14 +1,23 @@
 package com.nsure.payment;
 
+import static com.nsure.payment.ProductionPaymentFixtures.BIND_IDENTITY;
+import static com.nsure.payment.ProductionPaymentFixtures.DB_PASSWORD;
+import static com.nsure.payment.ProductionPaymentFixtures.DB_USER;
+import static com.nsure.payment.ProductionPaymentFixtures.EXPOSE_OTP;
+import static com.nsure.payment.ProductionPaymentFixtures.INSURER_CODE;
+import static com.nsure.payment.ProductionPaymentFixtures.INSURER_ENVIRONMENT;
+import static com.nsure.payment.ProductionPaymentFixtures.INSURER_NAME;
+import static com.nsure.payment.ProductionPaymentFixtures.MIGRATE;
+import static com.nsure.payment.ProductionPaymentFixtures.PUBLIC_BASE_URL;
+import static com.nsure.payment.ProductionPaymentFixtures.UI_BASE_URL;
+import static com.nsure.payment.ProductionPaymentFixtures.json;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.jayway.jsonpath.JsonPath;
 import com.nsure.NsureApplication;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
@@ -18,6 +27,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.hamcrest.Matchers;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -26,37 +36,19 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * The prod profile: no mock or simulated rail may confirm money or activate cover. The payment settings here are the
- * prod profile's own (application-prod.yml, NSURE_CARD_GATEWAY unset); the test supplies only the database and
- * identity the profile requires from the environment, and exposes the declaration code so a policy can reach Pending
- * Payment through the API.
+ * The prod profile without demo payments: no mock or simulated rail may confirm money or activate cover. The payment
+ * settings are the prod profile's own (application-prod.yml; NSURE_CARD_GATEWAY and NSURE_DEMO_PAYMENTS unset).
  */
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:nsure-payment-prod;DB_CLOSE_DELAY=-1",
-        ProductionPaymentRailsTest.DB_USER, ProductionPaymentRailsTest.DB_PASSWORD,
-        ProductionPaymentRailsTest.MIGRATE, ProductionPaymentRailsTest.INSURER_CODE,
-        ProductionPaymentRailsTest.INSURER_ENVIRONMENT, ProductionPaymentRailsTest.INSURER_NAME,
-        ProductionPaymentRailsTest.BIND_IDENTITY, ProductionPaymentRailsTest.PUBLIC_BASE_URL,
-        ProductionPaymentRailsTest.UI_BASE_URL,
-        "nsure.declaration.expose-otp=true"})
+        DB_USER, DB_PASSWORD, MIGRATE, INSURER_CODE, INSURER_ENVIRONMENT, INSURER_NAME, BIND_IDENTITY,
+        PUBLIC_BASE_URL, UI_BASE_URL, EXPOSE_OTP})
 @ActiveProfiles("prod")
 @AutoConfigureMockMvc
 class ProductionPaymentRailsTest {
-
-    static final String DB_USER = "spring.datasource.username=sa";
-    static final String DB_PASSWORD = "spring.datasource.password=";
-    /** The prod profile leaves migration to the migrate job; the test database needs its schema. */
-    static final String MIGRATE = "spring.liquibase.enabled=true";
-    static final String INSURER_CODE = "nsure.insurer.code=test-insurer";
-    static final String INSURER_ENVIRONMENT = "nsure.insurer.environment=test";
-    static final String INSURER_NAME = "nsure.insurer.display-name=Test Insurer";
-    static final String BIND_IDENTITY = "nsure.insurer.bind-on-first-start=true";
-    static final String PUBLIC_BASE_URL = "nsure.payments.public-base-url=http://localhost/api";
-    static final String UI_BASE_URL = "nsure.payments.ui-base-url=http://localhost/#";
 
     @Autowired
     private MockMvc mockMvc;
@@ -76,10 +68,17 @@ class ProductionPaymentRailsTest {
     @Autowired
     private PaymentGateways gateways;
 
+    private ProductionPaymentFixtures fixtures;
+
+    @BeforeEach
+    void fixtures() {
+        fixtures = new ProductionPaymentFixtures(mockMvc, em, tx);
+    }
+
     @Test
     void mobileMoneyAndEftAreRefusedAndNeverActivateCover() throws Exception {
         assertThat(gateways.simulatorsEnabled()).isFalse();
-        String policy = pendingPolicy("Mpho Prod", "mphoprod");
+        String policy = fixtures.pendingPolicy("Mpho Prod", "mphoprod");
         for (String method : List.of("Orange Money", "MyZaka", "Bank EFT")) {
             // Both customer entry points: the checkout API and the shop's pay action.
             mockMvc.perform(json(post("/checkout/" + policy + "/pay"), "mphoprod", "{\"method\":\"" + method + "\"}"))
@@ -91,25 +90,27 @@ class ProductionPaymentRailsTest {
                     .andExpect(jsonPath("$.message").value(Matchers.startsWith(method + " payments are not available")));
         }
         assertNothingCollected(policy);
-        assertThat(count("select count(t) from PaymentTransaction t where t.policyRef = '" + policy + "'")).isZero();
+        assertThat(fixtures.count("select count(t) from PaymentTransaction t where t.policyRef = '" + policy + "'"))
+                .isZero();
     }
 
     @Test
     void cardPaymentsAreRefusedWithoutARealCardProvider() throws Exception {
-        String policy = pendingPolicy("Kabo Prod", "kaboprod");
+        String policy = fixtures.pendingPolicy("Kabo Prod", "kaboprod");
         mockMvc.perform(json(post("/checkout/" + policy + "/pay"), "kaboprod", "{\"method\":\"Card\"}"))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(Matchers.startsWith("Card payments are not available")));
         mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/pay"), "kaboprod", "{\"method\":\"Card\"}"))
                 .andExpect(status().isUnprocessableEntity());
         assertNothingCollected(policy);
-        assertThat(count("select count(t) from PaymentTransaction t where t.policyRef = '" + policy + "'")).isZero();
+        assertThat(fixtures.count("select count(t) from PaymentTransaction t where t.policyRef = '" + policy + "'"))
+                .isZero();
     }
 
     @Test
     void anAttemptASimulatedRailStartedEarlierIsNeverConfirmed() throws Exception {
-        String policy = pendingPolicy("Naledi Prod", "lediprod");
-        // Left in the database by the simulator and the mock before this installation ran with the prod profile.
+        String policy = fixtures.pendingPolicy("Naledi Prod", "lediprod");
+        // Left in the database by the simulator and the mock, e.g. while demo payments were on.
         String card = legacyAttempt(policy, HostedCheckoutSimulator.PROVIDER, "Card",
                 LocalDateTime.now().plusMinutes(30));
         String wallet = legacyAttempt(policy, PaymentGateways.MOCK, "Orange Money",
@@ -133,19 +134,19 @@ class ProductionPaymentRailsTest {
 
         PaymentTransaction open = transaction(card);
         assertThat(open.getStatus()).isEqualTo(PaymentTransaction.PENDING_VERIFICATION);
-        assertThat(count("select count(t) from PaymentTransaction t where t.id = " + open.getId()
+        assertThat(fixtures.count("select count(t) from PaymentTransaction t where t.id = " + open.getId()
                 + " and t.providerResultCode = 'NO_PROVIDER'")).isEqualTo(1);
         // Past its expiry, an unconfirmed attempt expires instead of settling.
         assertThat(transaction(wallet).getStatus()).isEqualTo(PaymentTransaction.EXPIRED);
-        assertThat(count("select count(c) from SimulatedCheckout c where c.token = '" + card
+        assertThat(fixtures.count("select count(c) from SimulatedCheckout c where c.token = '" + card
                 + "' and c.outcome = 'PAID'")).isEqualTo(1);
         assertNothingCollected(policy);
     }
 
     @Test
     void aSimulatedCardGatewayStopsStartUp() {
-        // Same environment as above, but the operator points cards at the simulator. Command-line arguments, like the
-        // environment in a deployment, outrank application-prod.yml.
+        // Same environment as above, but the operator points cards at the simulator without demo payments.
+        // Command-line arguments, like the environment in a deployment, outrank application-prod.yml.
         String[] args = List.of("spring.datasource.url=jdbc:h2:mem:nsure-payment-prod-refused;DB_CLOSE_DELAY=-1",
                         DB_USER, DB_PASSWORD, MIGRATE, INSURER_CODE, INSURER_ENVIRONMENT, INSURER_NAME, BIND_IDENTITY,
                         PUBLIC_BASE_URL, UI_BASE_URL, "server.port=0", "nsure.payments.card-gateway=SIMULATOR")
@@ -160,11 +161,12 @@ class ProductionPaymentRailsTest {
     }
 
     private void assertNothingCollected(String policy) {
-        assertThat(policyStatus(policy)).isEqualTo("Pending Payment");
-        assertThat(count("select count(p) from PremiumPayment p where p.policyRef = '" + policy + "'")).isZero();
-        assertThat(count("select count(t) from PaymentTransaction t where t.policyRef = '" + policy
+        assertThat(fixtures.policyStatus(policy)).isEqualTo("Pending Payment");
+        assertThat(fixtures.count("select count(p) from PremiumPayment p where p.policyRef = '" + policy + "'"))
+                .isZero();
+        assertThat(fixtures.count("select count(t) from PaymentTransaction t where t.policyRef = '" + policy
                 + "' and t.status = 'SETTLED'")).isZero();
-        assertThat(count("select count(e) from OutboxEvent e where e.eventType = 'PolicyIssued'"
+        assertThat(fixtures.count("select count(e) from OutboxEvent e where e.eventType = 'PolicyIssued'"
                 + " and e.aggregateRef = '" + policy + "'")).isZero();
     }
 
@@ -195,43 +197,5 @@ class ProductionPaymentRailsTest {
     private PaymentTransaction transaction(String token) {
         return tx.execute(s -> em.createQuery("select t from PaymentTransaction t where t.providerToken = :token",
                 PaymentTransaction.class).setParameter("token", token).getSingleResult());
-    }
-
-    private String pendingPolicy(String name, String username) throws Exception {
-        String customer = mockMvc.perform(json(post("/portfolio/customers"), "admin",
-                        "{\"name\":\"" + name + "\",\"email\":\"" + username + "@example.com\",\"phone\":\"+267 71 000 019\","
-                                + "\"username\":\"" + username + "\",\"password\":\"password1\"}"))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
-        mockMvc.perform(post("/portfolio/customers/" + JsonPath.read(customer, "$.id") + "/kyc")
-                        .with(httpBasic("admin", "password")))
-                .andExpect(status().isOk());
-        String shop = mockMvc.perform(json(post("/portfolio/shop"), username, "{\"product\":\"Term Life\",\"tier\":\"Silver\"}"))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
-        String policy = JsonPath.read(shop, "$.requests[0].id");
-        String sent = mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/declaration/otp"), username, "{}"))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
-        mockMvc.perform(json(post("/portfolio/shop/policies/" + policy + "/declaration"), username,
-                        "{\"code\":\"" + JsonPath.read(sent, "$.devCode") + "\",\"accuracy\":true,\"terms\":true,"
-                                + "\"dataProtection\":true,\"falseInformation\":true}"))
-                .andExpect(status().isOk());
-        assertThat(policyStatus(policy)).isEqualTo("Pending Payment");
-        return policy;
-    }
-
-    private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String user, String body) {
-        String password = user.equals("admin") ? "password" : "password1";
-        return request.with(httpBasic(user, password)).contentType(MediaType.APPLICATION_JSON).content(body);
-    }
-
-    private String policyStatus(String ref) {
-        return tx.execute(s -> em.createQuery("select p.status from InsurancePolicy p where p.ref = :ref", String.class)
-                .setParameter("ref", ref).getSingleResult());
-    }
-
-    private long count(String jpql) {
-        return tx.execute(s -> em.createQuery(jpql, Long.class).getSingleResult());
     }
 }

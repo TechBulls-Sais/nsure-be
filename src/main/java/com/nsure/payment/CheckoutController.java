@@ -150,7 +150,7 @@ public class CheckoutController {
     }
 
     // ── hosted checkout simulator: stands in for the provider's own page until DPO credentials exist ────────
-    // Absent under the prod profile: there no simulated page may mark a checkout paid.
+    // Absent under the prod profile (unless demo payments are on): no simulated page may mark a checkout paid there.
 
     @GetMapping(value = "/payment/simulator/{token}", produces = MediaType.TEXT_HTML_VALUE)
     @Transactional(readOnly = true)
