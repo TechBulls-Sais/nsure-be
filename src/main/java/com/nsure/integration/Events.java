@@ -49,6 +49,14 @@ public final class Events {
     /** Template event type for approved bulk operational notices; never published on the bus. */
     public static final String OPERATIONAL_NOTICE = "OperationalNotice";
 
+    // SH02 product configuration and release.
+    /** product (or releaseCode), version, effectiveFrom, proposedBy, approvedBy, source. A product version approved. */
+    public static final String PRODUCT_VERSION_APPROVED = "ProductVersionApproved";
+    /** configRef or releaseCode, code, name, version, products, activatedBy, source. Made active for new business. */
+    public static final String PRODUCT_ACTIVATED = "ProductActivated";
+    /** configRef, code, name, version, status (the status it moved to), withdrawnBy. No longer active: stops new sales. */
+    public static final String PRODUCT_WITHDRAWN = "ProductWithdrawn";
+
     // Individual new business (spec IL01).
     public static final String APPLICATION_SUBMITTED = "ApplicationSubmitted";
     // IL02 underwriting.

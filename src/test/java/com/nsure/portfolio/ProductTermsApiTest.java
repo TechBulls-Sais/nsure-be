@@ -91,6 +91,9 @@ class ProductTermsApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.approvalStatus").value("APPROVED"))
                 .andExpect(jsonPath("$.inForce").value(true));
+        // SH02: the approval is published once, in the same transaction.
+        assertThat(jdbc.queryForObject("select count(*) from int_outbox_event where event_type = 'ProductVersionApproved'"
+                + " and aggregate_ref = 'Term Life'", Long.class)).isEqualTo(1);
 
         // The earlier policies keep v1: paying the first premium sets grace from v1, not from v2.
         String paid = mockMvc.perform(json(post("/portfolio/policies/" + before + "/payments"), "admin",

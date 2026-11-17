@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.nsure.audit.evidence.EvidenceChain;
 import com.nsure.common.exception.ConflictException;
 import com.nsure.common.exception.NotFoundException;
+import com.nsure.integration.Events;
+import com.nsure.integration.Outbox;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.service.PlatformSecurityContext;
@@ -13,8 +15,10 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,11 +40,13 @@ public class ProductTerms {
     private final EntityManager em;
     private final PlatformSecurityContext security;
     private final EvidenceChain evidence;
+    private final Outbox outbox;
 
-    public ProductTerms(EntityManager em, PlatformSecurityContext security, EvidenceChain evidence) {
+    public ProductTerms(EntityManager em, PlatformSecurityContext security, EvidenceChain evidence, Outbox outbox) {
         this.em = em;
         this.security = security;
         this.evidence = evidence;
+        this.outbox = outbox;
     }
 
     // ── resolving ─────────────────────────────────────────────────────────────────────────────────
@@ -154,6 +160,15 @@ public class ProductTerms {
         evidence.record(user.getUsername(), "Approved product terms", "ProductVersion", terms.getLabel(),
                 terms.summary() + ", for new business from " + terms.getEffectiveFrom() + ", proposed by "
                         + terms.getProposedBy());
+        // SH02: ProductVersionApproved, in the approval's transaction (references only).
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("product", terms.getProduct());
+        data.put("version", terms.getVersionNo());
+        data.put("effectiveFrom", terms.getEffectiveFrom().toString());
+        data.put("proposedBy", terms.getProposedBy());
+        data.put("approvedBy", user.getUsername());
+        data.put("source", "ProductTerms");
+        outbox.publish(Events.PRODUCT_VERSION_APPROVED, terms.getProduct(), data, user.getUsername());
         em.flush();
         return view(terms);
     }

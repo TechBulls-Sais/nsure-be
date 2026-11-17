@@ -1234,12 +1234,13 @@ public class PortfolioService {
         boolean active = "active".equalsIgnoreCase(requested);
         if (active && (!"active".equalsIgnoreCase(current) || before == null || !before.equals(after))) {
             // Maker-checker: content reaches Active only as reviewed, and only by someone who did not write it.
-            configHistory.requireIndependentActivation(ref, before, after, actor.getUsername());
+            configHistory.requireIndependentActivation(ref, current, before, after, actor.getUsername());
         }
         if (ref == null) {
             em.persist(row);
         }
         configHistory.record(row, before, actor.getUsername());
+        configHistory.publishStatusChange(row, current, actor.getUsername());
         return config(row);
     }
 
@@ -1666,7 +1667,7 @@ public class PortfolioService {
                 row.getEffectiveOn(), row.getMinAge(), row.getMaxAge(), row.getWaitingMonths(), row.getCoverAmount(),
                 row.getPremiumAmount(), row.getFrequency(), row.getGraceDays(), row.getUnderwriting(),
                 split(row.getBenefits()), split(row.getChannels()), row.getWording(), row.isApprovals(),
-                row.getStatus(), row.getVersionNo());
+                row.getStatus(), row.getVersionNo(), configHistory.madeBy(row));
     }
 
     private static List<String> split(String value) {

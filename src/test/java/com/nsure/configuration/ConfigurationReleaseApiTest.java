@@ -1,5 +1,6 @@
 package com.nsure.configuration;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static com.nsure.testsupport.SignIn.signedIn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -83,6 +84,11 @@ class ConfigurationReleaseApiTest {
                         "{\"expectedVersion\":" + v + "}"))
                 .andExpect(status().isForbidden());
         act(r1, "activate", "ops", v, 200);
+        // SH02: approval and activation are published once each, in their own transactions.
+        assertThat(moduleJdbc.queryForObject("select count(*) from int_outbox_event where event_type ="
+                + " 'ProductVersionApproved' and aggregate_ref = 'TL-R1'", Long.class)).isEqualTo(1);
+        assertThat(moduleJdbc.queryForObject("select count(*) from int_outbox_event where event_type ="
+                + " 'ProductActivated' and aggregate_ref = 'TL-R1'", Long.class)).isEqualTo(1);
 
         String form = mockMvc.perform(get("/configuration/forms/policy?product=Term Life")
                         .with(signedIn("admin", "password")))
@@ -171,7 +177,8 @@ class ConfigurationReleaseApiTest {
         long id = draft[0];
         long v = act(id, "submit", "configurator", draft[1], 200);
         mockMvc.perform(json(post("/admin/config-releases/" + id + "/reject"), "actuary", "{\"expectedVersion\":" + v + "}"))
-                .andExpect(status().isUnprocessableEntity());
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value("Give a reason for rejecting the release."));
         mockMvc.perform(json(post("/admin/config-releases/" + id + "/reject"), "actuary",
                         "{\"expectedVersion\":" + v + ",\"reason\":\"Wording not approved\"}"))
                 .andExpect(status().isOk())

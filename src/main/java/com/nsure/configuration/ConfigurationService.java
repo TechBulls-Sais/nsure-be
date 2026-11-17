@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.nsure.common.exception.ConflictException;
 import com.nsure.common.exception.NotFoundException;
+import com.nsure.integration.Events;
+import com.nsure.integration.Outbox;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.service.PlatformSecurityContext;
@@ -16,8 +18,10 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.springframework.stereotype.Service;
@@ -40,11 +44,14 @@ public class ConfigurationService {
     private final EntityManager em;
     private final PlatformSecurityContext security;
     private final ObjectMapper mapper;
+    private final Outbox outbox;
 
-    public ConfigurationService(EntityManager em, PlatformSecurityContext security, ObjectMapper mapper) {
+    public ConfigurationService(EntityManager em, PlatformSecurityContext security, ObjectMapper mapper,
+            Outbox outbox) {
         this.em = em;
         this.security = security;
         this.mapper = mapper;
+        this.outbox = outbox;
     }
 
     // ── reads ─────────────────────────────────────────────────────────────────────────────────────
@@ -91,7 +98,7 @@ public class ConfigurationService {
         AppUser user = user("MANAGE_CONFIG");
         String code = required(body, "code").toUpperCase(Locale.ROOT);
         if (!code.matches("[A-Z0-9][A-Z0-9-]{2,39}")) {
-            throw new IllegalArgumentException("code: 3-40 letters, digits and dashes, e.g. 2026-R2.");
+            throw new IllegalArgumentException("Release code: use 3-40 letters, digits and dashes, e.g. 2026-R2.");
         }
         if (!em.createQuery("select r.id from ConfigRelease r where r.code = :code", Long.class)
                 .setParameter("code", code).getResultList().isEmpty()) {
@@ -138,6 +145,7 @@ public class ConfigurationService {
         requireIndependent(release, user);
         requireChecksum(release);
         release.approve(user.getUsername());
+        publish(Events.PRODUCT_VERSION_APPROVED, release, "approvedBy", user.getUsername());
         return saved(release);
     }
 
@@ -148,7 +156,11 @@ public class ConfigurationService {
         requireVersion(release, body);
         requireStatus(release, ConfigRelease.IN_REVIEW, "rejected");
         requireIndependent(release, user);
-        release.reject(required(body, "reason"), user.getUsername());
+        String reason = text(body, "reason");
+        if (reason == null) {
+            throw new IllegalArgumentException("Give a reason for rejecting the release.");
+        }
+        release.reject(reason, user.getUsername());
         return saved(release);
     }
 
@@ -172,6 +184,7 @@ public class ConfigurationService {
             form.activate((max == null ? 0 : max) + 1, sha256(canonical(form).toString()));
         }
         release.activate(user.getUsername());
+        publish(Events.PRODUCT_ACTIVATED, release, "activatedBy", user.getUsername());
         em.flush();
         for (ConfigRelease other : em.createQuery("select r from ConfigRelease r where r.status = :active and r.id <> :id",
                 ConfigRelease.class).setParameter("active", ConfigRelease.ACTIVE).setParameter("id", id).getResultList()) {
@@ -183,6 +196,18 @@ public class ConfigurationService {
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────
+
+    /** SH02 events for a release, in its transaction: references and the checksum only, never form content. */
+    private void publish(String type, ConfigRelease release, String actorField, String actor) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("releaseCode", release.getCode());
+        data.put("products", release.getForms().stream().map(PolicyFormVersion::getProduct).sorted().toList());
+        data.put("checksum", release.getChecksum());
+        data.put("submittedBy", release.getSubmittedBy());
+        data.put(actorField, actor);
+        data.put("source", "ConfigRelease");
+        outbox.publish(type, release.getCode(), data, actor);
+    }
 
     private void replaceForms(ConfigRelease release, JsonNode forms) {
         release.getForms().clear();
@@ -390,10 +415,15 @@ public class ConfigurationService {
         }
     }
 
+    /** Plain-language names for the request fields, so a refusal never shows an API field name (NS-UX). */
+    private static final Map<String, String> FIELD_LABELS = Map.of("reason", "a reason", "code", "a release code",
+            "description", "a description", "product", "the product", "key", "a field key", "type", "a field type",
+            "label", "a field label");
+
     private static String required(JsonNode body, String field) {
         String value = text(body, field);
         if (value == null) {
-            throw new IllegalArgumentException(field + " is required.");
+            throw new IllegalArgumentException("Enter " + FIELD_LABELS.getOrDefault(field, field) + ".");
         }
         return value;
     }
