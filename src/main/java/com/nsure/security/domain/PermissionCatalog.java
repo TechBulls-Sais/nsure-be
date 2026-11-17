@@ -22,6 +22,8 @@ public enum PermissionCatalog {
     CHECKER_PERMISSIONS_ROLE(null),
     CHECKER_UPDATE_ROLE(null),
     CHECKER_UPDATE_USER(null),
+    CHECKER_CREATE_USER(null),
+    CHECKER_DELETE_USER(null),
 
     // ── access administration (hand-gated, spec 04 A-18: no role holds these by default) ──────────────────
     CREATE_USER(null),

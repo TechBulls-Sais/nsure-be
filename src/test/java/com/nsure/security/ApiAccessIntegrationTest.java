@@ -175,7 +175,9 @@ class ApiAccessIntegrationTest {
         body.put("password", "password");
         body.put("enabled", true);
         body.putArray("roleIds").add(roleId);
-        send("admin", post("/users").content(body.toString()), 201);
+        // A user given access waits for a second administrator (D-03).
+        JsonNode pending = send("admin", post("/users").content(body.toString()), 202);
+        send("secadmin", post("/audits/" + pending.get("commandId").asLong() + "/approve"), 200);
         return username;
     }
 

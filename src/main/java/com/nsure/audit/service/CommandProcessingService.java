@@ -10,6 +10,7 @@ import com.nsure.audit.repository.CommandSourceRepository;
 import com.nsure.audit.service.CommandPayloadSanitizer.SanitizeResult;
 import com.nsure.common.exception.CommandFailedException;
 import com.nsure.common.exception.NotFoundException;
+import com.nsure.controls.StaffAlertService;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.service.PlatformSecurityContext;
@@ -42,6 +43,7 @@ public class CommandProcessingService {
     private final ObjectMapper mapper;
     private final EntityManager entityManager;
     private final com.nsure.audit.evidence.EvidenceChain evidence;
+    private final StaffAlertService alerts;
 
     public CommandProcessingService(
             PlatformSecurityContext security,
@@ -52,8 +54,10 @@ public class CommandProcessingService {
             CommandPayloadSanitizer sanitizer,
             ObjectMapper mapper,
             EntityManager entityManager,
-            com.nsure.audit.evidence.EvidenceChain evidence) {
+            com.nsure.audit.evidence.EvidenceChain evidence,
+            StaffAlertService alerts) {
         this.evidence = evidence;
+        this.alerts = alerts;
         this.security = security;
         this.commands = commands;
         this.writer = writer;
@@ -123,12 +127,29 @@ public class CommandProcessingService {
                 originalJson,
                 idempotencyKey,
                 request.idempotencyRetry());
+        String bootstrapNote = null;
 
         try {
+            CommandHandler handler = handlers.get(entity, action);
+            if (needsChecker && !handler.needsChecker(normalized)) {
+                needsChecker = false;
+            }
+            if (needsChecker && makerChecker.isSoleCheckerBootstrap(user, action + "_" + entity)) {
+                // Nobody else could approve it yet: the first administrator creating the second (D-03).
+                needsChecker = false;
+                bootstrapNote = "Applied without a second approver because nobody else could approve it yet";
+            }
+            String prepared = handler.prepare(normalized, needsChecker);
+            if (prepared != null && !prepared.equals(normalized.json())) {
+                normalized = new CommandRequest(action, entity, request.resourceId(), prepared, idempotencyKey,
+                        request.idempotencyRetry());
+                sanitized = sanitizer.sanitize(prepared);
+                audit.setCommandAsJson(sanitized.json());
+            }
             if (needsChecker && sanitized.secretsRedacted()) {
                 throw new IllegalArgumentException("Commands that contain secrets cannot be sent for approval");
             }
-            CommandResult result = handlers.get(entity, action).handle(normalized);
+            CommandResult result = handler.handle(normalized);
             entityManager.flush();
             if (needsChecker) {
                 audit.markAwaitingApproval();
@@ -144,8 +165,15 @@ public class CommandProcessingService {
             }
             String resultJson = withTruncation(result.json(), sanitized);
             audit.markProcessed(result.resourceId(), resultJson);
-            evidence.record(user.getUsername(), action + "_" + entity, entity,
-                    result.resourceId() == null ? null : String.valueOf(result.resourceId()), "Command " + audit.getId());
+            String ref = result.resourceId() == null ? null : String.valueOf(result.resourceId());
+            evidence.record(user.getUsername(), action + "_" + entity, entity, ref,
+                    "Command " + audit.getId() + (bootstrapNote == null ? "" : ". " + bootstrapNote));
+            if (bootstrapNote != null) {
+                alerts.raise("SOLE_CHECKER_BOOTSTRAP", "READ_AUDIT", action + "_" + entity + " applied without a checker",
+                        user.getUsername() + " ran " + action + "_" + entity + (ref == null ? "" : " #" + ref)
+                                + " alone: no other user holds CHECKER_" + action + "_" + entity + " yet.",
+                        "SOLE_CHECKER_BOOTSTRAP:" + audit.getId(), user.getUsername());
+            }
             writer.saveSame(audit);
             return new CommandOutcome(audit.getId(), result.resourceId(), CommandStatus.PROCESSED, resultJson, false);
         } catch (AwaitingApprovalException ex) {

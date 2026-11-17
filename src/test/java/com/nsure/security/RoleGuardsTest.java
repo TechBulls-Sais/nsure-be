@@ -164,10 +164,10 @@ class RoleGuardsTest {
         approved(call(put("/roles/" + roleId + "/permissions"), "admin", body.toString()));
     }
 
+    /** A user given access waits for a second person too (D-03). */
     private void createUser(String username, long roleId) throws Exception {
-        MockHttpServletResponse response = call(post("/users"), "admin", "{\"username\":\"" + username
-                + "\",\"password\":\"password\",\"roleIds\":[" + roleId + "]}");
-        assertThat(response.getStatus()).as(response.getContentAsString()).isEqualTo(201);
+        approved(call(post("/users"), "admin", "{\"username\":\"" + username
+                + "\",\"password\":\"password\",\"roleIds\":[" + roleId + "]}"));
     }
 
     private long roleId(String name) throws Exception {

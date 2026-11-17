@@ -88,7 +88,7 @@ class RbacAndAuditIntegrationTest {
         long roleId = createRole("Reader " + suffix());
         grantRole(roleId, "{\"permissions\":{\"READ_AUDIT\":true}}");
         String username = "reader" + suffix();
-        send("admin", post("/users").content(userBody(username, new long[] {roleId})), 201);
+        createUser(username, roleId);
 
         send(username, get("/audits"), 200);
         approve(send("admin", put("/roles/" + roleId).content("{\"disabled\":true}"), 202));
@@ -101,7 +101,7 @@ class RbacAndAuditIntegrationTest {
         grantRole(roleId, "{\"permissions\":{\"UPDATE_USER\":true}}");
         String clerk = "clerk" + suffix();
         String target = "target" + suffix();
-        send("admin", post("/users").content(userBody(clerk, new long[] {roleId})), 201);
+        createUser(clerk, roleId);
         JsonNode createdTarget = send("admin", post("/users").content(userBody(target, new long[0])), 201);
         long targetId = createdTarget.get("resourceId").asLong();
 
@@ -137,16 +137,64 @@ class RbacAndAuditIntegrationTest {
         long roleId = createRole("Self " + suffix());
         grantRole(roleId, "{\"permissions\":{\"UPDATE_USER\":true}}");
         String clerk = "self" + suffix();
-        JsonNode created = send("admin", post("/users").content(userBody(clerk, new long[] {roleId})), 201);
+        long clerkId = createUser(clerk, roleId);
         String renamed = "selfrenamed" + suffix();
 
         // docs/IMPLEMENT_RBAC.md: a user changing their own profile skips maker-checker.
         send(
                 clerk,
-                put("/users/" + created.get("resourceId").asLong()).content("{\"username\":\"" + renamed + "\"}"),
+                put("/users/" + clerkId).content("{\"username\":\"" + renamed + "\"}"),
                 200);
 
-        assertThat(users.findById(created.get("resourceId").asLong()).orElseThrow().getUsername()).isEqualTo(renamed);
+        assertThat(users.findById(clerkId).orElseThrow().getUsername()).isEqualTo(renamed);
+    }
+
+    @Test
+    void creatingOrDeletingAUserWithAccessWaitsForASecondPerson() throws Exception {
+        // D-03 (NS-SH11-003, NS-UX-004): one administrator cannot mint a second privileged identity on their own.
+        long superRoleId = 0;
+        for (JsonNode role : send("admin", get("/roles"), 200)) {
+            if ("Super Admin".equals(role.get("name").asText())) {
+                superRoleId = role.get("id").asLong();
+            }
+        }
+        String username = "twin" + suffix();
+        JsonNode pending = send("admin", post("/users").content(userBody(username, new long[] {superRoleId})), 202);
+        long commandId = pending.get("commandId").asLong();
+        assertThat(users.findByUsername(username)).isEmpty();
+        // Stored until approved, the request holds the password's hash, never the password; readers see neither.
+        assertThat(commands.findById(commandId).orElseThrow().getCommandAsJson())
+                .doesNotContain("\"password\"").contains("\"passwordHash\":\"$2");
+        JsonNode stored = send("admin", get("/audits/" + commandId), 200);
+        assertThat(stored.get("status").asText()).isEqualTo("AWAITING_APPROVAL");
+        assertThat(stored.get("command").get("passwordHash").asText()).isEqualTo("***");
+        send("admin", post("/audits/" + commandId + "/approve"), 403);
+        long userId = send("secadmin", post("/audits/" + commandId + "/approve"), 200).get("resourceId").asLong();
+        // Once approved, the account signs in with the password its maker chose.
+        assertThat(send(username, get("/me"), 200).get("superAdmin").asBoolean()).isTrue();
+
+        // Deleting a user with access waits for a second person too.
+        JsonNode deletion = send("secadmin", delete("/users/" + userId), 202);
+        assertThat(users.findById(userId)).isPresent();
+        send("secadmin", post("/audits/" + deletion.get("commandId").asLong() + "/approve"), 403);
+        send("admin", post("/audits/" + deletion.get("commandId").asLong() + "/approve"), 200);
+        assertThat(users.findById(userId)).isEmpty();
+
+        // A login with no access needs no checker, and nobody can send a password hash of their own.
+        long plainId = send("admin", post("/users").content(userBody("plain" + suffix(), new long[0])), 201)
+                .get("resourceId").asLong();
+        send("admin", delete("/users/" + plainId), 200);
+        send("admin", post("/users").content("{\"username\":\"hash" + suffix()
+                + "\",\"passwordHash\":\"$2a$10$abcdefghijklmnopqrstuv\"}"), 422);
+        // The checker on user creation and deletion cannot be switched off either.
+        for (JsonNode permission : send("admin", get("/permissions"), 200)) {
+            String code = permission.get("code").asText();
+            if ("CREATE_USER".equals(code) || "DELETE_USER".equals(code)) {
+                assertThat(permission.get("canMakerChecker").asBoolean()).isTrue();
+                send("admin", put("/permissions/" + permission.get("id").asLong())
+                        .content("{\"canMakerChecker\":false}"), 422);
+            }
+        }
     }
 
     @Test
@@ -197,7 +245,7 @@ class RbacAndAuditIntegrationTest {
         long auditRole = createRole("Audit " + suffix());
         grantRole(auditRole, "{\"permissions\":{\"READ_AUDIT\":true}}");
         String auditor = "auditor" + suffix();
-        send("admin", post("/users").content(userBody(auditor, new long[] {auditRole})), 201);
+        createUser(auditor, auditRole);
 
         JsonNode roleCommand = send("admin", post("/roles").content(roleBody("Global " + suffix())), 201);
         JsonNode userCommand = send("admin", post("/users").content(userBody("plain" + suffix(), new long[0])), 201);
@@ -216,7 +264,7 @@ class RbacAndAuditIntegrationTest {
                 .content("{\"permissions\":{\"ALL_FUNCTIONS_READ\":true}}"), 422);
         grantRole(roleId, "{\"permissions\":{\"READ_AUDIT\":true,\"READ_ROLE\":true}}");
         String username = "readonly" + suffix();
-        send("admin", post("/users").content(userBody(username, new long[] {roleId})), 201);
+        createUser(username, roleId);
 
         send(username, get("/audits"), 200);
         send(username, get("/roles"), 200);
@@ -263,8 +311,7 @@ class RbacAndAuditIntegrationTest {
         assertThat(send("admin", get("/roles/" + roleId), 200).get("permissions").toString()).contains("READ_PRODUCT");
 
         String username = "member" + suffix();
-        JsonNode createdUser = send("admin", post("/users").content(userBody(username, new long[] {roleId})), 201);
-        long userId = createdUser.get("resourceId").asLong();
+        long userId = createUser(username, roleId);
         JsonNode stored = send("admin", get("/users/" + userId), 200);
         assertThat(stored.get("roles").toString()).contains(roleName);
         assertThat(stored.get("roleIds").toString()).contains(Long.toString(roleId));
@@ -273,7 +320,8 @@ class RbacAndAuditIntegrationTest {
         assertThat(send(username, get("/me"), 200).get("superAdmin").asBoolean()).isFalse();
         send(username, get("/users"), 403);
 
-        send("admin", delete("/users/" + userId), 200);
+        approve(send("admin", delete("/users/" + userId), 202));
+        send("admin", get("/users/" + userId), 404);
         send("admin", delete("/roles/" + roleId), 200);
         long superRoleId = 0;
         for (JsonNode role : send("admin", get("/roles"), 200)) {
@@ -282,6 +330,13 @@ class RbacAndAuditIntegrationTest {
             }
         }
         send("admin", delete("/roles/" + superRoleId), 422);
+    }
+
+    /** A user given access waits for a second person (D-03): the admin makes it, a second administrator approves. */
+    private long createUser(String username, long roleId) throws Exception {
+        JsonNode pending = send("admin", post("/users").content(userBody(username, new long[] {roleId})), 202);
+        return send("secadmin", post("/audits/" + pending.get("commandId").asLong() + "/approve"), 200)
+                .get("resourceId").asLong();
     }
 
     private long createRole(String name) throws Exception {

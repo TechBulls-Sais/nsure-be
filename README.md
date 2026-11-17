@@ -84,6 +84,12 @@ holder's `/me` (`emergencyAccess`) and as a banner in the workspace.
   included: a different person holding the matching `CHECKER_*` approves the change (Access → Approvals). Nobody
   approves their own change (NS-UX-004); the checker on these three cannot be switched off. A user editing their own
   profile skips it. Locally, `admin` makes and `secadmin` approves.
+- **Creating or deleting a user who has access** (any role with desk access or a permission, or Super Admin) is
+  maker-checker too (`CREATE_USER`/`DELETE_USER`, approved with `CHECKER_CREATE_USER`/`CHECKER_DELETE_USER`), so one
+  administrator cannot mint a second identity to approve their own changes. A login with no access is applied at once.
+  The stored request holds the new password's hash, never the password. While nobody but the maker could approve
+  (the first administrator of a fresh installation), a creation is applied at once, recorded in the audit evidence and
+  alerted to `READ_AUDIT` holders (`nsure.maker-checker.sole-checker-bootstrap`, default on).
 - The Super Admin role keeps `PERMISSIONS_ROLE` and `CHECKER_PERMISSIONS_ROLE`, so a mistaken edit cannot lock every
   administrator out of role grants.
 - **Claim approval limits** per role (`/admin/approval-authorities`): no row = unlimited, several roles = the highest

@@ -4,7 +4,9 @@ import com.nsure.audit.domain.CommandSource;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.domain.PermissionCode;
 import com.nsure.security.exception.NoAuthorizationException;
+import com.nsure.security.repository.AppUserRepository;
 import com.nsure.security.repository.PermissionRepository;
+import java.util.Set;
 import org.springframework.stereotype.Component;
 
 /**
@@ -15,11 +17,21 @@ import org.springframework.stereotype.Component;
 @Component
 public class MakerCheckerPolicy {
 
+    /**
+     * Codes whose command may be applied without a checker while nobody but its maker could ever approve it: the
+     * first administrator of a fresh installation creating the second. Once a second checker exists it never applies
+     * again, and one person cannot make it apply (disabling or removing the other checkers needs their approval).
+     */
+    private static final Set<String> SOLE_CHECKER_BOOTSTRAP = Set.of("CREATE_USER");
+
     private final PermissionRepository permissions;
+    private final AppUserRepository users;
     private final MakerCheckerProperties properties;
 
-    public MakerCheckerPolicy(PermissionRepository permissions, MakerCheckerProperties properties) {
+    public MakerCheckerPolicy(PermissionRepository permissions, AppUserRepository users,
+            MakerCheckerProperties properties) {
         this.permissions = permissions;
+        this.users = users;
         this.properties = properties;
     }
 
@@ -32,6 +44,17 @@ public class MakerCheckerPolicy {
             return false;
         }
         return !isSelfProfile(user, entity, action, resourceId);
+    }
+
+    /**
+     * Whether {@code permissionCode}'s command from {@code maker} may skip its checker because no other enabled user
+     * holds {@code CHECKER_<code>} (see {@link #SOLE_CHECKER_BOOTSTRAP}).
+     */
+    public boolean isSoleCheckerBootstrap(AppUser maker, String permissionCode) {
+        String code = permissionCode.toUpperCase();
+        return properties.isSoleCheckerBootstrap()
+                && SOLE_CHECKER_BOOTSTRAP.contains(code)
+                && users.countOtherHolders("CHECKER_" + code, maker.getId()) == 0;
     }
 
     public void validateChecker(AppUser checker, CommandSource pending) {

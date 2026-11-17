@@ -26,7 +26,8 @@ public class PermissionCommandHandler implements CommandHandler {
      * Identity-administration codes whose four-eyes check cannot be switched off: otherwise an administrator holding
      * UPDATE_PERMISSION could drop the checker and then change roles or users alone (no self-approval, NS-UX-004).
      */
-    private static final Set<String> FOUR_EYES_LOCKED = Set.of("UPDATE_USER", "UPDATE_ROLE", "PERMISSIONS_ROLE");
+    private static final Set<String> FOUR_EYES_LOCKED = Set.of("CREATE_USER", "UPDATE_USER", "DELETE_USER",
+            "UPDATE_ROLE", "PERMISSIONS_ROLE");
 
     private final PermissionRepository permissions;
     private final ObjectMapper mapper;
