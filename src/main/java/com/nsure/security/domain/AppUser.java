@@ -261,6 +261,28 @@ public class AppUser extends AuditableEntity implements UserDetails {
         return false;
     }
 
+    /**
+     * A partner portal login (agent, employer or lender): what its enabled roles grant is the partner portal and
+     * nothing else. Its role has desk access, so it signs in like staff, but it is never the insurer's own staff (D-07).
+     */
+    public boolean isPartnerLogin() {
+        boolean portal = false;
+        if (roles != null) {
+            for (Role role : roles) {
+                if (role.isDisabled() || role.getPermissions() == null) {
+                    continue;
+                }
+                for (Permission permission : role.getPermissions()) {
+                    if (!permission.hasCode(PermissionCatalog.USE_PARTNER_PORTAL.name())) {
+                        return false;
+                    }
+                    portal = true;
+                }
+            }
+        }
+        return portal;
+    }
+
     /** A customer login: it may use the customer portal only, never the staff workspace or its API. */
     public boolean isPortalCustomer() {
         return !isStaffUser();

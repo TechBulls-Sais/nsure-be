@@ -24,6 +24,14 @@ public class PortalCustomerLinks {
         return count.longValue() > 0;
     }
 
+    /** Whether this login is tied to an agent, employer or lender through the partner portal (portal_account). */
+    public boolean isPartnerLinked(String username) {
+        Number count = (Number) em.createNativeQuery("SELECT COUNT(*) FROM portal_account WHERE username = ?1")
+                .setParameter(1, username)
+                .getSingleResult();
+        return count.longValue() > 0;
+    }
+
     /** How many users holding this role are linked to a customer record. */
     public long linkedHoldersOf(Long roleId) {
         Number count = (Number) em.createNativeQuery("""

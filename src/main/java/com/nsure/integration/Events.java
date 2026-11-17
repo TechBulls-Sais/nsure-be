@@ -40,6 +40,18 @@ public final class Events {
     /** caseRef, caseType, customerName, category. */
     public static final String SERVICE_CASE_OPENED = "ServiceCaseOpened";
 
+    // SH10 workflow events (spec "Records and workspace"), raised alongside any older module-specific names.
+    /** caseRef, caseType, customerRef, channel. A service request or complaint was opened (with ServiceCaseOpened). */
+    public static final String CASE_OPENED = "CaseOpened";
+    /** key, workflow, ref, owner, assignedBy. Open work was taken by, or assigned to, its owner. */
+    public static final String TASK_ASSIGNED = "TaskAssigned";
+    /** commandId, permissionCode, entity, resourceId, makerId, checker. A held change was approved and applied. */
+    public static final String APPROVAL_GRANTED = "ApprovalGranted";
+    /** key, workflow, ref, team, owner, dueAt. Open work passed its SLA due time; raised once per item. */
+    public static final String SLA_BREACHED = "SlaBreached";
+    /** caseRef, caseType, customerRef, closedBy. A service request or complaint was closed. */
+    public static final String CASE_CLOSED = "CaseClosed";
+
     /** inboundId, providerRef, action (ALLOCATE or REFUND), policyRef, amount. Suspense cash allocated or refunded. */
     public static final String SUSPENSE_CLEARED = "SuspenseCleared";
 

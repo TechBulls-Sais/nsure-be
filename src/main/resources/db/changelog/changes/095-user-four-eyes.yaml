@@ -1,0 +1,28 @@
+databaseChangeLog:
+  # D-03 (NS-SH11-003, NS-UX-004): creating or deleting a login that has access waits for a second person, like
+  # UPDATE_USER, so one administrator cannot mint a second identity and approve their own changes with it. The
+  # checker codes go to the Super Admin role; the first administrator of a fresh installation may still create the
+  # second while nobody else could approve (nsure.maker-checker.sole-checker-bootstrap).
+  - changeSet:
+      id: 095-user-create-delete-checker
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT seed.g, seed.c, seed.e, seed.a, FALSE, seed.f
+              FROM (
+                SELECT 'authorisation' g, 'CHECKER_CREATE_USER' c, 'USER' e, 'CHECKER_CREATE' a,
+                       'Approve a new user who is given access' f UNION ALL
+                SELECT 'authorisation', 'CHECKER_DELETE_USER', 'USER', 'CHECKER_DELETE',
+                       'Approve deleting a user who has access'
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = seed.c);
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p
+                ON p.code IN ('CHECKER_CREATE_USER', 'CHECKER_DELETE_USER')
+              WHERE r.name = 'Super Admin'
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+
+              UPDATE app_permission SET can_maker_checker = TRUE WHERE code IN ('CREATE_USER', 'DELETE_USER');

@@ -1,0 +1,46 @@
+databaseChangeLog:
+  # SH10 work queue (NS-SH10-002, D-24): a priority per workflow, who assigned an item, one SlaBreached per item, the
+  # work of more modules (claims by stage, service requests and complaints, manual journals, treaties, templates and
+  # access changes awaiting a checker), and ASSIGN_WORK for a supervisor who hands work out. The SLA hours of the new
+  # definitions are starting points for the insurer's service matrix, editable under Operations > Workflows.
+  - changeSet:
+      id: 096-work-queue
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: wf_definition
+            columns:
+              - column: {name: priority, type: varchar(10), defaultValue: NORMAL, constraints: {nullable: false}}
+        - addColumn:
+            tableName: wf_assignment
+            columns:
+              - column: {name: assigned_by, type: varchar(100)}
+        - createTable:
+            tableName: wf_sla_breach
+            columns:
+              - column: {name: item_key, type: varchar(80), constraints: {primaryKey: true, nullable: false}}
+              - column: {name: due_at, type: timestamp(6)}
+              - column: {name: detected_at, type: timestamp(6), constraints: {nullable: false}}
+        - sql:
+            sql: |
+              INSERT INTO wf_definition (code, name, team, sla_hours, steps, version_no, priority)
+              SELECT seed.c, seed.n, seed.t, seed.h, seed.s, 1, 'NORMAL' FROM (
+                SELECT 'CLAIM' c, 'Claim assessment' n, 'Claims' t, 40 h, 'Run the checks > Gather evidence > Assess and recommend' s UNION ALL
+                SELECT 'CLAIM_DECISION', 'Claim approval', 'Claims', 16, 'Review the assessment > A second person approves within their limit or rejects' UNION ALL
+                SELECT 'CLAIM_PAYOUT', 'Claim payout', 'Claims', 16, 'Send the payout > Confirm it or record that it failed > Retry a failed payout' UNION ALL
+                SELECT 'SERVICE_REQUEST', 'Service request', 'Customer service', 72, 'Acknowledge > Work the request > Resolve > Close (due time kept on the case)' UNION ALL
+                SELECT 'COMPLAINT', 'Complaint', 'Customer service', 120, 'Acknowledge > Investigate > Resolve with a reason > Close (due time kept on the case)' UNION ALL
+                SELECT 'MANUAL_JOURNAL', 'Manual journal approval', 'Finance', 16, 'Check the lines and the reason > A second person approves or rejects' UNION ALL
+                SELECT 'TREATY', 'Treaty approval', 'Reinsurance', 40, 'Check the terms > A second person approves' UNION ALL
+                SELECT 'TEMPLATE', 'Message template approval', 'Communications', 16, 'Check the wording and merge fields > A second person approves' UNION ALL
+                SELECT 'ACCESS_APPROVAL', 'Access change approval', 'Security administration', 8, 'Check the change > A second person approves or rejects'
+              ) seed WHERE NOT EXISTS (SELECT 1 FROM wf_definition x WHERE x.code = seed.c);
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT 'operations', 'ASSIGN_WORK', 'WORK', 'ASSIGN', FALSE, 'Assign queued work to someone else and see every team''s work'
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = 'ASSIGN_WORK');
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code = 'ASSIGN_WORK'
+              WHERE r.name = 'Super Admin'
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);

@@ -2,7 +2,9 @@ package com.nsure.security.command;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.nsure.audit.service.CommandHandler;
 import com.nsure.audit.service.CommandRequest;
 import com.nsure.audit.service.CommandResult;
@@ -24,6 +26,9 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class UserCommandHandler implements CommandHandler {
+
+    /** The stored form of a password in a request waiting for a checker (see {@link #prepare}). */
+    private static final String PASSWORD_HASH = "passwordHash";
 
     private final AppUserRepository users;
     private final RoleRepository roles;
@@ -60,6 +65,63 @@ public class UserCommandHandler implements CommandHandler {
         return Set.of("CREATE", "UPDATE", "DELETE");
     }
 
+    /**
+     * D-03 (NS-SH11-003, NS-UX-004): creating or deleting a login that has access waits for a second person, like any
+     * change to a user's roles, so one administrator cannot mint a second identity to approve their own changes. A
+     * login with no access (no role, or only roles with no permission and no desk access) needs no checker.
+     */
+    @Override
+    public boolean needsChecker(CommandRequest request) {
+        return switch (request.actionName()) {
+            case "CREATE" -> {
+                UserBody body = read(request.json());
+                yield body.roleIds() != null && loadRoles(body.roleIds()).stream().anyMatch(UserCommandHandler::givesAccess);
+            }
+            case "DELETE" -> users.findById(request.resourceId())
+                    .map(user -> user.getRoles() != null && user.getRoles().stream().anyMatch(UserCommandHandler::givesAccess))
+                    .orElse(true);
+            default -> true;
+        };
+    }
+
+    /**
+     * A request waiting for a checker is stored until it is approved, so its password is stored as the hash it would
+     * get anyway, never in plain text. Clients send {@code password}; a {@code passwordHash} only ever comes from here.
+     */
+    @Override
+    public String prepare(CommandRequest request, boolean awaitingChecker) {
+        JsonNode tree;
+        try {
+            tree = mapper.readTree(request.json() == null || request.json().isBlank() ? "{}" : request.json());
+        } catch (JsonProcessingException ex) {
+            throw new IllegalArgumentException("Request body is not valid JSON");
+        }
+        if (!(tree instanceof ObjectNode body)) {
+            return request.json();
+        }
+        if (body.has(PASSWORD_HASH)) {
+            throw new IllegalArgumentException("Send the password, not a password hash");
+        }
+        JsonNode password = body.get("password");
+        if (!awaitingChecker || password == null || !password.isTextual() || password.asText().isBlank()) {
+            return request.json();
+        }
+        body.remove("password");
+        body.put(PASSWORD_HASH, passwordEncoder.encode(requiredPassword(password.asText())));
+        try {
+            return mapper.writeValueAsString(body);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    /** A role that gives its holder access: desk access, any permission, or the Super Admin role (enabled or not). */
+    private static boolean givesAccess(Role role) {
+        return role.isDeskAccess()
+                || (role.getPermissions() != null && !role.getPermissions().isEmpty())
+                || AppUser.SUPER_ADMIN_ROLE.equalsIgnoreCase(role.getName());
+    }
+
     @Override
     public CommandResult handle(CommandRequest request) {
         return switch (request.actionName()) {
@@ -78,7 +140,8 @@ public class UserCommandHandler implements CommandHandler {
         }
         AppUser user = new AppUser();
         user.setUsername(username);
-        user.setPassword(passwordEncoder.encode(requiredPassword(body.password())));
+        user.setPassword(body.passwordHash() != null ? body.passwordHash()
+                : passwordEncoder.encode(requiredPassword(body.password())));
         user.setEnabled(body.enabled() == null || body.enabled());
         if (body.roleIds() != null) {
             Set<Role> assigned = loadRoles(body.roleIds());
@@ -102,7 +165,9 @@ public class UserCommandHandler implements CommandHandler {
             }
             user.setUsername(username);
         }
-        if (body.password() != null && !body.password().isBlank()) {
+        if (body.passwordHash() != null) {
+            user.setPassword(body.passwordHash());
+        } else if (body.password() != null && !body.password().isBlank()) {
             user.setPassword(passwordEncoder.encode(requiredPassword(body.password())));
         }
         if (body.enabled() != null) {
@@ -232,6 +297,7 @@ public class UserCommandHandler implements CommandHandler {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record UserBody(String username, String password, Boolean enabled, Set<Long> roleIds) {
+    private record UserBody(String username, String password, String passwordHash, Boolean enabled,
+            Set<Long> roleIds) {
     }
 }

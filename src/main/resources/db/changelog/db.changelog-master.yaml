@@ -237,6 +237,18 @@ databaseChangeLog:
       file: changes/090-credit-claim-payees.yaml
       relativeToChangelogFile: true
   - include:
+      file: changes/095-user-four-eyes.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/096-work-queue.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/097-access-review.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/098-security-event-handling.yaml
+      relativeToChangelogFile: true
+  - include:
       file: changes/105-group-scheme-lifecycle.yaml
       relativeToChangelogFile: true
   - include:

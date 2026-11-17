@@ -86,6 +86,10 @@ nsure:
     admin-password: ${NSURE_BOOTSTRAP_ADMIN_PASSWORD:}
   maker-checker:
     same-user-allowed: false
+    # Creating a user with access waits for a second person (CHECKER_CREATE_USER). While nobody but the maker could
+    # approve it (a fresh installation's first administrator), it is applied at once, recorded and alerted, so the
+    # first administrator can create the second one. False leaves such a request waiting.
+    sole-checker-bootstrap: ${NSURE_SOLE_CHECKER_BOOTSTRAP:true}
   audit:
     max-payload-chars: 8000
   # Where claim and policy documents are kept, one folder per reference (data/ is git-ignored).

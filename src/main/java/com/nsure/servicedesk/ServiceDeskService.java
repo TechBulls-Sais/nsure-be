@@ -141,21 +141,32 @@ public class ServiceDeskService {
         }
         String actor = user.getUsername();
         String previous = c.getStatus();
-        switch (action == null ? "" : action.toLowerCase(Locale.ROOT)) {
+        String verb = action == null ? "" : action.toLowerCase(Locale.ROOT);
+        // NS-SH10-002: work someone owns is worked by them; anyone else takes it over first (assign with force).
+        if (Set.of("pause", "resume", "resolve").contains(verb) && c.getOwner() != null && !actor.equals(c.getOwner())) {
+            throw new ConflictException(c.getRef() + " is owned by " + c.getOwner()
+                    + ". Take it over first (by agreement) or ask a supervisor to assign it to you.");
+        }
+        switch (verb) {
             case "assign" -> {
                 requireActive(c, "assigned");
                 String owner = c.getOwner();
-                if (actor.equals(owner)) {
+                // A supervisor may give the case to someone else who works cases (NS-SH10-002).
+                String to = text(body, "to");
+                String assignee = to == null ? actor : assignee(to, user);
+                if (assignee.equals(owner)) {
                     return detailOf(c);
                 }
                 boolean force = body != null && body.path("force").asBoolean(false);
-                if (owner != null && !force) {
+                if (owner != null && !force && to == null) {
                     throw new ConflictException(c.getRef() + " is already owned by " + owner
                             + ". Take it over only by agreement (force).");
                 }
-                c.assign(actor);
-                record(c, "Assigned", previous, owner == null ? "Owner: " + actor
-                        : "Taken over from " + owner + " by " + actor, actor);
+                c.assign(assignee);
+                record(c, "Assigned", previous, (owner == null ? "Owner: " + assignee
+                        : "Taken over from " + owner + " by " + assignee)
+                        + (assignee.equals(actor) ? "" : " (assigned by " + actor + ")"), actor);
+                taskAssigned(c, assignee, actor);
             }
             case "pause" -> {
                 if (!ServiceCase.OPEN.equals(previous) && !ServiceCase.IN_PROGRESS.equals(previous)) {
@@ -196,6 +207,12 @@ public class ServiceDeskService {
                 }
                 c.close();
                 record(c, "Closed", previous, null, actor);
+                Map<String, Object> event = new LinkedHashMap<>();
+                event.put("caseRef", c.getRef());
+                event.put("caseType", c.getCaseType());
+                event.put("customerRef", c.getCustomerRef());
+                event.put("closedBy", actor);
+                outbox.publish(Events.CASE_CLOSED, c.getRef(), event, actor);
             }
             default -> throw new IllegalArgumentException(
                     "Unknown action " + action + ". Use assign, pause, resume, resolve, reopen or close.");
@@ -303,7 +320,66 @@ public class ServiceDeskService {
         event.put("category", category);
         event.put("customerRef", customer.getRef());
         outbox.publish(Events.SERVICE_CASE_OPENED, c.getRef(), event, actor);
+        // The spec's name for the same moment (SH10 events), alongside the existing one its handlers consume.
+        Map<String, Object> opened = new LinkedHashMap<>();
+        opened.put("caseRef", c.getRef());
+        opened.put("caseType", caseType);
+        opened.put("customerRef", customer.getRef());
+        opened.put("channel", channel);
+        outbox.publish(Events.CASE_OPENED, c.getRef(), opened, actor);
         return c;
+    }
+
+    /**
+     * Ownership given from the work queue: the taker becomes the owner (a case someone else owns is refused), or a
+     * supervisor gives it to {@code owner} whoever had it. Recorded in the case history; the queue publishes
+     * TaskAssigned.
+     */
+    @Transactional
+    public void assignFromQueue(String ref, String owner, String by, boolean supervisor) {
+        ServiceCase c = find(ref);
+        requireActive(c, "assigned");
+        String current = c.getOwner();
+        if (owner.equals(current)) {
+            return;
+        }
+        if (current != null && !supervisor) {
+            throw new ConflictException("This work is already owned by " + current + ".");
+        }
+        String previous = c.getStatus();
+        c.assign(owner);
+        record(c, "Assigned", previous, (current == null ? "Owner: " + owner
+                : "Taken over from " + current + " by " + owner)
+                + (owner.equals(by) ? "" : " (assigned by " + by + ")"), by);
+        try {
+            em.flush();
+        } catch (OptimisticLockException | ObjectOptimisticLockingFailureException ex) {
+            throw stale(c);
+        }
+    }
+
+    /** Whom a supervisor (ASSIGN_WORK) may give a case to: an enabled staff user who works cases. */
+    private String assignee(String username, AppUser supervisor) {
+        supervisor.validateHasPermissionTo("ASSIGN_WORK");
+        AppUser target = em.createQuery("select u from AppUser u where u.username = :name", AppUser.class)
+                .setParameter("name", username.trim())
+                .getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("User " + username + " not found"));
+        if (!target.isEnabled() || !target.isStaffUser() || target.isPartnerLogin()
+                || !target.hasPermissionTo("MANAGE_SERVICE_CASE")) {
+            throw new IllegalArgumentException(target.getUsername() + " does not work service cases.");
+        }
+        return target.getUsername();
+    }
+
+    private void taskAssigned(ServiceCase c, String owner, String by) {
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("key", c.getCaseType() + ":" + c.getRef());
+        event.put("workflow", c.getCaseType());
+        event.put("ref", c.getRef());
+        event.put("owner", owner);
+        event.put("assignedBy", by);
+        outbox.publish(Events.TASK_ASSIGNED, c.getCaseType() + ":" + c.getRef(), event, by);
     }
 
     private boolean belongsTo(String ref, String customerRef) {

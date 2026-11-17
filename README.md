@@ -73,6 +73,20 @@ it is granted or revoked. It lapses on its own or is revoked early, and once it 
 granter and the holder reviews it (`REVIEW_EMERGENCY_ACCESS`, Compliance & Auditor). While active it shows in the
 holder's `/me` (`emergencyAccess`) and as a banner in the workspace.
 
+### Access recertification (NS-SH11-007)
+
+`/admin/access-reviews` (Access → Access review): a holder of `REVIEW_ACCESS` (Super Admin, Compliance & Auditor)
+starts a review, which snapshots every enabled login holding access with its roles, then keeps or flags (with a reason)
+each one; nobody decides their own. The review closes only when every login is decided, and each flagged login is
+alerted to the `UPDATE_USER` holders, who remove the access through the four-eyes change. Every step is audit evidence.
+Audit evidence can be filtered by record, type, actor and dates and downloaded as CSV (`/audits/evidence/export`).
+
+**Security events** (`/admin/security-events`, Access → Security events): emergency access granted/revoked, a control
+switched off, payment tampering, flagged access and a change applied without a second approver. Someone holding the
+permission the event was raised for takes it and alone resolves it with a written outcome (both are audit evidence).
+An event nobody takes within `nsure.security-events.escalate-after-hours` (4) is escalated once, as an alert to the
+security administrators (`GRANT_EMERGENCY_ACCESS`).
+
 ### Guards on the grant table (spec 04 §8)
 
 - A **protected role** (Policyholder / End User, Guest, All) never gets a permission, desk access or an approval limit,
@@ -84,6 +98,12 @@ holder's `/me` (`emergencyAccess`) and as a banner in the workspace.
   included: a different person holding the matching `CHECKER_*` approves the change (Access → Approvals). Nobody
   approves their own change (NS-UX-004); the checker on these three cannot be switched off. A user editing their own
   profile skips it. Locally, `admin` makes and `secadmin` approves.
+- **Creating or deleting a user who has access** (any role with desk access or a permission, or Super Admin) is
+  maker-checker too (`CREATE_USER`/`DELETE_USER`, approved with `CHECKER_CREATE_USER`/`CHECKER_DELETE_USER`), so one
+  administrator cannot mint a second identity to approve their own changes. A login with no access is applied at once.
+  The stored request holds the new password's hash, never the password. While nobody but the maker could approve
+  (the first administrator of a fresh installation), a creation is applied at once, recorded in the audit evidence and
+  alerted to `READ_AUDIT` holders (`nsure.maker-checker.sole-checker-bootstrap`, default on).
 - The Super Admin role keeps `PERMISSIONS_ROLE` and `CHECKER_PERMISSIONS_ROLE`, so a mistaken edit cannot lock every
   administrator out of role grants.
 - **Claim approval limits** per role (`/admin/approval-authorities`): no row = unlimited, several roles = the highest
@@ -111,6 +131,20 @@ reinsurance and integration modules are reached through the Super Admin role's e
 Support Representative (`support`) and Compliance & Auditor (`compliance`) come from migration 045; demo password `password`.
 
 Partner portal logins come from migration 077: `agent` (intermediary INT-00001), `employer` (scheme SCH-001) and `lender` (LND-0001), each with only `USE_PARTNER_PORTAL` and tied to that one partner through `portal_account`. The same migration adds the work queue (`/ops/queue`), workflow definitions and business calendar (`/ops/workflow`), the document register with retention and legal hold (`/ops/documents`; the upload scan result is fixed at Clean because no scanner is connected) and the combined benefit payouts list (`/ops/payouts`).
+
+### Work queue (SH10)
+
+`/ops/queue` lists the open work across the modules that the signed-in user may act on: the codes the module's own
+endpoint checks for that step (claims by stage — assessment, approval, payout including failed payouts — underwriting
+referrals, endorsements, benefits, hospital cash, scheme events and quotes, partner requests, service requests and
+complaints, manual journals, treaties, template versions and access changes awaiting a checker). A maker never gets
+their own approval; read-only roles get an empty queue and cannot take work (403); an unknown key is 404. Each item
+has its team, priority (the workflow's, or the case's own), age, working-hours due time, owner, linked contract and
+next action. `ASSIGN_WORK` (Super Admin) sees everything and assigns work (`POST /ops/queue/assign?key=&to=`) to
+someone who may act on it. Ownership binds: while someone owns an item, the module refuses anyone else's action on it
+with 409 (`WorkOwnershipGuard`; service desk cases check their own owner). Events: `TaskAssigned` (take/assign),
+`SlaBreached` (once per item, checked every 10 minutes, `nsure.workflow.sla-check-cron`), `CaseOpened`/`CaseClosed`
+(service desk, alongside `ServiceCaseOpened`) and `ApprovalGranted` (maker-checker approvals).
 
 ### Adding an endpoint
 

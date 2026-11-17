@@ -22,6 +22,8 @@ public enum PermissionCatalog {
     CHECKER_PERMISSIONS_ROLE(null),
     CHECKER_UPDATE_ROLE(null),
     CHECKER_UPDATE_USER(null),
+    CHECKER_CREATE_USER(null),
+    CHECKER_DELETE_USER(null),
 
     // ── access administration (hand-gated, spec 04 A-18: no role holds these by default) ──────────────────
     CREATE_USER(null),
@@ -40,6 +42,8 @@ public enum PermissionCatalog {
     // Emergency access (Nsure Life NS-SH11-003): time-limited, justified, alerted and reviewed.
     GRANT_EMERGENCY_ACCESS(null),
     REVIEW_EMERGENCY_ACCESS(null),
+    // Access recertification (NS-SH11-007): confirm or flag each login's access; changes stay with identity admins.
+    REVIEW_ACCESS(null),
 
     // IL02 underwriting (Nsure Life NS-IL02-001..006).
     READ_UNDERWRITING(null),
@@ -59,6 +63,8 @@ public enum PermissionCatalog {
     MANAGE_CREDIT_RULE(null),
     // Partner portals (specification section 04): scoped to one intermediary, scheme or lender.
     USE_PARTNER_PORTAL(null),
+    // SH10 work queue: a supervisor assigns work to someone else and sees every team's work (NS-SH10-002).
+    ASSIGN_WORK(null),
 
     // ── spec 04 capabilities ────────────────────────────────────────────────────────────────────────────
     READ_DASHBOARD("dashboard.read"),

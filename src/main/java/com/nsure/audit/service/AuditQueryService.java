@@ -1,5 +1,7 @@
 package com.nsure.audit.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.nsure.audit.api.AuditPage;
 import com.nsure.audit.api.AuditResponse;
 import com.nsure.audit.api.CommandResponses;
@@ -84,8 +86,16 @@ public class AuditQueryService {
                 command.getStatus(),
                 command.getResultStatus(),
                 command.getIdempotencyKey(),
-                responses.read(command.getCommandAsJson()),
+                masked(responses.read(command.getCommandAsJson())),
                 responses.read(command.getResultJson()));
+    }
+
+    /** A request waiting for a checker keeps a new password as its hash (UserCommandHandler); readers never see it. */
+    private static JsonNode masked(JsonNode command) {
+        if (command instanceof ObjectNode body && body.has("passwordHash")) {
+            body.put("passwordHash", "***");
+        }
+        return command;
     }
 
     private String upper(String value) {

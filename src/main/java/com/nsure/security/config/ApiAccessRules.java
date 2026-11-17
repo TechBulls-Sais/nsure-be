@@ -197,11 +197,12 @@ public final class ApiAccessRules {
             rule(GET, "/audits", anyOf("READ_AUDIT")),
             rule(GET, "/audits/*", anyOf("READ_AUDIT")),
             rule(GET, "/audits/evidence/verify", anyOf("READ_AUDIT")),
+            rule(GET, "/audits/evidence/export", anyOf("READ_AUDIT")),
             // The service then needs CHECKER_<code of the pending command>, and the checker is never the maker.
-            rule(POST, "/audits/*/approve", anyOf(
-                    "CHECKER_UPDATE_USER", "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
-            rule(POST, "/audits/*/reject", anyOf(
-                    "CHECKER_UPDATE_USER", "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
+            rule(POST, "/audits/*/approve", anyOf("CHECKER_CREATE_USER", "CHECKER_UPDATE_USER", "CHECKER_DELETE_USER",
+                    "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
+            rule(POST, "/audits/*/reject", anyOf("CHECKER_CREATE_USER", "CHECKER_UPDATE_USER", "CHECKER_DELETE_USER",
+                    "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
 
             // ── emergency access (Nsure Life NS-SH11-003) ──────────────────────────────────────────────
             // Time-limited break-glass grants: an identity administrator grants or revokes, Compliance reviews.
@@ -210,6 +211,18 @@ public final class ApiAccessRules {
             rule(POST, "/admin/emergency-access", anyOf("GRANT_EMERGENCY_ACCESS")),
             rule(POST, "/admin/emergency-access/*/revoke", anyOf("GRANT_EMERGENCY_ACCESS")),
             rule(POST, "/admin/emergency-access/*/review", anyOf("REVIEW_EMERGENCY_ACCESS")),
+            // Security events with an owner and escalation route: auditors list; the service checks the event's code.
+            rule(GET, "/admin/security-events", anyOf("READ_AUDIT")),
+            rule(POST, "/admin/security-events/*/own", anyOf("READ_AUDIT", "READ_CONTROL", "READ_PAYMENT",
+                    "UPDATE_USER")),
+            rule(POST, "/admin/security-events/*/resolve", anyOf("READ_AUDIT", "READ_CONTROL", "READ_PAYMENT",
+                    "UPDATE_USER")),
+            // Access recertification (NS-SH11-007): reviewers decide, auditors read.
+            rule(GET, "/admin/access-reviews", anyOf("REVIEW_ACCESS", "READ_AUDIT")),
+            rule(GET, "/admin/access-reviews/*", anyOf("REVIEW_ACCESS", "READ_AUDIT")),
+            rule(POST, "/admin/access-reviews", anyOf("REVIEW_ACCESS")),
+            rule(POST, "/admin/access-reviews/*/items/*/decision", anyOf("REVIEW_ACCESS")),
+            rule(POST, "/admin/access-reviews/*/close", anyOf("REVIEW_ACCESS")),
 
             // ── group administration GL01-GL05 (Group Administrator) ───────────────────────────────────
             rule(GET, "/group/schemes", anyOf("READ_SCHEME")),
@@ -339,6 +352,8 @@ public final class ApiAccessRules {
             rule(GET, "/ops/queue", staff()),
             rule(POST, "/ops/queue/claim", staff()),
             rule(DELETE, "/ops/queue/claim", staff()),
+            rule(POST, "/ops/queue/assign", anyOf("ASSIGN_WORK")),
+            rule(GET, "/ops/queue/assignees", anyOf("ASSIGN_WORK")),
             rule(GET, "/ops/documents", anyOf("READ_POLICY")),
             rule(PUT, "/ops/documents/hold", anyOf("UPDATE_POLICY")),
             rule(PUT, "/ops/documents/retention", anyOf("MANAGE_CONFIG")),
