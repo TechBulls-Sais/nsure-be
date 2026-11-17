@@ -356,6 +356,8 @@ public final class ApiAccessRules {
             rule(POST, "/communications/templates/*/withdraw/decline", anyOf("APPROVE_TEMPLATE")),
             rule(POST, "/communications/messages", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/messages/*/retry", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/messages/*/owner", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/templates/preview", anyOf("MANAGE_COMMUNICATION", "APPROVE_TEMPLATE")),
             rule(POST, "/communications/dispatch", anyOf("MANAGE_COMMUNICATION")),
             rule(PUT, "/communications/preferences/*", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/inbound/*/assign", anyOf("MANAGE_COMMUNICATION")),

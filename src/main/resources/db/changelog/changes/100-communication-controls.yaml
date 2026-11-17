@@ -15,3 +15,39 @@ databaseChangeLog:
               - column: {name: withdrawal_requested_at, type: timestamp(6)}
               - column: {name: withdrawn_by, type: varchar(100)}
               - column: {name: withdrawn_at, type: timestamp(6)}
+  - changeSet:
+      id: 100-message-delivery-evidence
+      author: nsure
+      comment: >-
+        NS-SH09B-004/007 and the SH09B workspace: the ACCEPTED time (provider acceptance is not delivery), the message's
+        purpose, recipient role and the basis on which the recipient was chosen, the owner of a message in the failed
+        queue, and every message's trail (states, the provider's raw reports, staff actions).
+      changes:
+        - addColumn:
+            tableName: com_message
+            columns:
+              - column: {name: accepted_at, type: timestamp(6)}
+              - column: {name: purpose, type: varchar(40)}
+              - column: {name: recipient_role, type: varchar(20)}
+              - column: {name: recipient_basis, type: varchar(300)}
+              - column: {name: owner, type: varchar(100)}
+              - column: {name: owned_at, type: timestamp(6)}
+        - createTable:
+            tableName: com_message_event
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_com_message_event}}
+              - column: {name: message_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: detail, type: varchar(500)}
+              - column: {name: source, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: raw_payload, type: varchar(4000)}
+              - column: {name: actor, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: occurred_at, type: timestamp(6), constraints: {nullable: false}}
+        - createIndex:
+            tableName: com_message_event
+            indexName: ix_com_message_event_message
+            columns:
+              - column: {name: message_id}
+        - sql:
+            comment: Messages from before this change were all customer messages.
+            sql: UPDATE com_message SET recipient_role = 'CUSTOMER' WHERE recipient_role IS NULL;

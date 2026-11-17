@@ -89,6 +89,16 @@ public final class Events {
     public static final String PAYMENT_RETURNED = "PaymentReturned";
     public static final String BENEFIT_LIMIT_CONSUMED = "BenefitLimitConsumed";
 
+    // Communications (spec SH09B). Payloads carry references only: never the message content or the contact.
+    /** messageRef, eventType, businessRef, customerRef, recipientRole, channel, purpose, templateCode, templateVersion, status, reason. */
+    public static final String COMMUNICATION_REQUESTED = "CommunicationRequested";
+    /** messageRef, eventType, businessRef, customerRef, recipientRole, channel, purpose, providerMessageId, status. */
+    public static final String MESSAGE_DELIVERED = "MessageDelivered";
+    /** messageRef, eventType, businessRef, customerRef, recipientRole, channel, purpose, providerMessageId, reason. */
+    public static final String MESSAGE_FAILED = "MessageFailed";
+    /** inboundId, channel, status (LINKED or TRIAGE), customerRef, caseRef. Never the sender or the text. */
+    public static final String INBOUND_MESSAGE_RECEIVED = "InboundMessageReceived";
+
     private Events() {
     }
 }

@@ -3,7 +3,10 @@ package com.nsure.communication;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nsure.audit.evidence.EvidenceChain;
 import com.nsure.common.exception.ConflictException;
+import com.nsure.integration.Events;
+import com.nsure.integration.Outbox;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.portfolio.CustomerAccount;
 import com.nsure.security.domain.AppUser;
@@ -45,11 +48,15 @@ public class MessagingWebhooks {
     private final ServiceDeskService serviceDesk;
     private final PlatformSecurityContext security;
     private final ObjectMapper mapper;
+    private final Outbox outbox;
+    private final EvidenceChain audit;
     private final byte[] secret;
 
     public MessagingWebhooks(EntityManager em, CommunicationService communications, ServiceDeskService serviceDesk,
-            PlatformSecurityContext security, ObjectMapper mapper,
+            PlatformSecurityContext security, ObjectMapper mapper, Outbox outbox, EvidenceChain audit,
             @Value("${nsure.messaging.webhook-secret:local-messaging-webhook-secret}") String secret) {
+        this.outbox = outbox;
+        this.audit = audit;
         this.em = em;
         this.communications = communications;
         this.serviceDesk = serviceDesk;
@@ -63,7 +70,7 @@ public class MessagingWebhooks {
     public CommunicationViews.CallbackResult status(String raw, String signature) {
         JsonNode body = verified(raw, signature);
         String id = required(body, "providerMessageId");
-        String status = communications.providerStatus(id, required(body, "status"), text(body, "detail"));
+        String status = communications.providerStatus(id, required(body, "status"), text(body, "detail"), raw);
         return new CommunicationViews.CallbackResult(status == null ? "IGNORED" : status, null);
     }
 
@@ -102,6 +109,15 @@ public class MessagingWebhooks {
                     : matches.size() + " customers share this " + label(channel) + "; a person must choose.");
         }
         em.persist(message);
+        em.flush();
+        // SH09B: references only, never the sender or the text (NS-API-003).
+        java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("inboundId", message.getId());
+        data.put("channel", channel);
+        data.put("status", message.getStatus());
+        data.put("customerRef", message.getCustomerRef());
+        data.put("caseRef", message.getCaseRef());
+        outbox.publish(Events.INBOUND_MESSAGE_RECEIVED, "IN-" + message.getId(), data, "provider");
         return new CommunicationViews.CallbackResult(message.getStatus(), message.getCaseRef());
     }
 
