@@ -233,3 +233,6 @@ databaseChangeLog:
   - include:
       file: changes/079-demo-only-default-accounts.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/085-claim-evidence-and-closure.yaml
+      relativeToChangelogFile: true

@@ -43,6 +43,9 @@ class ClaimWorkflowApiTest {
     @Autowired
     private ClaimWorkflow claims;
 
+    /** Claims in these tests have no documents on file, so approving them needs this reason (NS-SH05-003). */
+    private static final String EVIDENCE = "\"evidenceOverrideReason\":\"Certificate seen at the branch; copy to follow\"";
+
     @Test
     void aClaimThatPassesEveryCheckUnderTheCeilingIsApprovedStraightThrough() throws Exception {
         customer("Boitumelo Kgosi", "boitumelo");
@@ -131,7 +134,7 @@ class ClaimWorkflowApiTest {
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":60000}"))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("Payout of BWP 60000 exceeds the policy cover of BWP 50000"));
-        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":45000}"))
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":45000," + EVIDENCE + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Approved"))
                 .andExpect(jsonPath("$.payoutAmount").value(45000))
@@ -262,7 +265,7 @@ class ClaimWorkflowApiTest {
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
-                        "{\"fourEyesOverrideReason\":\"Only approver on duty during the outage\"}"))
+                        "{\"fourEyesOverrideReason\":\"Only approver on duty during the outage\"," + EVIDENCE + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Approved"))
                 .andExpect(jsonPath("$.adjudicatedBy").value("admin"))
@@ -310,7 +313,7 @@ class ClaimWorkflowApiTest {
             mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":\"ten\"}"))
                     .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.message").value("Payout amount must be a number"));
-            mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":9000}"))
+            mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":9000," + EVIDENCE + "}"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.status").value("Approved"))
                     .andExpect(jsonPath("$.adjudicatedBy").value("assessor2"))
@@ -384,7 +387,7 @@ class ClaimWorkflowApiTest {
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString(
                         "Beneficiary Match failed")));
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
-                        "{\"overrideReason\":\"Paid to the named beneficiary, verified against the ID\"}"))
+                        "{\"overrideReason\":\"Paid to the named beneficiary, verified against the ID\"," + EVIDENCE + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Approved"))
                 .andExpect(jsonPath("$.checkOverrideReason").value("Paid to the named beneficiary, verified against the ID"))
@@ -498,7 +501,7 @@ class ClaimWorkflowApiTest {
 
         mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk());
-        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":45000}"))
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":45000," + EVIDENCE + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.reserve").value(45000.0));
         mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
@@ -525,6 +528,63 @@ class ClaimWorkflowApiTest {
         assertThat(consumed).isEqualTo(1L);
     }
 
+    /**
+     * NS-SH05-003 (test B-10): mandatory evidence still outstanding does not block the claim, but approving it needs a
+     * written reason, kept on the claim, in its decision record and in the history. Once the evidence is on file, no
+     * reason is asked for.
+     */
+    @Test
+    void approvingWithMandatoryEvidenceOutstandingNeedsARecordedReason() throws Exception {
+        customer("Kefilwe Evidence", "kefilweevidence");
+        String policy = activePolicy("Kefilwe Evidence", 50000, 60);
+        beneficiary(policy, "Onalenna Evidence");
+        String claim = staffLodge(policy, "Onalenna Evidence");
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.action == 'Assessed')].details").value(org.hamcrest.Matchers.hasItem(
+                        org.hamcrest.Matchers.containsString("evidence outstanding: Death certificate, Identity document"))));
+
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":40000}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value("Required evidence is not yet on file for " + claim
+                        + ": Death certificate, Identity document. Enter a reason for approving without it; the reason"
+                        + " is kept with the claim."));
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
+                        "{\"payoutAmount\":40000,\"evidenceOverrideReason\":\"   \"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
+                        "{\"payoutAmount\":40000,\"evidenceOverrideReason\":\"Originals seen at the branch\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Approved"))
+                .andExpect(jsonPath("$.evidenceOverrideReason").value("Originals seen at the branch"));
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.decisions[0].decision").value("APPROVED"))
+                .andExpect(jsonPath("$.decisions[0].reason").value(
+                        "Approved without Death certificate, Identity document: Originals seen at the branch"));
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.action == 'Approved')].details").value(org.hamcrest.Matchers.hasItem(
+                        org.hamcrest.Matchers.containsString("approved without it: Originals seen at the branch"))));
+
+        // With every mandatory document on file, approval asks for no such reason.
+        String complete = staffLodge(policy, "Onalenna Evidence");
+        for (String type : List.of("Death certificate", "Identity document")) {
+            mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                            .multipart("/portfolio/claims/" + complete + "/documents")
+                            .file(new org.springframework.mock.web.MockMultipartFile("file", "evidence.pdf",
+                                    "application/octet-stream", "%PDF-1.4\n% evidence\n%%EOF".getBytes()))
+                            .param("type", type).with(signedIn("assessor", "password")))
+                    .andExpect(status().isOk());
+        }
+        mockMvc.perform(post("/portfolio/claims/" + complete + "/assess").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims/" + complete + "/approve"), "admin",
+                        "{\"payoutAmount\":5000,\"overrideReason\":\"Second event confirmed separately\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Approved"))
+                .andExpect(jsonPath("$.evidenceOverrideReason").value(""));
+    }
+
     @Test
     void concurrentApprovalsCannotTogetherExceedTheSharedLimit() throws Exception {
         customer("Lorato Limit", "loratolimit");
@@ -544,7 +604,8 @@ class ClaimWorkflowApiTest {
             results.add(pool.submit(() -> {
                 go.await();
                 return mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
-                                "{\"payoutAmount\":30000,\"overrideReason\":\"Separate benefit events confirmed\"}"))
+                                "{\"payoutAmount\":30000,\"overrideReason\":\"Separate benefit events confirmed\","
+                                        + EVIDENCE + "}"))
                         .andReturn().getResponse().getStatus();
             }));
         }

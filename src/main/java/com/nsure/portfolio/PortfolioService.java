@@ -1145,7 +1145,8 @@ public class PortfolioService {
         InsuranceClaim claim = switch (action) {
             case "assess" -> claimWorkflow.assess(ref, optional(input, "note"), actor);
             case "approve" -> claimWorkflow.approve(ref, payoutAmount(input),
-                    optional(input, "overrideReason"), optional(input, "fourEyesOverrideReason"), actor);
+                    optional(input, "overrideReason"), optional(input, "fourEyesOverrideReason"),
+                    optional(input, "evidenceOverrideReason"), actor);
             case "reject" -> claimWorkflow.reject(ref, optional(input, "reason"), actor);
             case "pay" -> claimWorkflow.pay(ref, actor);
             case "confirm-payout" -> claimWorkflow.confirmPayout(ref, optional(input, "providerReference"), actor);
@@ -1653,6 +1654,7 @@ public class PortfolioService {
                 row.getStpEligible(),
                 blank(row.getStpIneligibleCode()),
                 blank(row.getFourEyesOverrideReason()),
+                blank(row.getEvidenceOverrideReason()),
                 row.getRowVersion(),
                 blank(row.getCoveredLifeName()).isEmpty() ? row.getCustomerName() : row.getCoveredLifeName(),
                 row.getReserveAmount(),

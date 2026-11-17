@@ -126,6 +126,10 @@ public class InsuranceClaim extends CoverRecord {
     @Column(name = "check_override_reason", length = 500)
     private String checkOverrideReason;
 
+    // NS-SH05-003: why it was approved while mandatory evidence was not yet on file; null when none was missing.
+    @Column(name = "evidence_override_reason", length = 500)
+    private String evidenceOverrideReason;
+
     // The check rules the stored results came from (ClaimWorkflow.CHECK_RULES_VERSION); 1 is the old, buggy rules.
     @Column(name = "check_rules_version", nullable = false)
     private int checkRulesVersion = 1;
@@ -432,6 +436,14 @@ public class InsuranceClaim extends CoverRecord {
 
     public void setCheckOverrideReason(String checkOverrideReason) {
         this.checkOverrideReason = checkOverrideReason;
+    }
+
+    public String getEvidenceOverrideReason() {
+        return evidenceOverrideReason;
+    }
+
+    public void setEvidenceOverrideReason(String evidenceOverrideReason) {
+        this.evidenceOverrideReason = evidenceOverrideReason;
     }
 
     public BigDecimal getPayoutAmount() {

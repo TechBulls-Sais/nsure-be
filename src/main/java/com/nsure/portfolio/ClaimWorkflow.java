@@ -367,8 +367,12 @@ public class ClaimWorkflow {
         }
         claim.recommend(actor.getUsername(), actor.getId());
         claim.setStatus(RECOMMENDED);
+        // NS-SH05-003: outstanding mandatory evidence does not stop the recommendation, but it is on the record and
+        // the approver must give a reason to approve without it.
+        List<String> missing = financials.missingMandatory(claim);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Assessed", previous, RECOMMENDED,
-                "Recommended for payout of BWP " + Money.text(claim.getAmount()) + (trim(note).isEmpty() ? "" : " · " + trim(note)),
+                "Recommended for payout of BWP " + Money.text(claim.getAmount()) + (trim(note).isEmpty() ? "" : " · " + trim(note))
+                        + (missing.isEmpty() ? "" : " · evidence outstanding: " + String.join(", ", missing)),
                 actor.getUsername());
         return claim;
     }
@@ -380,16 +384,24 @@ public class ClaimWorkflow {
      */
     @Transactional
     public InsuranceClaim approve(String ref, BigDecimal requestedPayout, String overrideReason, AppUser actor) {
-        return approve(ref, requestedPayout, overrideReason, null, actor);
+        return approve(ref, requestedPayout, overrideReason, null, null, actor);
+    }
+
+    @Transactional
+    public InsuranceClaim approve(String ref, BigDecimal requestedPayout, String overrideReason,
+            String fourEyesOverrideReason, AppUser actor) {
+        return approve(ref, requestedPayout, overrideReason, fourEyesOverrideReason, null, actor);
     }
 
     /**
      * Guard order (spec 10 §2.3, 06 §8.1): legal from this state, permission, four-eyes, then a verified payout
-     * account, the payout amount, and the approver's authority limit (04 §5.3).
+     * account, the payout amount, and the approver's authority limit (04 §5.3). Mandatory evidence that is not yet on
+     * file does not block approval, but needs {@code evidenceOverrideReason}, which is kept with the claim
+     * (NS-SH05-003; whether it should block is for the insurer to decide).
      */
     @Transactional
     public InsuranceClaim approve(String ref, BigDecimal requestedPayout, String overrideReason,
-            String fourEyesOverrideReason, AppUser actor) {
+            String fourEyesOverrideReason, String evidenceOverrideReason, AppUser actor) {
         InsuranceClaim claim = claim(ref);
         String previous = guard(claim, "approve", actor);
         String fourEyesReason = trim(fourEyesOverrideReason);
@@ -429,20 +441,36 @@ public class ClaimWorkflow {
                     "Payout of BWP " + Money.text(payout) + " exceeds the policy cover of BWP " + Money.text(claim.getAmount()));
         }
         approvalLimits.assertWithinLimit(actor, payout);
+        List<String> missing = financials.missingMandatory(claim);
+        String evidenceReason = trim(evidenceOverrideReason);
+        if (!missing.isEmpty() && evidenceReason.isEmpty()) {
+            throw new IllegalArgumentException("Required evidence is not yet on file for " + ref + ": "
+                    + String.join(", ", missing) + ". Enter a reason for approving without it; the reason is kept with"
+                    + " the claim.");
+        }
+        if (evidenceReason.length() > 500) {
+            throw new IllegalArgumentException("Keep the reason for approving without the evidence to 500 characters.");
+        }
+        claim.setEvidenceOverrideReason(missing.isEmpty() ? null : evidenceReason);
         financials.reserveLimit(claim, policies.policy(claim.getPolicyRef()), payout, actor.getUsername());
         claim.setPayoutAmount(payout);
         financials.reserve(claim, payout, "Set to the approved payout", actor.getUsername());
-        List<String> missing = financials.missingMandatory(claim);
         claim.setStatus(APPROVED);
         claim.resolve(actor.getUsername());
-        recordDecision(claim, ClaimDecision.APPROVED, softFailed.isEmpty() ? null : reason, payout, actor.getUsername());
+        String decisionReason = softFailed.isEmpty() ? null : reason;
+        if (!missing.isEmpty()) {
+            String withoutEvidence = "Approved without " + String.join(", ", missing) + ": " + evidenceReason;
+            decisionReason = decisionReason == null ? withoutEvidence : decisionReason + " · " + withoutEvidence;
+        }
+        recordDecision(claim, ClaimDecision.APPROVED, decisionReason, payout, actor.getUsername());
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Approved", previous, APPROVED,
-                "Payout: BWP " + Money.text(payout) + (softFailed.isEmpty() ? ""
+                clip("Payout: BWP " + Money.text(payout) + (softFailed.isEmpty() ? ""
                         : " · approved despite " + String.join(", ", softFailed) + ": " + reason) + switch (separation) {
                             case OVERRIDDEN -> " · FOUR-EYES OVERRIDDEN by the assessor: " + fourEyesReason;
                             case CONTROL_OFF -> " · four-eyes control OFF: separation not enforced";
                             case ENFORCED -> " · four-eyes: assessed by " + claim.getRecommendedBy();
-                        } + (missing.isEmpty() ? "" : " · evidence outstanding: " + String.join(", ", missing)),
+                        } + (missing.isEmpty() ? "" : " · evidence outstanding: " + String.join(", ", missing)
+                                + " · approved without it: " + evidenceReason)),
                 actor.getUsername());
         publishDecision(Events.CLAIM_APPROVED, claim, null, actor);
         return claim;
@@ -927,6 +955,11 @@ public class ClaimWorkflow {
 
     private static String blankToNull(String value) {
         return trim(value).isEmpty() ? null : value.trim();
+    }
+
+    /** The workflow log keeps up to 1,000 characters of detail; the full reasons are on the claim. */
+    private static String clip(String details) {
+        return details.length() <= 1000 ? details : details.substring(0, 999) + "…";
     }
 
     /** Account numbers in the log show only their last four characters. */

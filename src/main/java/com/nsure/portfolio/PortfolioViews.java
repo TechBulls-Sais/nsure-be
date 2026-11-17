@@ -198,6 +198,8 @@ public final class PortfolioViews {
             String stpIneligibleCode,
             // The written reason when the assessor approved their own claim under the break-glass authority (C-9).
             String fourEyesOverrideReason,
+            // Why it was approved while mandatory evidence was not yet on file (NS-SH05-003); empty otherwise.
+            String evidenceOverrideReason,
             // Send back in If-Match with a claim action (NS-TXN-001): a claim changed meanwhile is refused with 409.
             long version,
             // SH05: the covered life, the case reserve, the evidence checklist and other claims on the policy.
