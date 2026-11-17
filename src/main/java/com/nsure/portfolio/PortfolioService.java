@@ -1313,11 +1313,12 @@ public class PortfolioService {
         try {
             amount = value.isNumber() ? value.decimalValue() : new BigDecimal(value.asText().trim());
         } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException("Payout amount must be a number");
+            throw new com.nsure.common.exception.InvalidFieldException("payoutAmount", "Payout amount must be a number");
         }
         // Pula and thebe (NS-DAT-003): more than two decimal places is not an amount of money.
         if (amount.stripTrailingZeros().scale() > 2) {
-            throw new IllegalArgumentException("Payout amount can have at most two decimal places");
+            throw new com.nsure.common.exception.InvalidFieldException("payoutAmount",
+                    "Payout amount can have at most two decimal places");
         }
         return amount.setScale(2, RoundingMode.UNNECESSARY);
     }
@@ -1330,12 +1331,15 @@ public class PortfolioService {
         InsuranceClaim claim = switch (action) {
             case "assess" -> claimWorkflow.assess(ref, optional(input, "note"), actor);
             case "approve" -> claimWorkflow.approve(ref, payoutAmount(input),
-                    optional(input, "overrideReason"), optional(input, "fourEyesOverrideReason"), actor);
+                    optional(input, "overrideReason"), optional(input, "fourEyesOverrideReason"),
+                    optional(input, "evidenceOverrideReason"), actor);
             case "reject" -> claimWorkflow.reject(ref, optional(input, "reason"), actor);
             case "pay" -> claimWorkflow.pay(ref, actor);
             case "confirm-payout" -> claimWorkflow.confirmPayout(ref, optional(input, "providerReference"), actor);
             case "payout-failed" -> claimWorkflow.payoutFailed(ref, optional(input, "reason"), actor);
             case "reopen" -> claimWorkflow.reopen(ref, optional(input, "reason"), actor);
+            case "close" -> claimWorkflow.close(ref, optional(input, "note"), input.path("retainRecovery").asBoolean(false),
+                    actor);
             default -> throw new IllegalArgumentException("Unknown claim action: " + action);
         };
         return claim(claim);
@@ -1355,7 +1359,13 @@ public class PortfolioService {
                 limits == null ? null : limits.policyLimit(), limits == null ? null : limits.policyUsed(),
                 claimWorkflow.decisions(ref).stream().map(d -> new PortfolioViews.ClaimDecisionView(d.getSequenceNo(),
                         d.getDecision(), d.getReason(), d.getAmount(), d.getDecidedBy(), d.getDecidedAt(),
-                        d.getSupersededBy())).toList());
+                        d.getSupersededBy())).toList(),
+                claimWorkflow.eventCover(claim),
+                em.createQuery("select r.ref, r.treaty.ref, r.recoveryAmount, r.status, r.receivedAmount from Recovery r"
+                                + " where r.claimRef = :ref order by r.id", Object[].class)
+                        .setParameter("ref", ref).getResultList().stream()
+                        .map(r -> new PortfolioViews.ClaimRecoveryView((String) r[0], (String) r[1], (BigDecimal) r[2],
+                                (String) r[3], (BigDecimal) r[4])).toList());
     }
 
     @Transactional(readOnly = true)
@@ -1851,13 +1861,17 @@ public class PortfolioService {
                 blank(row.getRecommendedBy()), blank(row.getAdjudicatedBy()), row.getFourEyesApplied(),
                 blank(row.getRejectionReason()), row.getPayoutAmount(), blank(row.getPayoutReference()),
                 row.getPaidAt() == null ? "" : row.getPaidAt().withNano(0).toString(),
-                ClaimWorkflow.allowedActions(row.getStatus()),
+                ClaimWorkflow.allowedActions(row),
                 ClaimDocumentService.views(em, row.getId()),
                 blank(row.getCheckOverrideReason()),
                 blank(ClaimWorkflow.auditFlag(row)),
                 row.getStpEligible(),
                 blank(row.getStpIneligibleCode()),
                 blank(row.getFourEyesOverrideReason()),
+                blank(row.getEvidenceOverrideReason()),
+                row.getClosedAt() == null ? "" : row.getClosedAt().withNano(0).toString(),
+                blank(row.getClosedBy()),
+                blank(row.getCloseNote()),
                 row.getRowVersion(),
                 blank(row.getCoveredLifeName()).isEmpty() ? row.getCustomerName() : row.getCoveredLifeName(),
                 row.getReserveAmount(),

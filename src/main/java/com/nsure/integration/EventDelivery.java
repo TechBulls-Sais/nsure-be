@@ -20,6 +20,8 @@ public class EventDelivery {
     public static final String PENDING = "PENDING";
     public static final String DELIVERED = "DELIVERED";
     public static final String FAILED = "FAILED";
+    /** Not handled because the handler judged it irrelevant (superseded); the reason stays as evidence. */
+    public static final String IGNORED = "IGNORED";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -98,6 +100,22 @@ public class EventDelivery {
         lastError = reason.length() <= 1000 ? reason : reason.substring(0, 1000);
         updatedAt = LocalDateTime.now();
         nextAttemptAt = dueNow().plusSeconds(seconds);
+    }
+
+    void ignored(String reason) {
+        attempts++;
+        status = IGNORED;
+        lastError = reason.length() <= 1000 ? reason : reason.substring(0, 1000);
+        deliveredAt = LocalDateTime.now();
+        updatedAt = deliveredAt;
+    }
+
+    /** A delivery that can never succeed as it stands (an unsupported schema version): failed at once. */
+    void refused(String reason) {
+        attempts++;
+        status = FAILED;
+        lastError = reason.length() <= 1000 ? reason : reason.substring(0, 1000);
+        updatedAt = LocalDateTime.now();
     }
 
     void replay() {

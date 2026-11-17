@@ -39,6 +39,8 @@ import org.springframework.transaction.annotation.Transactional;
  *   APPROVED / PAYOUT FAILED ──pay──▶ PAYOUT SENT ─┬─ confirm-payout ─▶ PAID (ClaimPaid)
  *                                                  └─ payout-failed (reason) ─▶ PAYOUT FAILED
  *   INITIATED / UNDER REVIEW / RECOMMENDED ──reject (reason required)──▶ REJECTED
+ *   REJECTED / APPROVED (not yet sent) ──reopen (reason, senior)──▶ UNDER REVIEW
+ *   PAID ──close (financial and recovery tasks resolved or retained)──▶ PAID, closed
  * </pre>
  *
  * A payout is Paid only when the provider or bank confirms it settled (NS-SH05-007, AT-SH05-03): sending the
@@ -77,7 +79,10 @@ public class ClaimWorkflow {
         TRANSITIONS.put("pay", new Transition(Set.of(APPROVED, PAYOUT_FAILED), PAYOUT_SENT, "SETTLE_CLAIM"));
         TRANSITIONS.put("confirm-payout", new Transition(Set.of(PAYOUT_SENT), PAID, "SETTLE_CLAIM"));
         TRANSITIONS.put("payout-failed", new Transition(Set.of(PAYOUT_SENT), PAYOUT_FAILED, "SETTLE_CLAIM"));
-        TRANSITIONS.put("reopen", new Transition(Set.of(REJECTED), UNDER_REVIEW, "APPROVE_CLAIM"));
+        // §09: a decision is reopened before anything is paid; a paid claim is corrected by a corrective transaction.
+        TRANSITIONS.put("reopen", new Transition(Set.of(REJECTED, APPROVED), UNDER_REVIEW, "APPROVE_CLAIM"));
+        // §09 / NS-SH05-007: a settled claim is closed once its financial and recovery tasks are done or retained.
+        TRANSITIONS.put("close", new Transition(Set.of(PAID), PAID, "SETTLE_CLAIM"));
     }
 
     private record Transition(Set<String> from, String to, String permission) {
@@ -117,6 +122,13 @@ public class ClaimWorkflow {
         return TRANSITIONS.entrySet().stream()
                 .filter(entry -> entry.getValue().from().contains(state))
                 .map(Map.Entry::getKey)
+                .toList();
+    }
+
+    /** Actions legal on this claim now: as {@link #allowedActions(String)}, without close once it is closed. */
+    public static List<String> allowedActions(InsuranceClaim claim) {
+        return allowedActions(claim.getStatus()).stream()
+                .filter(action -> !"close".equals(action) || claim.getClosedAt() == null)
                 .toList();
     }
 
@@ -185,6 +197,10 @@ public class ClaimWorkflow {
         claim.setStpEligible(stp == null);
         claim.setStpIneligibleCode(stp == null ? null : stp.code());
         outbox.publish(Events.CLAIM_RECEIVED, claim.getRef(), decisionPayload(claim, null), actor);
+        Map<String, Object> registered = decisionPayload(claim, null);
+        registered.put("claimType", claim.getClaimType());
+        registered.put("eventDate", claim.getEventDate());
+        outbox.publish(Events.CLAIM_REGISTERED, claim.getRef(), registered, actor);
         if (stp == null) {
             claim.verifyPayout(SYSTEM_VERIFIER);
             claim.setStatus(APPROVED);
@@ -193,7 +209,7 @@ public class ClaimWorkflow {
             claim.resolve(null);
             financials.reserveLimit(claim, policy, claim.getAmount(), WorkflowHistory.SYSTEM);
             history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Auto Approved", INITIATED,
-                    APPROVED, "Straight-through: all five checks passed · payout BWP " + Money.text(claim.getAmount()),
+                    APPROVED, "Straight-through: all five checks passed · payout " + Money.display(claim.getAmount()),
                     WorkflowHistory.SYSTEM);
             outbox.publish(Events.CLAIM_APPROVED, claim.getRef(), decisionPayload(claim, null), WorkflowHistory.SYSTEM);
         } else {
@@ -237,8 +253,8 @@ public class ClaimWorkflow {
                 ? product.getStpCeiling()
                 : controls.valueOf(ControlKey.CLAIM_STP_CEILING.key());
         if (claim.getAmount().compareTo(ceiling) > 0) {
-            return new StpDecision(STP_OVER_CEILING, "Payout of BWP " + Money.text(claim.getAmount())
-                    + " is over the straight-through ceiling of BWP " + ceiling.stripTrailingZeros().toPlainString());
+            return new StpDecision(STP_OVER_CEILING, "Payout of " + Money.display(claim.getAmount())
+                    + " is over the straight-through ceiling of " + Money.display(ceiling));
         }
         boolean needsVerifiedPayout = controls.isEnabled(ControlKey.CLAIM_STP_REQUIRES_VERIFIED_PAYOUT.key())
                 && (product == null || product.isRequiresVerifiedPayout());
@@ -247,9 +263,9 @@ public class ClaimWorkflow {
         }
         ClaimFinancials.Limits limits = financials.limits(claim, policy);
         if (claim.getAmount().compareTo(limits.lifeRemaining().min(limits.policyRemaining())) > 0) {
-            return new StpDecision(STP_OVER_LIMIT, "Payout of BWP " + Money.text(claim.getAmount())
-                    + " is more than what is left of the benefit limit (BWP "
-                    + Money.text(limits.lifeRemaining().min(limits.policyRemaining())) + ")");
+            return new StpDecision(STP_OVER_LIMIT, "Payout of " + Money.display(claim.getAmount())
+                    + " is more than what is left of the benefit limit ("
+                    + Money.display(limits.lifeRemaining().min(limits.policyRemaining())) + ")");
         }
         if (product != null && product.getMaxClaimsPerPolicyPerYear() != null) {
             long recent = em.createQuery("select count(c) from InsuranceClaim c where c.policyRef = :policy"
@@ -367,9 +383,16 @@ public class ClaimWorkflow {
         }
         claim.recommend(actor.getUsername(), actor.getId());
         claim.setStatus(RECOMMENDED);
+        // NS-SH05-003: outstanding mandatory evidence does not stop the recommendation, but it is on the record and
+        // the approver must give a reason to approve without it.
+        List<String> missing = financials.missingMandatory(claim);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Assessed", previous, RECOMMENDED,
-                "Recommended for payout of BWP " + Money.text(claim.getAmount()) + (trim(note).isEmpty() ? "" : " · " + trim(note)),
+                "Recommended for payout of " + Money.display(claim.getAmount()) + (trim(note).isEmpty() ? "" : " · " + trim(note))
+                        + (missing.isEmpty() ? "" : " · evidence outstanding: " + String.join(", ", missing)),
                 actor.getUsername());
+        Map<String, Object> assessed = decisionPayload(claim, trim(note).isEmpty() ? null : trim(note));
+        assessed.put("evidenceOutstanding", missing.size());
+        outbox.publish(Events.CLAIM_ASSESSED, ref, assessed, actor.getUsername());
         return claim;
     }
 
@@ -380,16 +403,24 @@ public class ClaimWorkflow {
      */
     @Transactional
     public InsuranceClaim approve(String ref, BigDecimal requestedPayout, String overrideReason, AppUser actor) {
-        return approve(ref, requestedPayout, overrideReason, null, actor);
+        return approve(ref, requestedPayout, overrideReason, null, null, actor);
+    }
+
+    @Transactional
+    public InsuranceClaim approve(String ref, BigDecimal requestedPayout, String overrideReason,
+            String fourEyesOverrideReason, AppUser actor) {
+        return approve(ref, requestedPayout, overrideReason, fourEyesOverrideReason, null, actor);
     }
 
     /**
      * Guard order (spec 10 §2.3, 06 §8.1): legal from this state, permission, four-eyes, then a verified payout
-     * account, the payout amount, and the approver's authority limit (04 §5.3).
+     * account, the payout amount, and the approver's authority limit (04 §5.3). Mandatory evidence that is not yet on
+     * file does not block approval, but needs {@code evidenceOverrideReason}, which is kept with the claim
+     * (NS-SH05-003; whether it should block is for the insurer to decide).
      */
     @Transactional
     public InsuranceClaim approve(String ref, BigDecimal requestedPayout, String overrideReason,
-            String fourEyesOverrideReason, AppUser actor) {
+            String fourEyesOverrideReason, String evidenceOverrideReason, AppUser actor) {
         InsuranceClaim claim = claim(ref);
         String previous = guard(claim, "approve", actor);
         String fourEyesReason = trim(fourEyesOverrideReason);
@@ -426,25 +457,47 @@ public class ClaimWorkflow {
         }
         if (payout.compareTo(claim.getAmount()) > 0) {
             throw new IllegalArgumentException(
-                    "Payout of BWP " + Money.text(payout) + " exceeds the policy cover of BWP " + Money.text(claim.getAmount()));
+                    "Payout of " + Money.display(payout) + " exceeds the policy cover of " + Money.display(claim.getAmount()));
         }
         approvalLimits.assertWithinLimit(actor, payout);
+        List<String> missing = financials.missingMandatory(claim);
+        String evidenceReason = trim(evidenceOverrideReason);
+        if (!missing.isEmpty() && evidenceReason.isEmpty()) {
+            throw new IllegalArgumentException("Required evidence is not yet on file for " + ref + ": "
+                    + String.join(", ", missing) + ". Enter a reason for approving without it; the reason is kept with"
+                    + " the claim.");
+        }
+        if (evidenceReason.length() > 500) {
+            throw new IllegalArgumentException("Keep the reason for approving without the evidence to 500 characters.");
+        }
+        claim.setEvidenceOverrideReason(missing.isEmpty() ? null : evidenceReason);
         financials.reserveLimit(claim, policies.policy(claim.getPolicyRef()), payout, actor.getUsername());
         claim.setPayoutAmount(payout);
         financials.reserve(claim, payout, "Set to the approved payout", actor.getUsername());
-        List<String> missing = financials.missingMandatory(claim);
         claim.setStatus(APPROVED);
         claim.resolve(actor.getUsername());
-        recordDecision(claim, ClaimDecision.APPROVED, softFailed.isEmpty() ? null : reason, payout, actor.getUsername());
+        boolean partial = payout.compareTo(claim.getAmount()) < 0;
+        String decisionReason = softFailed.isEmpty() ? null : reason;
+        if (!missing.isEmpty()) {
+            String withoutEvidence = "Approved without " + String.join(", ", missing) + ": " + evidenceReason;
+            decisionReason = decisionReason == null ? withoutEvidence : decisionReason + " · " + withoutEvidence;
+        }
+        recordDecision(claim, partial ? ClaimDecision.PARTIALLY_APPROVED : ClaimDecision.APPROVED, decisionReason, payout,
+                actor.getUsername());
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Approved", previous, APPROVED,
-                "Payout: BWP " + Money.text(payout) + (softFailed.isEmpty() ? ""
+                clip("Payout: " + Money.display(payout) + (partial ? " (partial approval of the "
+                        + Money.display(claim.getAmount()) + " claimed)" : "") + (softFailed.isEmpty() ? ""
                         : " · approved despite " + String.join(", ", softFailed) + ": " + reason) + switch (separation) {
                             case OVERRIDDEN -> " · FOUR-EYES OVERRIDDEN by the assessor: " + fourEyesReason;
                             case CONTROL_OFF -> " · four-eyes control OFF: separation not enforced";
                             case ENFORCED -> " · four-eyes: assessed by " + claim.getRecommendedBy();
-                        } + (missing.isEmpty() ? "" : " · evidence outstanding: " + String.join(", ", missing)),
+                        } + (missing.isEmpty() ? "" : " · evidence outstanding: " + String.join(", ", missing)
+                                + " · approved without it: " + evidenceReason)),
                 actor.getUsername());
-        publishDecision(Events.CLAIM_APPROVED, claim, null, actor);
+        Map<String, Object> approved = decisionPayload(claim, null);
+        approved.put("outcome", partial ? ClaimDecision.PARTIALLY_APPROVED : ClaimDecision.APPROVED);
+        approved.put("claimed", claim.getAmount().toPlainString());
+        outbox.publish(Events.CLAIM_APPROVED, ref, approved, actor.getUsername());
         return claim;
     }
 
@@ -467,6 +520,7 @@ public class ClaimWorkflow {
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Rejected", previous, REJECTED,
                 "Reason: " + text, actor.getUsername());
         publishDecision(Events.CLAIM_REJECTED, claim, text, actor);
+        publishDecision(Events.CLAIM_DECLINED, claim, text, actor);
         return claim;
     }
 
@@ -490,7 +544,7 @@ public class ClaimWorkflow {
         claim.setStatus(PAYOUT_SENT);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(),
                 PAYOUT_FAILED.equals(previous) ? "Payout Resent" : "Payout Sent", previous, PAYOUT_SENT,
-                "BWP " + Money.text(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
+                Money.display(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
                         + claim.getPayeePayoutMethod() + " " + mask(claim.getPayeeAccountRef()) + " · " + reference
                         + " · awaiting the provider's confirmation",
                 actor.getUsername());
@@ -498,8 +552,9 @@ public class ClaimWorkflow {
     }
 
     /**
-     * A rejected claim is reviewed again (NS-SH05-004): a senior decision with a written reason. The earlier
-     * rejection stays in the history; the case reserve is re-established and the checks run again.
+     * A rejected claim, or an approved one whose payout has not been sent, is reviewed again (NS-SH05-004, §09): a
+     * senior decision with a written reason. The earlier decision stays in the decision record and the history; an
+     * approval's limit reservation is released and the case reserve is re-established at the cover.
      */
     @Transactional
     public InsuranceClaim reopen(String ref, String reason, AppUser actor) {
@@ -520,6 +575,10 @@ public class ClaimWorkflow {
         if (setAside != null) {
             setAside.supersededBy(reopening.getSequenceNo());
         }
+        if (APPROVED.equals(previous)) {
+            // The approval is set aside before anything was sent: its limit reservation is given back.
+            financials.releaseLimit(claim, actor.getUsername());
+        }
         claim.reopen();
         claim.setStatus(UNDER_REVIEW);
         financials.reserve(claim, claim.getAmount(), "Re-established on reopening", actor.getUsername());
@@ -527,6 +586,48 @@ public class ClaimWorkflow {
                 "Reason: " + text + (setAside == null ? "" : " · setting aside the " + setAside.getDecision().toLowerCase(Locale.ROOT)
                         + " of " + setAside.getDecidedAt().toLocalDate() + " by " + setAside.getDecidedBy()
                         + (setAside.getReason() == null ? "" : ": " + setAside.getReason())), actor.getUsername());
+        return claim;
+    }
+
+    /**
+     * Closes a settled claim (§09, NS-SH05-007). It needs no case reserve or limit reservation left, and no
+     * reinsurance recovery still expected unless {@code retainRecovery} keeps it open apart from the claim, with
+     * {@code note} saying why. The claim stays Paid; it is marked closed and drops out of the open work.
+     */
+    @Transactional
+    public InsuranceClaim close(String ref, String note, boolean retainRecovery, AppUser actor) {
+        InsuranceClaim claim = claim(ref);
+        String previous = guard(claim, "close", actor);
+        if (claim.getClosedAt() != null) {
+            throw new IllegalArgumentException(ref + " is already closed.");
+        }
+        String text = trim(note);
+        if (text.length() > 500) {
+            throw new IllegalArgumentException("Keep the note to 500 characters.");
+        }
+        List<String> open = new ArrayList<>();
+        if (claim.getReserveAmount() != null && claim.getReserveAmount().signum() != 0) {
+            open.add("a case reserve of " + Money.display(claim.getReserveAmount()));
+        }
+        if (financials.reservedLimit(ref).signum() > 0) {
+            open.add("a benefit-limit reservation of " + Money.display(financials.reservedLimit(ref)));
+        }
+        if (!open.isEmpty()) {
+            throw new IllegalArgumentException("Cannot close " + ref + " while it still holds " + String.join(" and ", open)
+                    + ".");
+        }
+        List<String> recoveries = em.createQuery("select r.ref from Recovery r where r.claimRef = :ref"
+                + " and r.status = 'EXPECTED'", String.class).setParameter("ref", ref).getResultList();
+        if (!recoveries.isEmpty() && (!retainRecovery || text.isEmpty())) {
+            throw new IllegalArgumentException("Reinsurance recovery " + String.join(", ", recoveries) + " on " + ref
+                    + " is still expected. Close once it is received, or keep it open on its own (retainRecovery)"
+                    + " with a note saying why.");
+        }
+        claim.close(actor.getUsername(), text.isEmpty() ? null : text);
+        history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Closed", previous, previous,
+                "Financial tasks resolved" + (recoveries.isEmpty() ? "" : " · recovery " + String.join(", ", recoveries)
+                        + " retained apart from the claim") + (text.isEmpty() ? "" : " · " + text),
+                actor.getUsername());
         return claim;
     }
 
@@ -605,7 +706,7 @@ public class ClaimWorkflow {
         financials.reserve(claim, BigDecimal.ZERO, "Released: payout settled", actor.getUsername());
         claim.setStatus(PAID);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Paid", previous, PAID,
-                "BWP " + Money.text(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
+                Money.display(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
                         + claim.getPayeePayoutMethod() + " " + mask(claim.getPayeeAccountRef()) + " · " + reference
                         + " · settlement confirmed",
                 actor.getUsername());
@@ -617,6 +718,7 @@ public class ClaimWorkflow {
         paid.put("amount", claim.getPayoutAmount().toPlainString());
         paid.put("payoutRef", reference);
         outbox.publish(Events.CLAIM_PAID, ref, paid, actor.getUsername());
+        outbox.publish(Events.CLAIM_PAYMENT_SETTLED, ref, paid, actor.getUsername());
         if (claim.getPolicyRef() != null) {
             policies.terminateIfClaimEndsCover(policies.policy(claim.getPolicyRef()), claim, actor.getUsername());
         }
@@ -705,6 +807,15 @@ public class ClaimWorkflow {
         if (start == null || start.isAfter(event)) {
             return false;
         }
+        String last = stateOn(policy, event);
+        return last == null || PolicyWorkflow.ACTIVE.equals(last);
+    }
+
+    /**
+     * The policy state in force on {@code event}: the last change effective on or before it, or null when no change
+     * is recorded (the policy has simply been in force since cover started).
+     */
+    private String stateOn(InsurancePolicy policy, LocalDate event) {
         // NS-DAT-002: the state in force on the event date is the last change *effective* on or before it, whenever
         // it was recorded. A cover end recorded late (a returned premium noticed weeks after grace ran out) still
         // applies from the day it took effect, and a reinstatement after the event does not reach back to it.
@@ -725,7 +836,34 @@ public class ClaimWorkflow {
                 last = to;
             }
         }
-        return last == null || PolicyWorkflow.ACTIVE.equals(last);
+        return last;
+    }
+
+    /**
+     * The cover reconstructed as at the claim's event date (NS-SH05-002, SH05 event-date cover view): the policy's
+     * state then, cover start and waiting period, the cover amount claimed, the premium position and the
+     * beneficiaries designated on that day. Null when the claim has no policy or no valid event date.
+     */
+    public PortfolioViews.EventCoverView eventCover(InsuranceClaim claim) {
+        if (trim(claim.getPolicyRef()).isEmpty()) {
+            return null;
+        }
+        LocalDate event;
+        try {
+            event = LocalDate.parse(trim(claim.getEventDate()));
+        } catch (DateTimeParseException e) {
+            return null;
+        }
+        InsurancePolicy policy = policies.policy(claim.getPolicyRef());
+        LocalDate start = policy.getCoverStartDate();
+        String state = start == null || start.isAfter(event) ? "Not yet in cover" : stateOn(policy, event);
+        int waiting = policies.terms(policy).getWaitingPeriodDays();
+        return new PortfolioViews.EventCoverView(event.toString(), state == null ? PolicyWorkflow.ACTIVE : state,
+                coverInForceOn(policy, event), start == null ? null : start.toString(), waiting,
+                start == null ? null : start.plusDays(waiting).toString(), claim.getAmount(),
+                policy.getNextPremiumDue() == null ? null : policy.getNextPremiumDue().toString(),
+                policy.getGracePeriodEnd() == null ? null : policy.getGracePeriodEnd().toString(),
+                policies.beneficiariesOn(policy, event).stream().map(PolicyBeneficiary::getFullName).toList());
     }
 
     /** Checks that decide whether there was valid cover for the event. A failure cannot be overridden. */
@@ -894,7 +1032,8 @@ public class ClaimWorkflow {
         try {
             date = LocalDate.parse(required(value, "eventDate"));
         } catch (DateTimeParseException e) {
-            throw new IllegalArgumentException("Date of the event must be a date like 2026-04-12.");
+            throw new com.nsure.common.exception.InvalidFieldException("eventDate",
+                    "Date of the event must be a date like 2026-04-12.");
         }
         if (date.isAfter(LocalDate.now())) {
             throw new IllegalArgumentException("The date of the event cannot be in the future");
@@ -904,7 +1043,7 @@ public class ClaimWorkflow {
 
     private static String required(String value, String field) {
         if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException(field + " is required");
+            throw new com.nsure.common.exception.InvalidFieldException(field, field + " is required");
         }
         return value.trim();
     }
@@ -927,6 +1066,11 @@ public class ClaimWorkflow {
 
     private static String blankToNull(String value) {
         return trim(value).isEmpty() ? null : value.trim();
+    }
+
+    /** The workflow log keeps up to 1,000 characters of detail; the full reasons are on the claim. */
+    private static String clip(String details) {
+        return details.length() <= 1000 ? details : details.substring(0, 999) + "…";
     }
 
     /** Account numbers in the log show only their last four characters. */

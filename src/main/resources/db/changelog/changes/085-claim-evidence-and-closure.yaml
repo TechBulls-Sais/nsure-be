@@ -1,0 +1,22 @@
+databaseChangeLog:
+  # NS-SH05-003 (test B-10): a claim may be approved while mandatory evidence is still outstanding only with a written
+  # reason, kept on the claim.
+  - changeSet:
+      id: 085-claim-evidence-override-reason
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ins_claim
+            columns:
+              - column: {name: evidence_override_reason, type: varchar(500)}
+  # §09 claim lifecycle: a settled claim is closed once its financial and recovery tasks are resolved or retained.
+  - changeSet:
+      id: 085-claim-closure
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ins_claim
+            columns:
+              - column: {name: closed_at, type: datetime}
+              - column: {name: closed_by, type: varchar(100)}
+              - column: {name: close_note, type: varchar(500)}

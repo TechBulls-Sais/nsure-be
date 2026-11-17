@@ -43,9 +43,12 @@ public class OutboxDispatcher {
     private final TransactionTemplate tx;
     private final Map<String, DomainEventHandler> handlers;
     private final int maxAttempts;
+    private final com.nsure.controls.StaffAlertService alerts;
 
     public OutboxDispatcher(EntityManager em, ObjectMapper mapper, PlatformTransactionManager transactions,
-            ObjectProvider<DomainEventHandler> handlers, @Value("${nsure.integration.max-attempts:5}") int maxAttempts) {
+            ObjectProvider<DomainEventHandler> handlers, @Value("${nsure.integration.max-attempts:5}") int maxAttempts,
+            com.nsure.controls.StaffAlertService alerts) {
+        this.alerts = alerts;
         this.em = em;
         this.mapper = mapper;
         this.tx = new TransactionTemplate(transactions);
@@ -107,13 +110,29 @@ public class OutboxDispatcher {
                 if (waiting != null) {
                     delivery.heldFor(waiting, HOLD_SECONDS);
                     held[0] = true;
+                    if (waiting.endsWith(BLOCKED)) {
+                        gapAlert(delivery, waiting);
+                    }
                     return;
                 }
                 DomainEventHandler handler = handlers.get(delivery.getHandler());
                 if (handler == null) {
                     throw new IllegalStateException("No handler named " + delivery.getHandler() + " is deployed");
                 }
-                handler.handle(toDomainEvent(delivery.getEvent()));
+                DomainEvent event = toDomainEvent(delivery.getEvent());
+                // NS-API-004: a newer contract version than the consumer knows is refused, never guessed at.
+                if (event.schemaVersion() > handler.supportedSchemaVersion()) {
+                    delivery.refused("Event schema version " + event.schemaVersion() + " of " + event.eventType()
+                            + " is newer than " + handler.name() + " supports (" + handler.supportedSchemaVersion()
+                            + "). Upgrade the consumer, then replay.");
+                    return;
+                }
+                String ignore = handler.ignoreReason(event);
+                if (ignore != null) {
+                    delivery.ignored("Ignored: " + ignore);
+                    return;
+                }
+                handler.handle(event);
                 delivery.delivered();
             });
             return held[0] ? HELD : DELIVERED;
@@ -142,18 +161,34 @@ public class OutboxDispatcher {
         }
         return em.createQuery("select d from EventDelivery d where d.handler = :handler"
                         + " and d.event.aggregateRef = :ref and d.event.aggregateVersion < :version"
-                        + " and d.status <> :delivered order by d.event.aggregateVersion asc", EventDelivery.class)
+                        + " and d.status not in :done order by d.event.aggregateVersion asc", EventDelivery.class)
                 .setParameter("handler", delivery.getHandler())
                 .setParameter("ref", event.getAggregateRef())
                 .setParameter("version", event.getAggregateVersion())
-                .setParameter("delivered", EventDelivery.DELIVERED)
+                .setParameter("done", List.of(EventDelivery.DELIVERED, EventDelivery.IGNORED))
                 .setMaxResults(1)
                 .getResultStream()
                 .findFirst()
                 .map(earlier -> "Waiting for " + earlier.getEvent().getEventType() + " (version "
                         + earlier.getEvent().getAggregateVersion() + " of " + event.getAggregateRef() + ", "
-                        + earlier.getStatus().toLowerCase(java.util.Locale.ROOT) + ") to reach " + delivery.getHandler())
+                        + earlier.getStatus().toLowerCase(java.util.Locale.ROOT) + ") to reach " + delivery.getHandler()
+                        + (EventDelivery.FAILED.equals(earlier.getStatus()) ? BLOCKED : ""))
                 .orElse(null);
+    }
+
+    /** Suffix of a hold behind a failed earlier event: a sequence gap that will not close on its own. */
+    private static final String BLOCKED = " · sequence gap: replay or reconcile the failed event";
+
+    /**
+     * NS-API-004: a gap in an aggregate's sequence that will not close by itself (the earlier event failed) raises a
+     * reconciliation alert for integration staff, once per blocked handler and aggregate.
+     */
+    private void gapAlert(EventDelivery delivery, String waiting) {
+        String key = "event-gap:" + delivery.getHandler() + ":" + delivery.getEvent().getAggregateRef();
+        alerts.raise("EVENT_SEQUENCE_GAP", "READ_INTEGRATION", "Events held behind a failed delivery",
+                waiting + ". Later events of " + delivery.getEvent().getAggregateRef() + " for " + delivery.getHandler()
+                        + " wait until it is replayed or reconciled (Integration monitor).",
+                key.length() <= 120 ? key : key.substring(0, 120), "system");
     }
 
     /** Puts a failed delivery back in the queue (NS-SH12-005). The event payload itself is never editable. */

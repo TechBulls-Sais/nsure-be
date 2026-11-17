@@ -43,6 +43,9 @@ class ClaimWorkflowApiTest {
     @Autowired
     private ClaimWorkflow claims;
 
+    /** Claims in these tests have no documents on file, so approving them needs this reason (NS-SH05-003). */
+    private static final String EVIDENCE = "\"evidenceOverrideReason\":\"Certificate seen at the branch; copy to follow\"";
+
     @Test
     void aClaimThatPassesEveryCheckUnderTheCeilingIsApprovedStraightThrough() throws Exception {
         customer("Boitumelo Kgosi", "boitumelo");
@@ -84,7 +87,9 @@ class ClaimWorkflowApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Paid"))
                 .andExpect(jsonPath("$.paidAt").isNotEmpty())
-                .andExpect(jsonPath("$.actions").isEmpty());
+                // §09: settled, it can only be closed.
+                .andExpect(jsonPath("$.actions[0]").value("close"))
+                .andExpect(jsonPath("$.actions.length()").value(1));
         assertThat(claimPaidEvents(claim)).isEqualTo(1L);
 
         mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
@@ -110,7 +115,7 @@ class ClaimWorkflowApiTest {
         mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].status").value("Under Review"))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].stpIneligibleReason").value(
-                        "Payout of BWP 50000 is over the straight-through ceiling of BWP 5000"));
+                        "Payout of BWP 50,000 is over the straight-through ceiling of BWP 5,000"));
 
         mockMvc.perform(post("/portfolio/claims/" + claim + "/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isUnprocessableEntity())
@@ -130,8 +135,8 @@ class ClaimWorkflowApiTest {
                 .andExpect(status().isForbidden());
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":60000}"))
                 .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.message").value("Payout of BWP 60000 exceeds the policy cover of BWP 50000"));
-        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":45000}"))
+                .andExpect(jsonPath("$.message").value("Payout of BWP 60,000 exceeds the policy cover of BWP 50,000"));
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":45000," + EVIDENCE + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Approved"))
                 .andExpect(jsonPath("$.payoutAmount").value(45000))
@@ -233,6 +238,16 @@ class ClaimWorkflowApiTest {
         mockMvc.perform(json(post("/portfolio/shop/claims"), "dikeledi", lodgement(policy, "Dikeledi Sebina", -2)))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("The date of the event cannot be in the future"));
+        // NS-API-001: a missing or malformed field is a 400 naming it; a future date above is a business rule (422).
+        mockMvc.perform(json(post("/portfolio/claims"), "assessor", lodgement(policy, "Dikeledi Sebina", 1)
+                        .replace("\"claimantMobile\":\"+267 72 000 000\",", "")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("claimantMobile"));
+        mockMvc.perform(json(post("/portfolio/claims"), "assessor", lodgement(policy, "Dikeledi Sebina", 1)
+                        .replaceAll("\"eventDate\":\"[0-9-]+\"", "\"eventDate\":\"12/04/2026\"")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("eventDate"));
         mockMvc.perform(json(post("/portfolio/claims"), "onboarding", lodgement(policy, "Dikeledi Sebina", 1)))
                 .andExpect(status().isForbidden());
     }
@@ -262,7 +277,7 @@ class ClaimWorkflowApiTest {
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
-                        "{\"fourEyesOverrideReason\":\"Only approver on duty during the outage\"}"))
+                        "{\"fourEyesOverrideReason\":\"Only approver on duty during the outage\"," + EVIDENCE + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Approved"))
                 .andExpect(jsonPath("$.adjudicatedBy").value("admin"))
@@ -307,10 +322,13 @@ class ClaimWorkflowApiTest {
                     .andExpect(status().isForbidden())
                     .andExpect(jsonPath("$.message").value("This payout of P 45,000.00 exceeds your approval limit of "
                             + "P 10,000.00. It needs a more senior approver."));
+            // NS-API-001: a malformed field is a 400 schema error naming the field, not a business rule refusal.
             mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":\"ten\"}"))
-                    .andExpect(status().isUnprocessableEntity())
-                    .andExpect(jsonPath("$.message").value("Payout amount must be a number"));
-            mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":9000}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.message").value("Payout amount must be a number"))
+                    .andExpect(jsonPath("$.fieldErrors[0].field").value("payoutAmount"));
+            mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":9000," + EVIDENCE + "}"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.status").value("Approved"))
                     .andExpect(jsonPath("$.adjudicatedBy").value("assessor2"))
@@ -384,7 +402,7 @@ class ClaimWorkflowApiTest {
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString(
                         "Beneficiary Match failed")));
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
-                        "{\"overrideReason\":\"Paid to the named beneficiary, verified against the ID\"}"))
+                        "{\"overrideReason\":\"Paid to the named beneficiary, verified against the ID\"," + EVIDENCE + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Approved"))
                 .andExpect(jsonPath("$.checkOverrideReason").value("Paid to the named beneficiary, verified against the ID"))
@@ -498,14 +516,22 @@ class ClaimWorkflowApiTest {
 
         mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk());
-        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":45000}"))
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":45000," + EVIDENCE + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.reserve").value(45000.0));
         mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.lifeLimit").value(50000.0))
                 .andExpect(jsonPath("$.lifeUsed").value(45000.0))
                 .andExpect(jsonPath("$.policyUsed").value(45000.0))
-                .andExpect(jsonPath("$.movements.length()").value(2));
+                .andExpect(jsonPath("$.movements.length()").value(2))
+                // SH05 event-date cover view: the cover reconstructed as at the event.
+                .andExpect(jsonPath("$.eventCover.eventDate").value(LocalDate.now().minusDays(1).toString()))
+                .andExpect(jsonPath("$.eventCover.policyStatusOnEventDate").value("Active"))
+                .andExpect(jsonPath("$.eventCover.coverInForce").value(true))
+                .andExpect(jsonPath("$.eventCover.coverStartDate").value(LocalDate.now().minusDays(60).toString()))
+                .andExpect(jsonPath("$.eventCover.coverAmount").value(50000.0))
+                .andExpect(jsonPath("$.eventCover.beneficiariesOnEventDate[0]").value("Kabo Reserve"))
+                .andExpect(jsonPath("$.recoveries").isEmpty());
         mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Approved')].details").value(org.hamcrest.Matchers.hasItem(
                         org.hamcrest.Matchers.containsString("evidence outstanding: Death certificate"))));
@@ -523,6 +549,227 @@ class ClaimWorkflowApiTest {
                 + " 'BenefitLimitConsumed' and e.aggregateRef = :ref", Long.class).setParameter("ref", policy)
                 .getSingleResult());
         assertThat(consumed).isEqualTo(1L);
+    }
+
+    /**
+     * NS-SH05-003 (test B-10): mandatory evidence still outstanding does not block the claim, but approving it needs a
+     * written reason, kept on the claim, in its decision record and in the history. Once the evidence is on file, no
+     * reason is asked for.
+     */
+    @Test
+    void approvingWithMandatoryEvidenceOutstandingNeedsARecordedReason() throws Exception {
+        customer("Kefilwe Evidence", "kefilweevidence");
+        String policy = activePolicy("Kefilwe Evidence", 50000, 60);
+        beneficiary(policy, "Onalenna Evidence");
+        String claim = staffLodge(policy, "Onalenna Evidence");
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.action == 'Assessed')].details").value(org.hamcrest.Matchers.hasItem(
+                        org.hamcrest.Matchers.containsString("evidence outstanding: Death certificate, Identity document"))));
+
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":40000}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value("Required evidence is not yet on file for " + claim
+                        + ": Death certificate, Identity document. Enter a reason for approving without it; the reason"
+                        + " is kept with the claim."));
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
+                        "{\"payoutAmount\":40000,\"evidenceOverrideReason\":\"   \"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
+                        "{\"payoutAmount\":40000,\"evidenceOverrideReason\":\"Originals seen at the branch\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Approved"))
+                .andExpect(jsonPath("$.evidenceOverrideReason").value("Originals seen at the branch"));
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.decisions[0].decision").value("PARTIALLY_APPROVED"))
+                .andExpect(jsonPath("$.decisions[0].reason").value(
+                        "Approved without Death certificate, Identity document: Originals seen at the branch"));
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.action == 'Approved')].details").value(org.hamcrest.Matchers.hasItem(
+                        org.hamcrest.Matchers.containsString("approved without it: Originals seen at the branch"))));
+
+        // With every mandatory document on file, approval asks for no such reason.
+        String complete = staffLodge(policy, "Onalenna Evidence");
+        for (String type : List.of("Death certificate", "Identity document")) {
+            mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                            .multipart("/portfolio/claims/" + complete + "/documents")
+                            .file(new org.springframework.mock.web.MockMultipartFile("file", "evidence.pdf",
+                                    "application/octet-stream", "%PDF-1.4\n% evidence\n%%EOF".getBytes()))
+                            .param("type", type).with(signedIn("assessor", "password")))
+                    .andExpect(status().isOk());
+        }
+        mockMvc.perform(post("/portfolio/claims/" + complete + "/assess").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims/" + complete + "/approve"), "admin",
+                        "{\"payoutAmount\":5000,\"overrideReason\":\"Second event confirmed separately\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Approved"))
+                .andExpect(jsonPath("$.evidenceOverrideReason").value(""));
+    }
+
+    /** SH05: the claim contract's events under the specification's names, beside the older names handlers use. */
+    @Test
+    void theClaimLifecyclePublishesTheSpecificationEvents() throws Exception {
+        customer("Ditiro Events", "ditiroevents");
+        String policy = activePolicy("Ditiro Events", 50000, 60);
+        beneficiary(policy, "Mpho Events");
+        String paid = staffLodge(policy, "Mpho Events");
+        assertThat(eventTypes(paid)).containsExactly("ClaimReceived", "ClaimRegistered");
+        mockMvc.perform(post("/portfolio/claims/" + paid + "/assess").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk());
+        assertThat(eventTypes(paid)).endsWith("ClaimAssessed");
+        mockMvc.perform(json(post("/portfolio/claims/" + paid + "/approve"), "admin", "{" + EVIDENCE + "}"))
+                .andExpect(status().isOk());
+        String sent = mockMvc.perform(post("/portfolio/claims/" + paid + "/pay").with(signedIn("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        assertThat(eventTypes(paid)).doesNotContain("ClaimPaymentSettled");
+        mockMvc.perform(json(post("/portfolio/claims/" + paid + "/confirm-payout"), "admin",
+                        "{\"providerReference\":\"" + JsonPath.read(sent, "$.payoutReference") + "\"}"))
+                .andExpect(status().isOk());
+        assertThat(eventTypes(paid)).containsSubsequence("ClaimApproved", "ClaimPaid", "ClaimPaymentSettled");
+
+        String declined = staffLodge(policy, "Mpho Events");
+        mockMvc.perform(json(post("/portfolio/claims/" + declined + "/reject"), "assessor",
+                        "{\"reason\":\"Same event as an earlier claim.\"}"))
+                .andExpect(status().isOk());
+        assertThat(eventTypes(declined)).endsWith("ClaimRejected", "ClaimDeclined");
+        String payload = tx.execute(s -> em.createQuery("select e.payload from OutboxEvent e where e.aggregateRef = :ref"
+                + " and e.eventType = 'ClaimDeclined'", String.class).setParameter("ref", declined).getSingleResult());
+        assertThat(payload).contains("Same event as an earlier claim.").contains(policy);
+    }
+
+    private List<String> eventTypes(String claim) {
+        return tx.execute(s -> em.createQuery("select e.eventType from OutboxEvent e where e.aggregateRef = :ref"
+                + " order by e.aggregateVersion", String.class).setParameter("ref", claim).getResultList());
+    }
+
+    /**
+     * §14 / AT-SH05-03: the bank's answer to a payout is unknown. The claim stays in flight (not paid, nothing posted,
+     * the limit still only reserved), it cannot be sent a second time, and when the confirmations arrive several at
+     * once it settles exactly once.
+     */
+    @Test
+    void anUnknownBankOutcomeLeavesThePayoutInFlightAndSettlesExactlyOnce() throws Exception {
+        customer("Kitso Unknown", "kitsounknown");
+        String policy = activePolicy("Kitso Unknown", 50000, 60);
+        beneficiary(policy, "Pono Unknown");
+        String claim = staffLodge(policy, "Pono Unknown");
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
+                        "{\"payoutAmount\":20000," + EVIDENCE + "}"))
+                .andExpect(status().isOk());
+        String sent = mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String payout = JsonPath.read(sent, "$.payoutReference");
+
+        // No answer from the bank: still in flight, and a second instruction is refused.
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("admin", "password")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.startsWith("Cannot pay a claim that is Payout Sent")));
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.reserve").value(20000.0))
+                .andExpect(jsonPath("$.lifeUsed").value(20000.0));
+        assertThat(claimPaidEvents(claim)).isZero();
+        assertThat(eventTypes(claim)).doesNotContain("ClaimPaymentSettled");
+
+        // The confirmation arrives several times at once (callback, statement, operator): one settlement.
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+        java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+        List<java.util.concurrent.Future<Integer>> results = new java.util.ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            results.add(pool.submit(() -> {
+                go.await();
+                return mockMvc.perform(json(post("/portfolio/claims/" + claim + "/confirm-payout"), "admin",
+                                "{\"providerReference\":\"" + payout + "\"}"))
+                        .andReturn().getResponse().getStatus();
+            }));
+        }
+        go.countDown();
+        pool.shutdown();
+        assertThat(pool.awaitTermination(60, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        List<Integer> statuses = new java.util.ArrayList<>();
+        for (java.util.concurrent.Future<Integer> result : results) {
+            statuses.add(result.get());
+        }
+        assertThat(statuses).containsOnlyOnce(200);
+        assertThat(statuses).allMatch(s -> s == 200 || s == 409 || s == 422);
+        assertThat(claimPaidEvents(claim)).isEqualTo(1L);
+        assertThat(eventTypes(claim).stream().filter("ClaimPaymentSettled"::equals)).hasSize(1);
+        Long consumed = tx.execute(s -> em.createQuery("select count(e) from OutboxEvent e where e.eventType ="
+                + " 'BenefitLimitConsumed' and e.payload like :claim", Long.class)
+                .setParameter("claim", "%\"claimRef\":\"" + claim + "\"%").getSingleResult());
+        assertThat(consumed).isEqualTo(1L);
+        // A late failure notice cannot undo a confirmed settlement.
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/payout-failed"), "admin", "{\"reason\":\"Late bounce\"}"))
+                .andExpect(status().isUnprocessableEntity());
+    }
+
+    /**
+     * §09: a partial payout is recorded as a partial approval; an approval not yet paid can be reopened, giving back
+     * its limit reservation and keeping the set-aside decision; a settled claim is closed only once nothing is held.
+     */
+    @Test
+    void aPartialApprovalCanBeReopenedBeforePaymentAndASettledClaimIsClosed() throws Exception {
+        customer("Lame Lifecycle", "lamelifecycle");
+        String policy = activePolicy("Lame Lifecycle", 50000, 60);
+        beneficiary(policy, "Bonolo Lifecycle");
+        String claim = staffLodge(policy, "Bonolo Lifecycle");
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":30000," + EVIDENCE + "}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.actions").value(org.hamcrest.Matchers.hasItems("pay", "reopen")));
+        String approved = tx.execute(s -> em.createQuery("select e.payload from OutboxEvent e where e.aggregateRef = :ref"
+                + " and e.eventType = 'ClaimApproved'", String.class).setParameter("ref", claim).getSingleResult());
+        assertThat(approved).contains("\"outcome\":\"PARTIALLY_APPROVED\"").contains("\"claimed\":\"50000");
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.decisions[0].decision").value("PARTIALLY_APPROVED"))
+                .andExpect(jsonPath("$.lifeUsed").value(30000.0));
+
+        // New information before payment: the approval is set aside, its reservation released.
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reopen"), "onboarding", "{\"reason\":\"Second certificate disagrees\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reopen"), "admin", "{\"reason\":\"Second certificate disagrees\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Under Review"))
+                .andExpect(jsonPath("$.payoutAmount").doesNotExist())
+                .andExpect(jsonPath("$.reserve").value(50000.0));
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.lifeUsed").value(0.0))
+                .andExpect(jsonPath("$.decisions[0].supersededBy").value(2))
+                .andExpect(jsonPath("$.decisions[1].decision").value("REOPENED"));
+
+        // Decided again in full, paid and settled; then closed once nothing is held.
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{" + EVIDENCE + "}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/close"), "admin", "{}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value("Cannot close a claim that is Approved. Allowed from here: pay, reopen"));
+        String sent = mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reopen"), "admin", "{\"reason\":\"Too late to reopen now\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/confirm-payout"), "admin",
+                        "{\"providerReference\":\"" + JsonPath.read(sent, "$.payoutReference") + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.actions[0]").value("close"));
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/close"), "assessor2", "{}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/close"), "onboarding", "{}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].status").value("Paid"))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].closedBy").value("assessor2"))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].actions[0]").doesNotExist());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/close"), "admin", "{}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.action == 'Closed')].performedBy").value("assessor2"));
     }
 
     @Test
@@ -544,7 +791,8 @@ class ClaimWorkflowApiTest {
             results.add(pool.submit(() -> {
                 go.await();
                 return mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
-                                "{\"payoutAmount\":30000,\"overrideReason\":\"Separate benefit events confirmed\"}"))
+                                "{\"payoutAmount\":30000,\"overrideReason\":\"Separate benefit events confirmed\","
+                                        + EVIDENCE + "}"))
                         .andReturn().getResponse().getStatus();
             }));
         }

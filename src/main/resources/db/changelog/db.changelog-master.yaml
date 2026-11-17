@@ -246,6 +246,21 @@ databaseChangeLog:
       file: changes/083-underwriting-decision-basis.yaml
       relativeToChangelogFile: true
   - include:
+      file: changes/085-claim-evidence-and-closure.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/086-care-cash-payment-instruction.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/087-reinsurance-recovery-receipt.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/088-idempotency-and-operations.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/089-controlled-refunds.yaml
+      relativeToChangelogFile: true
+  - include:
       file: changes/090-credit-claim-payees.yaml
       relativeToChangelogFile: true
   - include:

@@ -239,6 +239,12 @@ class DistributionApiTest {
                 .andReturn().getResponse().getContentAsString();
         String statement = JsonPath.read(body, "$.ref");
         assertAmount(JsonPath.read(body, "$.netAmount"), accrued);
+        // SH06: the accrued line is released for payment on the statement.
+        String line = JsonPath.read(body, "$.lines[0].ref");
+        List<String> released = tx.execute(s -> em.createQuery("select e.payload from OutboxEvent e where e.eventType = :type"
+                        + " and e.aggregateRef = :ref", String.class)
+                .setParameter("type", Events.COMMISSION_RELEASED).setParameter("ref", line).getResultList());
+        assertThat(released).singleElement().asString().contains("\"statementRef\":\"" + statement + "\"");
         // Nothing accrued is left for a second statement.
         mockMvc.perform(json(post("/distribution/statements"), "finance", issue))
                 .andExpect(status().isUnprocessableEntity());

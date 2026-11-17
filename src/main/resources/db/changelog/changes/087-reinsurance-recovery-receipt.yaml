@@ -1,0 +1,14 @@
+databaseChangeLog:
+  # SH07: the reinsurer's payment of a recognised recovery (RecoveryReceived).
+  - changeSet:
+      id: 087-reinsurance-recovery-receipt
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ri_recovery
+            columns:
+              - column: {name: received_amount, type: 'decimal(15,2)'}
+              - column: {name: received_reference, type: varchar(60)}
+              - column: {name: received_note, type: varchar(500)}
+              - column: {name: received_by, type: varchar(100)}
+              - column: {name: received_at, type: datetime}

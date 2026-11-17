@@ -1,0 +1,16 @@
+databaseChangeLog:
+  # NS-SH05-007 (test B-16): a Care Cash payment is an instruction to a payee that is in flight until the provider
+  # confirms it settled, or fails and is sent again with corrected details, as for claim payouts.
+  - changeSet:
+      id: 086-care-cash-payment-instruction
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: cc_event
+            columns:
+              - column: {name: payee_name, type: varchar(150)}
+              - column: {name: payout_method, type: varchar(40)}
+              - column: {name: payout_account, type: varchar(60)}
+              - column: {name: payment_sent_by, type: varchar(100)}
+              - column: {name: payment_sent_at, type: timestamp(6)}
+              - column: {name: payment_failure, type: varchar(500)}

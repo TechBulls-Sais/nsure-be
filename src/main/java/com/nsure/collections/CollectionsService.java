@@ -49,8 +49,12 @@ public class CollectionsService {
     private final ReferenceNumbers references;
     private final StaffAlertService alerts;
 
+    private final com.nsure.integration.Operations operations;
+
     public CollectionsService(EntityManager em, PlatformSecurityContext security, BillingService billing,
-            PolicyWorkflow policies, Outbox outbox, ReferenceNumbers references, StaffAlertService alerts) {
+            PolicyWorkflow policies, Outbox outbox, ReferenceNumbers references, StaffAlertService alerts,
+            com.nsure.integration.Operations operations) {
+        this.operations = operations;
         this.em = em;
         this.security = security;
         this.billing = billing;
@@ -184,6 +188,22 @@ public class CollectionsService {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("MANAGE_FINANCE");
         return billingRun(LocalDate.now(), user.getUsername());
+    }
+
+    /**
+     * The billing run in the background (spec §10): answers at once with an operation to follow at
+     * /operations/{id}. The run is one transaction, so a crash part-way issues nothing and running it again issues
+     * each instalment once.
+     */
+    public com.nsure.integration.Operations.OperationView billingRunInBackground() {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("MANAGE_FINANCE");
+        String actor = user.getUsername();
+        LocalDate asOf = LocalDate.now();
+        return operations.submit("BILLING_RUN", "MANAGE_FINANCE", user, () -> {
+            CollectionsViews.BillingRunView run = billingRun(asOf, actor);
+            return new com.nsure.integration.Operations.Outcome("BILLING-RUN-" + asOf, run);
+        });
     }
 
     private static String required(JsonNode body, String field, int min, int max) {

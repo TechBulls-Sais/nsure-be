@@ -2,7 +2,10 @@ package com.nsure.reinsurance;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.nsure.common.exception.ConflictException;
+import com.nsure.common.exception.InvalidFieldException;
 import com.nsure.common.exception.NotFoundException;
+import com.nsure.integration.Events;
+import com.nsure.integration.Outbox;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.service.PlatformSecurityContext;
@@ -32,10 +35,12 @@ public class ReinsuranceService {
 
     private final EntityManager em;
     private final PlatformSecurityContext security;
+    private final Outbox outbox;
 
-    public ReinsuranceService(EntityManager em, PlatformSecurityContext security) {
+    public ReinsuranceService(EntityManager em, PlatformSecurityContext security, Outbox outbox) {
         this.em = em;
         this.security = security;
+        this.outbox = outbox;
     }
 
     // ── treaties ──────────────────────────────────────────────────────────────────────────────────
@@ -184,7 +189,7 @@ public class ReinsuranceService {
         try {
             month = YearMonth.parse(period);
         } catch (DateTimeParseException ex) {
-            throw new IllegalArgumentException("period must be a month (yyyy-MM).");
+            throw new InvalidFieldException("period", "period must be a month (yyyy-MM).");
         }
         List<Bordereau> existing = em.createQuery("select b from Bordereau b join fetch b.treaty"
                         + " where b.treaty = :treaty and b.period = :period", Bordereau.class)
@@ -215,7 +220,60 @@ public class ReinsuranceService {
         em.flush();
         bordereau.numbered();
         cessions.forEach(c -> c.reportedOn(bordereau));
+        // SH07: producing the bordereau submits it to the reinsurer (it is created SUBMITTED).
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("bordereauRef", bordereau.getRef());
+        data.put("treatyRef", treaty.getRef());
+        data.put("reinsurer", treaty.getReinsurer());
+        data.put("period", month.toString());
+        data.put("recordCount", cessions.size());
+        data.put("totalCededPremium", premium.toPlainString());
+        data.put("totalCededSum", sum.toPlainString());
+        outbox.publish(Events.BORDEREAU_SUBMITTED, bordereau.getRef(), data, user.getUsername());
         return view(bordereau);
+    }
+
+    /**
+     * {amount, reference, note?}: the reinsurer paid a recognised recovery (SH07 RecoveryReceived). A receipt that
+     * differs from the amount expected needs a note; a recovery is received once.
+     */
+    @Transactional
+    public ReinsuranceViews.RecoveryView receiveRecovery(String ref, JsonNode body) {
+        AppUser user = user("MANAGE_REINSURANCE");
+        Recovery recovery = em.createQuery("select r from Recovery r join fetch r.treaty where r.ref = :ref",
+                        Recovery.class)
+                .setParameter("ref", ref).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Recovery " + ref + " not found"));
+        if (Recovery.RECEIVED.equals(recovery.getStatus())) {
+            throw new ConflictException("Recovery " + ref + " was already received (" + recovery.getReceivedReference()
+                    + ").");
+        }
+        BigDecimal amount = number(body, "amount").setScale(2, java.math.RoundingMode.HALF_UP);
+        if (amount.signum() <= 0) {
+            throw new IllegalArgumentException("amount must be greater than zero.");
+        }
+        String reference = required(body, "reference", 60);
+        String note = body.hasNonNull("note") && !body.get("note").asText().isBlank()
+                ? body.get("note").asText().trim() : null;
+        if (note != null && note.length() > 500) {
+            throw new IllegalArgumentException("note must be at most 500 characters.");
+        }
+        if (amount.compareTo(recovery.getRecoveryAmount()) != 0 && note == null) {
+            throw new IllegalArgumentException("The reinsurer paid " + com.nsure.common.Money.display(amount)
+                    + " but " + com.nsure.common.Money.display(recovery.getRecoveryAmount())
+                    + " was expected. Add a note explaining the difference.");
+        }
+        recovery.received(amount, reference, note, user.getUsername());
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("recoveryRef", recovery.getRef());
+        data.put("treatyRef", recovery.getTreaty().getRef());
+        data.put("claimRef", recovery.getClaimRef());
+        data.put("policyRef", recovery.getPolicyRef());
+        data.put("amount", amount.toPlainString());
+        data.put("expected", recovery.getRecoveryAmount().toPlainString());
+        data.put("reference", reference);
+        outbox.publish(Events.RECOVERY_RECEIVED, recovery.getRef(), data, user.getUsername());
+        return view(recovery);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────
@@ -280,7 +338,8 @@ public class ReinsuranceService {
     private static ReinsuranceViews.RecoveryView view(Recovery r) {
         return new ReinsuranceViews.RecoveryView(r.getRef(), r.getTreaty().getRef(), r.getTreaty().getName(),
                 r.getTreaty().getReinsurer(), r.getClaimRef(), r.getPolicyRef(), r.getClaimAmount(), r.getCededShare(),
-                r.getRecoveryAmount(), r.getStatus(), r.getCreatedAt());
+                r.getRecoveryAmount(), r.getStatus(), r.getCreatedAt(), r.getReceivedAmount(),
+                r.getReceivedReference(), r.getReceivedNote(), r.getReceivedBy(), r.getReceivedAt());
     }
 
     private static ReinsuranceViews.BordereauView view(Bordereau b) {
@@ -291,11 +350,11 @@ public class ReinsuranceService {
 
     private static String required(JsonNode body, String field, int max) {
         if (body == null || !body.hasNonNull(field) || body.get(field).asText().isBlank()) {
-            throw new IllegalArgumentException(field + " is required.");
+            throw new InvalidFieldException(field, field + " is required.");
         }
         String value = body.get(field).asText().trim();
         if (value.length() > max) {
-            throw new IllegalArgumentException(field + " must be at most " + max + " characters.");
+            throw new InvalidFieldException(field, field + " must be at most " + max + " characters.");
         }
         return value;
     }
@@ -305,7 +364,7 @@ public class ReinsuranceService {
         try {
             return new BigDecimal(value);
         } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException(field + " must be a number.");
+            throw new InvalidFieldException(field, field + " must be a number.");
         }
     }
 
@@ -313,7 +372,7 @@ public class ReinsuranceService {
         try {
             return LocalDate.parse(required(body, field, 10));
         } catch (DateTimeParseException ex) {
-            throw new IllegalArgumentException(field + " must be a date (yyyy-MM-dd).");
+            throw new InvalidFieldException(field, field + " must be a date (yyyy-MM-dd).");
         }
     }
 

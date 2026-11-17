@@ -4,6 +4,8 @@ import com.nsure.common.exception.NotFoundException;
 import com.nsure.controls.ControlKey;
 import com.nsure.controls.ControlService;
 import com.nsure.controls.StaffAlertService;
+import com.nsure.integration.Events;
+import com.nsure.integration.Outbox;
 import com.nsure.portfolio.InsurancePolicy;
 import com.nsure.portfolio.PolicyWorkflow;
 import jakarta.persistence.EntityManager;
@@ -49,10 +51,12 @@ public class PaymentSettlementService {
     private final ControlService controls;
     private final StaffAlertService alerts;
     private final EntityManager em;
+    private final Outbox outbox;
 
     public PaymentSettlementService(PaymentTransactionRepository transactions, PaymentGateways gateways,
             PolicyWorkflow policies, ControlService controls, StaffAlertService alerts,
-            EntityManager em) {
+            EntityManager em, Outbox outbox) {
+        this.outbox = outbox;
         this.transactions = transactions;
         this.gateways = gateways;
         this.policies = policies;
@@ -149,7 +153,11 @@ public class PaymentSettlementService {
             return tx;
         }
         switch (verification.outcome()) {
-            case PAID -> applySuccess(tx, via);
+            case PAID -> {
+                // SH04: the provider confirmed the money arrived; applying it to the policy is a separate step.
+                receiptConfirmed(tx, via);
+                applySuccess(tx, via);
+            }
             case DECLINED -> tx.fail(verification.resultText() == null ? "Declined" : verification.resultText());
             case NOT_FOUND -> tx.expire("The provider does not recognise this transaction");
             case PENDING -> {
@@ -173,6 +181,20 @@ public class PaymentSettlementService {
             throw new IllegalArgumentException("Policy " + policy.getRef() + " has no agreed premium to collect.");
         }
         return agreed.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private void receiptConfirmed(PaymentTransaction tx, String via) {
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("receiptRef", "PAYTX-" + tx.getId());
+        data.put("provider", tx.getProvider());
+        data.put("providerRef", tx.getProviderReference() == null ? "" : tx.getProviderReference());
+        data.put("policyRef", tx.getPolicyRef());
+        data.put("amount", tx.getAmount().toPlainString());
+        data.put("currency", tx.getCurrency());
+        data.put("method", tx.getPaymentMethod());
+        data.put("source", "CHECKOUT");
+        data.put("via", via);
+        outbox.publish(Events.RECEIPT_CONFIRMED, "PAYTX-" + tx.getId(), data, tx.getCreatedBy());
     }
 
     private void applySuccess(PaymentTransaction tx, String via) {

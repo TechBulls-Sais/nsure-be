@@ -93,15 +93,35 @@ public class ClaimFinancials {
         em.lock(policy, LockModeType.PESSIMISTIC_WRITE);
         Limits limits = limits(claim, policy);
         if (amount.compareTo(limits.lifeRemaining()) > 0) {
-            throw new IllegalArgumentException("A payout of BWP " + Money.text(amount) + " is more than the BWP "
-                    + Money.text(limits.lifeRemaining()) + " left of " + nameOf(claim) + "'s benefit limit.");
+            throw new IllegalArgumentException("A payout of " + Money.display(amount) + " is more than the "
+                    + Money.display(limits.lifeRemaining()) + " left of " + nameOf(claim) + "'s benefit limit.");
         }
         if (amount.compareTo(limits.policyRemaining()) > 0) {
-            throw new IllegalArgumentException("A payout of BWP " + Money.text(amount) + " is more than the BWP "
-                    + Money.text(limits.policyRemaining()) + " left of policy " + policy.getRef() + "'s limit.");
+            throw new IllegalArgumentException("A payout of " + Money.display(amount) + " is more than the "
+                    + Money.display(limits.policyRemaining()) + " left of policy " + policy.getRef() + "'s limit.");
         }
         em.persist(new ClaimLedgers.LimitEntry(policy.getRef(), limits.lifeKey(), claim.getRef(),
                 ClaimLedgers.LimitEntry.RESERVED, amount, actor == null ? WorkflowHistory.SYSTEM : actor));
+    }
+
+    /** What the claim still holds reserved against its limits (reserved minus released). */
+    public BigDecimal reservedLimit(String claimRef) {
+        BigDecimal reserved = BigDecimal.ZERO;
+        for (ClaimLedgers.LimitEntry e : entries(claimRef)) {
+            reserved = ClaimLedgers.LimitEntry.RESERVED.equals(e.getEntry()) ? reserved.add(e.getAmount())
+                    : ClaimLedgers.LimitEntry.RELEASED.equals(e.getEntry()) ? reserved.subtract(e.getAmount()) : reserved;
+        }
+        return reserved;
+    }
+
+    /** Gives back a reservation that will not be paid (an approval set aside on reopening, NS-SH05-005). */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void releaseLimit(InsuranceClaim claim, String actor) {
+        BigDecimal reserved = reservedLimit(claim.getRef());
+        if (reserved.signum() > 0) {
+            em.persist(new ClaimLedgers.LimitEntry(claim.getPolicyRef(), lifeKey(claim), claim.getRef(),
+                    ClaimLedgers.LimitEntry.RELEASED, reserved, actor == null ? WorkflowHistory.SYSTEM : actor));
+        }
     }
 
     /** The settled payout uses the limit for good: the reservation is released and the paid amount consumed. */

@@ -76,6 +76,16 @@ public class CessionEventHandler implements DomainEventHandler {
         em.persist(adjustment);
         em.flush();
         adjustment.numbered();
+        // The adjustment is a negative RiskCeded: the ceded premium posting reverses for the returned premium.
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("cessionRef", adjustment.getRef());
+        data.put("treatyRef", original.getTreaty().getRef());
+        data.put("policyRef", original.getPolicyRef());
+        data.put("product", original.getProduct());
+        data.put("cededPremium", adjustment.getCededPremium().toPlainString());
+        data.put("adjusts", original.getRef());
+        data.put("reason", Events.PAYMENT_RETURNED);
+        outbox.publish(Events.RISK_CEDED, adjustment.getRef(), data, ACTOR, event.correlationId());
     }
 
     private void cede(DomainEvent event) {

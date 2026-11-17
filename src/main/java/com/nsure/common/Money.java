@@ -19,6 +19,22 @@ public final class Money {
                 : cents.toPlainString();
     }
 
+    /**
+     * The amount as the workspace shows money (NS-UX-003): the currency, thousands separators, and thebe only when
+     * there are any, e.g. "BWP 350,000" or "BWP 4,500.50". Messages people read use this; {@link #text} is for
+     * identifiers and logs that predate it.
+     */
+    public static String display(BigDecimal value) {
+        if (value == null) {
+            return "BWP ?";
+        }
+        BigDecimal cents = value.setScale(2, RoundingMode.HALF_UP);
+        boolean whole = cents.remainder(BigDecimal.ONE).signum() == 0;
+        java.text.DecimalFormat format = new java.text.DecimalFormat(whole ? "#,##0" : "#,##0.00",
+                java.text.DecimalFormatSymbols.getInstance(java.util.Locale.ENGLISH));
+        return "BWP " + format.format(cents);
+    }
+
     /** The amount as stored: two decimal places. */
     public static BigDecimal of(BigDecimal value) {
         return value == null ? null : value.setScale(2, RoundingMode.HALF_UP);

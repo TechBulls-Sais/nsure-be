@@ -133,6 +133,9 @@ class PaymentSettlementTest {
                 + " from InsurancePolicy p where p.ref = '" + policy + "')")).isEqualTo(1);
         assertThat(count("select count(e) from OutboxEvent e where e.eventType = 'PolicyIssued'"
                 + " and e.aggregateRef = '" + policy + "'")).isEqualTo(1);
+        // SH04: the provider's confirmation is one ReceiptConfirmed, however many triggers settle it.
+        assertThat(count("select count(e) from OutboxEvent e where e.eventType = 'ReceiptConfirmed'"
+                + " and e.aggregateRef = 'PAYTX-" + id + "'")).isEqualTo(1);
         assertThat(policyStatus(policy)).isEqualTo("Active");
     }
 

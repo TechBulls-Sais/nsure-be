@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.nsure.audit.evidence.EvidenceChain;
 import com.nsure.common.Money;
 import com.nsure.common.exception.ConflictException;
+import com.nsure.common.exception.InvalidFieldException;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.integration.Events;
 import com.nsure.integration.Outbox;
@@ -60,8 +61,24 @@ public class CareCashService {
             String cause, LocalDate admitDate, LocalDate dischargeDate, int icuDays, boolean surgery,
             BigDecimal dailyBenefit, int stayDays, int paidDays, BigDecimal amount, int waiverMonths, List<String> trace,
             String status, String createdBy, LocalDateTime createdAt, String decidedBy, String decisionNote,
-            String paymentReference) {
+            String paymentReference, Payment payment) {
     }
+
+    /**
+     * The payment instruction (NS-SH05-007): who it pays and how, when it was sent, when the provider confirmed it
+     * settled, and why it failed. Null fields are steps not reached.
+     */
+    public record Payment(String payeeName, String payoutMethod, String accountRef, String sentBy,
+            LocalDateTime sentAt, LocalDateTime settledAt, String failureReason) {
+    }
+
+    /** The Care Cash event states. A payment is in flight between SENT and PAID; FAILED waits to be sent again. */
+    static final String ASSESSED = "ASSESSED";
+    static final String APPROVED = "APPROVED";
+    static final String DECLINED = "DECLINED";
+    static final String PAYMENT_SENT = "PAYMENT_SENT";
+    static final String PAYMENT_FAILED = "PAYMENT_FAILED";
+    static final String PAID = "PAID";
 
     public record Counters(String lifeName, int usedThisYear, int usedLifetime, int maternityClaims) {
     }
@@ -152,8 +169,6 @@ public class CareCashService {
         CareCashEvent e = calculate(p, body, user.getUsername());
         e.ref = numbers.next("CCE-", 6, () -> 0);
         em.persist(e);
-        outbox.publish(Events.BENEFIT_LIMIT_CONSUMED, e.ref, Map.of("policyRef", policyRef, "lifeName", e.lifeName,
-                "days", e.paidDays, "eventRef", e.ref), user.getUsername());
         return view(e);
     }
 
@@ -169,8 +184,8 @@ public class CareCashService {
     public EventView decide(String ref, JsonNode body) {
         AppUser user = user("APPROVE_CLAIM");
         CareCashEvent e = event(ref);
-        if (!"ASSESSED".equals(e.status)) {
-            throw new ConflictException(ref + " is already " + e.status.toLowerCase(Locale.ROOT) + ".");
+        if (!ASSESSED.equals(e.status)) {
+            throw new ConflictException(ref + " is already " + e.status.toLowerCase(Locale.ROOT).replace('_', ' ') + ".");
         }
         if (user.getUsername().equalsIgnoreCase(e.createdBy)) {
             throw new NoAuthorizationException("You recorded " + ref + ", so someone else must approve it.");
@@ -197,25 +212,91 @@ public class CareCashService {
                     p.getStatus(), e.waiverMonths + " months of premium waived after " + e.stayDays
                             + " admission days (" + ref + ")", user.getUsername());
         }
+        if (approve) {
+            // SH05: the days are consumed by the approved event, not by recording an assessment that may be declined.
+            outbox.publish(Events.BENEFIT_LIMIT_CONSUMED, e.ref, Map.of("policyRef", e.policyRef, "lifeName",
+                    e.lifeName, "days", e.paidDays, "eventRef", e.ref, "amount", e.amount.toPlainString()),
+                    user.getUsername());
+        }
         audit.record(user.getUsername(), "Care Cash event " + e.status.toLowerCase(Locale.ROOT), "Policy", e.policyRef,
-                ref + " " + Money.text(e.amount) + ": " + note);
+                ref + " " + Money.display(e.amount) + ": " + note);
         return view(e);
     }
 
-    /** {paymentReference} */
+    /**
+     * {payeeName?, payoutMethod, accountRef}: sends the payment instruction for an approved event, or sends a failed one
+     * again with corrected details. It gets a unique reference and stays in flight (PAYMENT_SENT): nothing is paid or
+     * posted until the provider confirms it settled (as for claim payouts, NS-SH05-007 and AT-SH05-03).
+     */
     @Transactional
     public EventView pay(String ref, JsonNode body) {
         AppUser user = user("SETTLE_CLAIM");
         CareCashEvent e = event(ref);
-        if (!"APPROVED".equals(e.status)) {
-            throw new ConflictException(ref + " must be approved before it is paid.");
+        if (PAID.equals(e.status)) {
+            throw new ConflictException(ref + " is already paid (" + e.paymentReference + "); it cannot be paid again.");
         }
-        String reference = text(body, "paymentReference");
-        if (reference == null) {
-            throw new IllegalArgumentException("paymentReference is required.");
+        if (PAYMENT_SENT.equals(e.status)) {
+            throw new ConflictException("A payment for " + ref + " is already in flight (" + e.paymentReference
+                    + "). Confirm its settlement or record that it failed before sending another.");
         }
-        e.status = "PAID";
-        e.paymentReference = reference;
+        if (!APPROVED.equals(e.status) && !PAYMENT_FAILED.equals(e.status)) {
+            throw new ConflictException(ref + " is " + e.status.toLowerCase(Locale.ROOT).replace('_', ' ')
+                    + "; only an approved event is paid.");
+        }
+        if (e.amount == null || e.amount.signum() <= 0) {
+            throw new IllegalArgumentException(ref + " has no benefit to pay.");
+        }
+        String payee = text(body, "payeeName") == null ? e.customerName : text(body, "payeeName");
+        String method = text(body, "payoutMethod");
+        String account = text(body, "accountRef");
+        if (payee == null || method == null || account == null) {
+            throw new InvalidFieldException(method == null ? "payoutMethod" : account == null ? "accountRef" : "payeeName",
+                    "Give the payee, the payout method and the account or wallet number.");
+        }
+        if (payee.length() > 150 || method.length() > 40 || account.length() > 60) {
+            throw new IllegalArgumentException("The payee details are too long.");
+        }
+        if (PAYMENT_FAILED.equals(e.status) && method.equals(e.payoutMethod) && account.equals(e.payoutAccount)) {
+            throw new IllegalArgumentException("The last payment to " + e.payoutMethod + " " + mask(e.payoutAccount)
+                    + " failed. Correct the payout details before sending it again.");
+        }
+        String previous = e.paymentReference;
+        e.payeeName = payee;
+        e.payoutMethod = method;
+        e.payoutAccount = account;
+        e.paymentReference = numbers.next("CCP-", 6, () -> 0);
+        e.paymentSentBy = user.getUsername();
+        e.paymentSentAt = LocalDateTime.now();
+        e.paymentFailure = null;
+        e.paidAt = null;
+        e.status = PAYMENT_SENT;
+        audit.record(user.getUsername(), "Care Cash payment sent", "Policy", e.policyRef, ref + " "
+                + Money.display(e.amount) + " to " + payee + " by " + method + " " + mask(account) + " · "
+                + e.paymentReference + (previous == null ? "" : " (replaces failed " + previous + ")")
+                + " · awaiting the provider's confirmation");
+        return view(e);
+    }
+
+    /**
+     * {providerReference?}: the provider confirms the payment settled; only now is the event PAID and the benefit
+     * posted. A confirmation naming another instruction is refused, so an old one cannot settle a resent payment.
+     */
+    @Transactional
+    public EventView confirmPayment(String ref, JsonNode body) {
+        AppUser user = user("SETTLE_CLAIM");
+        CareCashEvent e = event(ref);
+        if (PAID.equals(e.status)) {
+            throw new ConflictException(ref + " is already paid (" + e.paymentReference + ").");
+        }
+        if (!PAYMENT_SENT.equals(e.status)) {
+            throw new ConflictException(ref + " has no payment in flight to confirm.");
+        }
+        String confirmed = text(body, "providerReference");
+        if (confirmed != null && !confirmed.equals(e.paymentReference)) {
+            throw new IllegalArgumentException("This confirmation is for " + confirmed + ", but the payment in flight"
+                    + " on " + ref + " is " + e.paymentReference + ".");
+        }
+        e.status = PAID;
         e.paidAt = LocalDateTime.now();
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("policyRef", e.policyRef);
@@ -224,9 +305,38 @@ public class CareCashService {
         data.put("benefitRef", e.ref);
         data.put("benefitType", "CARE_CASH_" + e.eventType);
         data.put("amount", e.amount.toPlainString());
-        data.put("paymentReference", reference);
+        data.put("paymentReference", e.paymentReference);
         outbox.publish(Events.BENEFIT_PAID, e.ref, data, user.getUsername());
+        audit.record(user.getUsername(), "Care Cash payment settled", "Policy", e.policyRef, ref + " "
+                + Money.display(e.amount) + " · " + e.paymentReference + " · settlement confirmed");
         return view(e);
+    }
+
+    /** {reason}: the provider or bank failed or returned the payment; it is sent again with corrected details. */
+    @Transactional
+    public EventView paymentFailed(String ref, JsonNode body) {
+        AppUser user = user("SETTLE_CLAIM");
+        CareCashEvent e = event(ref);
+        if (!PAYMENT_SENT.equals(e.status)) {
+            throw new ConflictException(ref + " has no payment in flight" + (PAID.equals(e.status)
+                    ? "; it is already paid." : "."));
+        }
+        String reason = text(body, "reason");
+        if (reason == null) {
+            throw new IllegalArgumentException("Give the reason the provider gave for the failed or returned payment.");
+        }
+        if (reason.length() > 500) {
+            throw new IllegalArgumentException("The reason is too long.");
+        }
+        e.status = PAYMENT_FAILED;
+        e.paymentFailure = reason;
+        audit.record(user.getUsername(), "Care Cash payment failed", "Policy", e.policyRef, ref + " · "
+                + e.paymentReference + " · " + reason);
+        return view(e);
+    }
+
+    private static String mask(String account) {
+        return account == null || account.length() <= 4 ? account : "•••" + account.substring(account.length() - 4);
     }
 
     // ── the calculation ───────────────────────────────────────────────────────────────────────────
@@ -235,18 +345,18 @@ public class CareCashService {
         String type = upper(text(body, "eventType"));
         String cause = upper(text(body, "cause"));
         if (type == null || !TYPES.contains(type)) {
-            throw new IllegalArgumentException("eventType must be ADMISSION, DAY_CASE, MATERNITY or ACCIDENTAL_DEATH.");
+            throw new InvalidFieldException("eventType", "eventType must be ADMISSION, DAY_CASE, MATERNITY or ACCIDENTAL_DEATH.");
         }
         cause = cause == null ? "ILLNESS" : cause;
         if (!Set.of("ILLNESS", "ACCIDENT").contains(cause)) {
-            throw new IllegalArgumentException("cause must be ILLNESS or ACCIDENT.");
+            throw new InvalidFieldException("cause", "cause must be ILLNESS or ACCIDENT.");
         }
         String life = text(body, "lifeName") == null ? p.getCustomerName() : text(body, "lifeName");
         if (text(body, "admitDate") == null) {
-            throw new IllegalArgumentException("admitDate is required.");
+            throw new InvalidFieldException("admitDate", "admitDate is required.");
         }
-        LocalDate admit = LocalDate.parse(text(body, "admitDate"));
-        LocalDate discharge = text(body, "dischargeDate") == null ? admit : LocalDate.parse(text(body, "dischargeDate"));
+        LocalDate admit = date(body, "admitDate");
+        LocalDate discharge = text(body, "dischargeDate") == null ? admit : date(body, "dischargeDate");
         if (discharge.isBefore(admit) || admit.isAfter(LocalDate.now())) {
             throw new IllegalArgumentException("Check the dates: discharge cannot be before admission, and the"
                     + " admission cannot be in the future.");
@@ -268,7 +378,7 @@ public class CareCashService {
         e.status = "ASSESSED";
         e.createdBy = actor;
         e.createdAt = LocalDateTime.now();
-        trace.add("Daily benefit " + Money.text(daily) + " on " + p.getRef() + ".");
+        trace.add("Daily benefit " + Money.display(daily) + " on " + p.getRef() + ".");
 
         LocalDate start = p.getCoverStartDate();
         if (start == null || admit.isBefore(start) || !Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.CLAIMED,
@@ -292,10 +402,11 @@ public class CareCashService {
             if (!"ACCIDENT".equals(cause)) {
                 trace.add("Not payable: the accidental death benefit needs an accidental cause.");
             } else if (daily.compareTo(ACCIDENTAL_DEATH_MIN_TIER) < 0) {
-                trace.add("Not payable: accidental death applies to daily tiers of 1,000 and above.");
+                trace.add("Not payable: accidental death applies to daily tiers of "
+                        + Money.display(ACCIDENTAL_DEATH_MIN_TIER) + " and above.");
             } else {
                 e.amount = ACCIDENTAL_DEATH;
-                trace.add("Accidental death benefit " + Money.text(ACCIDENTAL_DEATH) + ".");
+                trace.add("Accidental death benefit " + Money.display(ACCIDENTAL_DEATH) + ".");
             }
             return finish(e, trace);
         }
@@ -306,7 +417,7 @@ public class CareCashService {
                 trace.add("Not payable: " + life + " has already had " + MATERNITY_MAX + " maternity claims.");
             } else {
                 e.amount = Money.of(daily.multiply(BigDecimal.valueOf(5)));
-                trace.add("Maternity: 5 × daily benefit = " + Money.text(e.amount) + " (claim " + (had + 1) + " of "
+                trace.add("Maternity: 5 × daily benefit = " + Money.display(e.amount) + " (claim " + (had + 1) + " of "
                         + MATERNITY_MAX + ").");
             }
             return finish(e, trace);
@@ -324,10 +435,10 @@ public class CareCashService {
             }
             e.paidDays = 1;
             e.amount = Money.of(daily.multiply(new BigDecimal("0.5")));
-            trace.add("Day case: 50% of the daily benefit = " + Money.text(e.amount) + "; counts 1 day against limits.");
+            trace.add("Day case: 50% of the daily benefit = " + Money.display(e.amount) + "; counts 1 day against limits.");
             if (e.surgery) {
                 e.amount = e.amount.add(daily);
-                trace.add("Surgical benefit: 100% of the daily benefit, once per event = " + Money.text(daily) + ".");
+                trace.add("Surgical benefit: 100% of the daily benefit, once per event = " + Money.display(daily) + ".");
             }
             return finish(e, trace);
         }
@@ -359,25 +470,25 @@ public class CareCashService {
         }
         int ward = payable - icu;
         BigDecimal total = daily.multiply(BigDecimal.valueOf(ward));
-        trace.add(ward + " ward day(s) × " + Money.text(daily) + " = " + Money.text(total) + ".");
+        trace.add(ward + " ward day(s) × " + Money.display(daily) + " = " + Money.display(total) + ".");
         if (icu > 0) {
             BigDecimal icuAmount = daily.multiply(new BigDecimal("1.5")).multiply(BigDecimal.valueOf(icu));
             total = total.add(icuAmount);
-            trace.add(icu + " ICU day(s) × 150% = " + Money.text(icuAmount) + " (instead of the ward rate, not on top).");
+            trace.add(icu + " ICU day(s) × 150% = " + Money.display(icuAmount) + " (instead of the ward rate, not on top).");
         }
         if (e.surgery) {
             total = total.add(daily);
-            trace.add("Surgical benefit: 100% of the daily benefit, once per event = " + Money.text(daily) + ".");
+            trace.add("Surgical benefit: 100% of the daily benefit, once per event = " + Money.display(daily) + ".");
         }
         if (nights > 7) {
             BigDecimal uplift = daily.multiply(BigDecimal.valueOf(3));
             total = total.add(uplift);
-            trace.add("Long stay beyond 7 days: 3 × daily benefit = " + Money.text(uplift) + ".");
+            trace.add("Long stay beyond 7 days: 3 × daily benefit = " + Money.display(uplift) + ".");
         }
         if (nights > 21) {
             BigDecimal uplift = daily.multiply(BigDecimal.valueOf(7));
             total = total.add(uplift);
-            trace.add("Long stay beyond 21 days: a further 7 × daily benefit = " + Money.text(uplift) + ".");
+            trace.add("Long stay beyond 21 days: a further 7 × daily benefit = " + Money.display(uplift) + ".");
         }
         if (nights >= WAIVER_AFTER_DAYS) {
             e.waiverMonths = WAIVER_MONTHS;
@@ -397,7 +508,7 @@ public class CareCashService {
     }
 
     private static CareCashEvent finish(CareCashEvent e, List<String> trace) {
-        trace.add("Payable: " + Money.text(e.amount) + ".");
+        trace.add("Payable: " + Money.display(e.amount) + ".");
         e.trace = String.join("\n", trace);
         return e;
     }
@@ -445,13 +556,24 @@ public class CareCashService {
         return new EventView(e.ref, e.policyRef, e.customerName, e.lifeName, e.eventType, e.cause, e.admitDate,
                 e.dischargeDate, e.icuDays, e.surgery, e.dailyBenefit, e.stayDays, e.paidDays, e.amount, e.waiverMonths,
                 List.of(e.trace.split("\n")), e.status, e.createdBy, e.createdAt, e.decidedBy, e.decisionNote,
-                e.paymentReference);
+                e.paymentReference, e.paymentSentAt == null && e.paidAt == null ? null
+                        : new Payment(e.payeeName, e.payoutMethod, e.payoutAccount, e.paymentSentBy, e.paymentSentAt,
+                                PAID.equals(e.status) ? e.paidAt : null, e.paymentFailure));
     }
 
     private AppUser user(String permission) {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo(permission);
         return user;
+    }
+
+    /** A date field, or a 400 naming the field (NS-API-001). */
+    private static LocalDate date(JsonNode body, String field) {
+        try {
+            return LocalDate.parse(text(body, field));
+        } catch (java.time.format.DateTimeParseException ex) {
+            throw new InvalidFieldException(field, field + " must be a date like 2026-04-12.");
+        }
     }
 
     private static String upper(String v) {

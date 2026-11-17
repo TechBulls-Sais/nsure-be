@@ -16,4 +16,22 @@ public interface DomainEventHandler {
     Set<String> eventTypes();
 
     void handle(DomainEvent event);
+
+    /**
+     * The newest event schema version this handler understands (NS-API-004 versioned contracts). A newer event is not
+     * guessed at: its delivery fails at once with the reason, for an operator to upgrade the consumer and replay it.
+     * Compatible changes (added fields) keep the version; only a breaking change raises it.
+     */
+    default int supportedSchemaVersion() {
+        return 1;
+    }
+
+    /**
+     * Why this (older) event no longer matters to the handler, or null to handle it (NS-API-004): for example a
+     * reminder for a premium already paid. The delivery is then recorded as IGNORED with the reason as evidence,
+     * instead of being handled or silently dropped.
+     */
+    default String ignoreReason(DomainEvent event) {
+        return null;
+    }
 }

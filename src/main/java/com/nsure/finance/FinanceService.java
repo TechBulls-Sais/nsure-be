@@ -33,9 +33,12 @@ public class FinanceService {
     private final Subledger subledger;
     private final IntegrationService integration;
     private final com.nsure.audit.evidence.EvidenceChain evidence;
+    private final com.nsure.integration.Outbox outbox;
 
     public FinanceService(EntityManager em, PlatformSecurityContext security, Subledger subledger,
-            IntegrationService integration, com.nsure.audit.evidence.EvidenceChain evidence) {
+            IntegrationService integration, com.nsure.audit.evidence.EvidenceChain evidence,
+            com.nsure.integration.Outbox outbox) {
+        this.outbox = outbox;
         this.em = em;
         this.security = security;
         this.subledger = subledger;
@@ -333,6 +336,12 @@ public class FinanceService {
                 }
                 period.moveTo(AccountingPeriod.CLOSED, open.isEmpty() ? note
                         : (note + " · closed with: " + String.join("; ", open)), user.getUsername());
+                Map<String, Object> closed = new java.util.LinkedHashMap<>();
+                closed.put("period", code);
+                closed.put("closedBy", user.getUsername());
+                closed.put("openItems", String.join("; ", open));
+                outbox.publish(com.nsure.integration.Events.PERIOD_CLOSED, "PERIOD-" + code, closed,
+                        user.getUsername());
             }
             case "reopen" -> {
                 if (AccountingPeriod.OPEN.equals(status)) {
@@ -487,6 +496,16 @@ public class FinanceService {
             throw new IllegalArgumentException("Record the GL's rejection reason.");
         }
         batch.acknowledge(status, text(body, "glReference", null), note, user.getUsername());
+        if (GlBatch.ACCEPTED.equals(status)) {
+            Map<String, Object> accepted = new java.util.LinkedHashMap<>();
+            accepted.put("batchRef", batch.getRef());
+            accepted.put("glReference", batch.getGlReference() == null ? "" : batch.getGlReference());
+            accepted.put("journalCount", batch.getJournalCount());
+            accepted.put("debitTotal", batch.getDebitTotal().toPlainString());
+            accepted.put("creditTotal", batch.getCreditTotal().toPlainString());
+            outbox.publish(com.nsure.integration.Events.GL_BATCH_ACCEPTED, batch.getRef(), accepted,
+                    user.getUsername());
+        }
         if (GlBatch.REJECTED.equals(status)) {
             em.createQuery("select j from Journal j where j.glBatchRef = :ref", Journal.class)
                     .setParameter("ref", ref).getResultList().forEach(j -> j.assignGlBatch(null));

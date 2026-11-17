@@ -65,4 +65,17 @@ public class CareCashEvent {
     String paymentReference;
     @Column(name = "paid_at")
     LocalDateTime paidAt;
+    // NS-SH05-007: who the payment instruction pays, when it was sent and, if it failed or came back, why.
+    @Column(name = "payee_name", length = 150)
+    String payeeName;
+    @Column(name = "payout_method", length = 40)
+    String payoutMethod;
+    @Column(name = "payout_account", length = 60)
+    String payoutAccount;
+    @Column(name = "payment_sent_by", length = 100)
+    String paymentSentBy;
+    @Column(name = "payment_sent_at")
+    LocalDateTime paymentSentAt;
+    @Column(name = "payment_failure", length = 500)
+    String paymentFailure;
 }

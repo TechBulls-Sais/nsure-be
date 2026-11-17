@@ -25,10 +25,19 @@ public final class Events {
     public static final String COMMISSION_REVERSED = "CommissionReversed";
     /** statementRef, intermediaryRef, amount. */
     public static final String COMMISSION_PAID = "CommissionPaid";
+    /**
+     * commissionRef, intermediaryRef, policyRef, product, amount, statementRef. An accrued commission line released
+     * for payment on an intermediary statement (SH06); CommissionPaid follows when the statement is paid.
+     */
+    public static final String COMMISSION_RELEASED = "CommissionReleased";
     /** cessionRef, treatyRef, policyRef, product, cededPremium. */
     public static final String RISK_CEDED = "RiskCeded";
     /** recoveryRef, treatyRef, claimRef, policyRef, amount. */
     public static final String RECOVERY_RECOGNISED = "ReinsuranceRecoveryRecognised";
+    /** bordereauRef, treatyRef, reinsurer, period, recordCount, totalCededPremium, totalCededSum (SH07). */
+    public static final String BORDEREAU_SUBMITTED = "ReinsuranceBordereauSubmitted";
+    /** recoveryRef, treatyRef, claimRef, policyRef, amount (received), expected, reference (SH07). */
+    public static final String RECOVERY_RECEIVED = "RecoveryReceived";
     /** claimRef, policyRef, customerName, product, amount, reason. Raised when a claim is lodged (spec 05 §9). */
     public static final String CLAIM_RECEIVED = "ClaimReceived";
     /** claimRef, policyRef, customerName, product, amount (the approved payout), reason. */
@@ -54,6 +63,16 @@ public final class Events {
 
     /** inboundId, providerRef, action (ALLOCATE or REFUND), policyRef, amount. Suspense cash allocated or refunded. */
     public static final String SUSPENSE_CLEARED = "SuspenseCleared";
+
+    // Finance subledger (spec SH08). Raised by the subledger itself, so no subledger handler consumes them.
+    /** journalRef, eventType, sourceRef, period, accountingDate, amount, ruleVersion, reverses (or ""). */
+    public static final String JOURNAL_POSTED = "JournalPosted";
+    /** eventKey, eventType, sourceRef, amount, reason. A monetary event could not be posted. */
+    public static final String FINANCIAL_EXCEPTION_RAISED = "FinancialExceptionRaised";
+    /** batchRef, glReference, journalCount, debitTotal, creditTotal. The general ledger accepted the batch. */
+    public static final String GL_BATCH_ACCEPTED = "GlBatchAccepted";
+    /** period, closedBy, openItems (acknowledged at close; empty when none). */
+    public static final String PERIOD_CLOSED = "PeriodClosed";
 
     /** policyRef, customerRef, customerName, product, amount, dueDate. A scheduled premium reminder (Blueprint §5). */
     public static final String PREMIUM_DUE_REMINDER = "PremiumDueReminder";
@@ -132,7 +151,24 @@ public final class Events {
     public static final String INVOICE_ISSUED = "InvoiceIssued";
     public static final String RECEIPT_ALLOCATED = "ReceiptAllocated";
     public static final String PAYMENT_RETURNED = "PaymentReturned";
+    /**
+     * receiptRef, provider, providerRef, policyRef, amount, currency, method, source (CHECKOUT or NOTIFICATION). The
+     * provider confirmed it holds the money; allocation to the policy follows as ReceiptAllocated (SH04).
+     */
+    public static final String RECEIPT_CONFIRMED = "ReceiptConfirmed";
+    /** refundRef, source (e.g. SUSPENSE), providerRef, policyRef, amount, requestedBy, approvedBy. A refund paid out. */
+    public static final String REFUND_SETTLED = "RefundSettled";
     public static final String BENEFIT_LIMIT_CONSUMED = "BenefitLimitConsumed";
+    // SH05 names for the claim contract, published alongside the older names that existing handlers consume:
+    // ClaimRegistered with ClaimReceived, ClaimDeclined with ClaimRejected, ClaimPaymentSettled with ClaimPaid.
+    /** claimRef, policyRef, customerName, product, amount, reason, claimType, eventDate. Raised when a claim is lodged. */
+    public static final String CLAIM_REGISTERED = "ClaimRegistered";
+    /** claimRef, policyRef, customerName, product, amount, reason (assessor's note), evidenceOutstanding. */
+    public static final String CLAIM_ASSESSED = "ClaimAssessed";
+    /** claimRef, policyRef, customerName, product, amount, reason (the decline reason). */
+    public static final String CLAIM_DECLINED = "ClaimDeclined";
+    /** claimRef, policyRef, customerName, product, amount, payoutRef. The payout is confirmed settled. */
+    public static final String CLAIM_PAYMENT_SETTLED = "ClaimPaymentSettled";
 
     // Communications (spec SH09B). Payloads carry references only: never the message content or the contact.
     /** messageRef, eventType, businessRef, customerRef, recipientRole, channel, purpose, templateCode, templateVersion, status, reason. */

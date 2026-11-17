@@ -146,6 +146,22 @@ with 409 (`WorkOwnershipGuard`; service desk cases check their own owner). Event
 `SlaBreached` (once per item, checked every 10 minutes, `nsure.workflow.sla-check-cron`), `CaseOpened`/`CaseClosed`
 (service desk, alongside `ServiceCaseOpened`) and `ApprovalGranted` (maker-checker approvals).
 
+### Idempotency, background operations and event consumers (spec §10)
+
+- **Idempotency-Key** (NS-API-002): on JSON commands under `nsure.idempotency.paths` (policy issue and premiums, claims,
+  Care Cash, checkout/payments, collections, finance, reinsurance, distribution, group, credit, partner) a key is scoped
+  to the caller, the method and path, and the key. The same request again returns the stored answer
+  (`Idempotency-Replayed: true`); the same key with a different request is 409 `IDEMPOTENCY_CONFLICT`. Only successful
+  answers are kept, for `nsure.idempotency.retention-hours` (72).
+- **Operations**: a long-running command can run in the background and answer 202 with `Location: /operations/{id}`
+  (accepted, processing, succeeded or failed, with the result and an actionable error), readable by the requester or a
+  holder of the operation's read permission. `POST /collections/billing-run?async=true` uses it.
+- **Consumers** (NS-API-004): a handler may declare `supportedSchemaVersion()` (a newer event fails with the reason) and
+  `ignoreReason(event)` (the delivery is kept as IGNORED with the reason). A delivery held behind a failed earlier event
+  raises an `EVENT_SEQUENCE_GAP` alert for integration staff.
+- **Errors** (NS-API-001): a missing or malformed field (`InvalidFieldException`) is 400 `INVALID_REQUEST` with
+  `fieldErrors`; a business rule refusal stays 422.
+
 ### Adding an endpoint
 
 1. Add the controller method.
@@ -241,3 +257,18 @@ agent servicing the policy and may use references only. An approved template is 
 another. A reply from an unverified sender is a verification task: it is linked to a customer only once someone records
 how the sender was verified. The bus carries `CommunicationRequested`, `MessageDelivered`, `MessageFailed` and
 `InboundMessageReceived`, with references only.
+
+## Claims, Care Cash and finance controls (SH05, SH04, SH08)
+
+- **Claims**: approving while mandatory evidence is not on file needs `evidenceOverrideReason`, kept on the claim and its
+  decision (a warning, not a block). A payout below the cover is recorded as `PARTIALLY_APPROVED`. An approval not yet
+  sent can be reopened (its limit reservation is released). A settled claim is closed (`/close`, SETTLE_CLAIM) once no
+  reserve or limit reservation is left and no reinsurance recovery is still expected (or it is retained with a note).
+  `GET /portfolio/claims/{ref}/financials` also returns the cover as at the event date and the claim's recoveries.
+- **Care Cash payments** follow the claim payout: `/payment` sends a numbered instruction (PAYMENT_SENT), `/payment/confirm`
+  settles it (PAID, ContractualBenefitPaid), `/payment/failed` records the provider's reason (PAYMENT_FAILED).
+- **Controlled refunds** (`/finance/refunds`, AT-SH10-01): raised with a reason, approved and paid by someone else — never
+  the maker, whatever roles they hold. `RefundControls.raise(...)` is the entry point for modules that owe a refund.
+- **Spec-named events** added beside the older names: ClaimRegistered, ClaimAssessed, ClaimDeclined, ClaimPaymentSettled,
+  ReceiptConfirmed, RefundSettled, CommissionReleased, ReinsuranceBordereauSubmitted, RecoveryReceived, JournalPosted,
+  FinancialExceptionRaised, GlBatchAccepted and PeriodClosed.

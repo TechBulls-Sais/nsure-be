@@ -231,7 +231,7 @@ public class PortfolioController {
     }
 
     /** assess, approve ({payoutAmount}), reject ({reason}), pay, confirm-payout ({providerReference}) or payout-failed ({reason}). */
-    @PostMapping("/claims/{ref}/{action:assess|approve|reject|pay|confirm-payout|payout-failed|reopen}")
+    @PostMapping("/claims/{ref}/{action:assess|approve|reject|pay|confirm-payout|payout-failed|reopen|close}")
     public PortfolioViews.ClaimView claimAction(
             @PathVariable String ref, @PathVariable String action, @RequestBody(required = false) JsonNode body) {
         return portfolio.claimAction(ref, action, body);

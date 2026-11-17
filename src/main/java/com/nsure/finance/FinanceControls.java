@@ -237,8 +237,20 @@ public class FinanceControls {
             data.put("amount", applied.toPlainString());
         } else {
             data.put("amount", receipt.getUnapplied().toPlainString());
+            String requestedBy = receipt.getClearanceRequestedBy();
             receipt.cleared(InboundMessage.REFUNDED, null, "Refunded from suspense: " + receipt.getClearanceReason(),
                     checker.getUsername());
+            Map<String, Object> refund = new LinkedHashMap<>();
+            refund.put("refundRef", "SUS-" + receipt.getId());
+            refund.put("source", "SUSPENSE");
+            refund.put("providerRef", receipt.getProviderRef());
+            refund.put("policyRef", receipt.getBusinessRef() == null ? "" : receipt.getBusinessRef());
+            refund.put("amount", data.get("amount"));
+            refund.put("requestedBy", requestedBy == null ? "" : requestedBy);
+            refund.put("approvedBy", checker.getUsername());
+            outbox.publish(Events.SUSPENSE_CLEARED, receipt.getProviderRef(), data, checker.getUsername());
+            outbox.publish(Events.REFUND_SETTLED, receipt.getProviderRef(), refund, checker.getUsername());
+            return suspenseView(receipt);
         }
         outbox.publish(Events.SUSPENSE_CLEARED, receipt.getProviderRef(), data, checker.getUsername());
         return suspenseView(receipt);

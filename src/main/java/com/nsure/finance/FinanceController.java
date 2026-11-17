@@ -18,12 +18,43 @@ public class FinanceController {
     private final FinanceService finance;
     private final FinanceControls controls;
     private final com.nsure.audit.evidence.EvidenceChain evidence;
+    private final RefundControls refunds;
 
     public FinanceController(FinanceService finance, FinanceControls controls,
-            com.nsure.audit.evidence.EvidenceChain evidence) {
+            com.nsure.audit.evidence.EvidenceChain evidence, RefundControls refunds) {
+        this.refunds = refunds;
         this.evidence = evidence;
         this.controls = controls;
         this.finance = finance;
+    }
+
+    // ── controlled refunds (AT-SH10-01): raised by one person, approved and paid by another ──────────
+
+    @GetMapping("/refunds")
+    public java.util.List<RefundControls.RefundView> refunds() {
+        return refunds.refunds();
+    }
+
+    /** {source, sourceRef?, policyRef?, payeeName, payoutMethod, accountRef, amount, reason} */
+    @PostMapping("/refunds")
+    public RefundControls.RefundView requestRefund(@org.springframework.web.bind.annotation.RequestBody
+            com.fasterxml.jackson.databind.JsonNode body) {
+        return refunds.request(body);
+    }
+
+    /** {note?} */
+    @PostMapping("/refunds/{ref}/approve")
+    public RefundControls.RefundView approveRefund(@org.springframework.web.bind.annotation.PathVariable String ref,
+            @org.springframework.web.bind.annotation.RequestBody(required = false)
+            com.fasterxml.jackson.databind.JsonNode body) {
+        return refunds.approve(ref, body);
+    }
+
+    /** {note} */
+    @PostMapping("/refunds/{ref}/reject")
+    public RefundControls.RefundView rejectRefund(@org.springframework.web.bind.annotation.PathVariable String ref,
+            @org.springframework.web.bind.annotation.RequestBody com.fasterxml.jackson.databind.JsonNode body) {
+        return refunds.reject(ref, body);
     }
 
     @GetMapping("/accounts")

@@ -88,6 +88,13 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(status().isConflict());
         mockMvc.perform(get("/integration/inbound").with(signedIn("ops", "password")))
                 .andExpect(jsonPath("$[?(@.providerRef == 'OM-1001')]").value(org.hamcrest.Matchers.hasSize(1)));
+        // SH04: the provider's confirmation is a ReceiptConfirmed, once; unconfirmed notifications raise none.
+        String confirmed = mockMvc.perform(get("/integration/events?eventType=ReceiptConfirmed").with(signedIn("ops", "password")))
+                .andReturn().getResponse().getContentAsString();
+        assertThat((List<String>) JsonPath.read(confirmed, "$[?(@.aggregateRef == 'OM-1001')].payload")).singleElement()
+                .asString().contains("\"policyRef\":\"" + ref + "\"").contains("\"source\":\"NOTIFICATION\"");
+        assertThat((List<Object>) JsonPath.read(confirmed, "$[?(@.aggregateRef == 'OM-0998' || @.aggregateRef == 'OM-0999')]"))
+                .isEmpty();
 
         dispatch();
         dispatch();
@@ -151,6 +158,8 @@ class SubledgerAndIntegrationApiTest {
         String exceptions = mockMvc.perform(get("/finance/exceptions").with(signedIn("finance", "password")))
                 .andReturn().getResponse().getContentAsString();
         Integer id = ((List<Integer>) JsonPath.read(exceptions, "$[?(@.sourceRef == '" + policy[0] + "')].id")).get(0);
+        // SH08: the exception is raised as an event once; a retry that still fails raises no second one.
+        assertThat(eventPayloads("FinancialExceptionRaised", policy[0])).hasSize(1);
         mockMvc.perform(json(put("/finance/posting-rules/PremiumReceived"), "finance",
                         "{\"debitAccount\":\"1000\",\"creditAccount\":\"4000\",\"domain\":\"INDIVIDUAL\","
                                 + "\"status\":\"ACTIVE\",\"description\":\"Individual premium collected\","
@@ -169,6 +178,9 @@ class SubledgerAndIntegrationApiTest {
                 .andReturn().getResponse().getContentAsString();
         mockMvc.perform(get("/finance/journals/" + JsonPath.read(resolved, "$.journalRef")).with(signedIn("finance", "password")))
                 .andExpect(jsonPath("$.ruleVersion").value(3));
+        assertThat(eventPayloads("FinancialExceptionRaised", policy[0])).hasSize(1);
+        assertThat(eventPayloads("JournalPosted", JsonPath.read(resolved, "$.journalRef"))).singleElement().asString()
+                .contains("\"sourceRef\":\"" + policy[0] + "\"").contains("\"ruleVersion\":3");
         mockMvc.perform(post("/finance/exceptions/" + id + "/retry").with(signedIn("finance", "password")))
                 .andExpect(status().isConflict());
     }
@@ -283,6 +295,9 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(jsonPath("$.lines[0].credit").value(new BigDecimal(policy[1]).doubleValue()));
         mockMvc.perform(json(post("/finance/journals/" + journal + "/reverse"), "finance", "{\"reason\":\"again\"}"))
                 .andExpect(status().isUnprocessableEntity());
+        // SH08 JournalPosted: the original posting and its reversal.
+        assertThat(eventPayloads("JournalPosted", journal)).hasSize(1);
+        assertThat(eventPayloads("JournalPosted", null)).anySatisfy(p -> assertThat(p).contains("\"reverses\":\"" + journal + "\""));
 
         String period = YearMonth.now().toString();
         mockMvc.perform(json(post("/finance/periods/" + period + "/soft-close"), "finance", "{}"))
@@ -314,6 +329,7 @@ class SubledgerAndIntegrationApiTest {
         mockMvc.perform(json(post("/finance/gl-batches/" + batchRef + "/acknowledge"), "finance",
                         "{\"status\":\"ACCEPTED\"}"))
                 .andExpect(status().isOk());
+        assertThat(eventPayloads("GlBatchAccepted", batchRef)).singleElement().asString().contains("SAP-9001");
         mockMvc.perform(json(post("/finance/gl-batches/" + batchRef + "/acknowledge"), "finance",
                         "{\"status\":\"REJECTED\",\"note\":\"late\"}"))
                 .andExpect(status().isConflict());
@@ -335,6 +351,8 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(jsonPath("$.status").value("CLOSED"))
                 .andReturn().getResponse().getContentAsString();
         assertThat((String) JsonPath.read(closed, "$.code")).isEqualTo(period);
+        assertThat(eventPayloads("PeriodClosed", "PERIOD-" + period)).singleElement().asString()
+                .contains("\"closedBy\":\"finance\"");
 
         // An event dated in the closed period posts to the next open one, keeping its event date.
         String[] later = pendingPolicy("Oratile Dube", "oratile");
@@ -404,6 +422,12 @@ class SubledgerAndIntegrationApiTest {
         mockMvc.perform(post("/finance/suspense/" + wrongAmount + "/clearance/approve").with(signedIn("secadmin", "password")))
                 .andExpect(jsonPath("$.status").value("REFUNDED"))
                 .andExpect(jsonPath("$.clearedBy").value("secadmin"));
+        // SH04: the refund paid out is a RefundSettled naming who asked and who approved.
+        String refunds = mockMvc.perform(get("/integration/events?eventType=RefundSettled").with(signedIn("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        assertThat((List<String>) JsonPath.read(refunds, "$[?(@.aggregateRef == 'BF-77')].payload")).singleElement()
+                .asString().contains("\"requestedBy\":\"admin\"").contains("\"approvedBy\":\"secadmin\"")
+                .contains("\"amount\":\"1.00\"");
 
         // A receipt quoting an unknown policy is allocated to the right one once approved; the premium is collected.
         mockMvc.perform(json(post("/integration/payment-notifications"), "admin", "{\"provider\":\"BankFeed\","
@@ -433,6 +457,47 @@ class SubledgerAndIntegrationApiTest {
         return JsonPath.<List<Integer>>read(suspense, "$[?(@.providerRef == '" + providerRef + "')].id").get(0);
     }
 
+    /**
+     * AT-SH10-01: the maker of a controlled refund cannot approve it even holding every role (admin holds every code,
+     * the checker's included); a different checker approves and the refund settles once with RefundSettled.
+     */
+    @Test
+    void theMakerCannotApproveTheirOwnControlledRefund() throws Exception {
+        String body = "{\"source\":\"CREDIT_EARLY_SETTLEMENT\",\"sourceRef\":\"LN-REFUND-1\",\"policyRef\":\"POL-X\","
+                + "\"payeeName\":\"Mpho Borrower\",\"payoutMethod\":\"Bank Account\",\"accountRef\":\"62001111\","
+                + "\"amount\":\"340.50\",\"reason\":\"Unexpired premium after early loan settlement\"}";
+        mockMvc.perform(json(post("/finance/refunds"), "ops", body)).andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/finance/refunds"), "admin", body.replace("340.50", "-1")))
+                .andExpect(status().isUnprocessableEntity());
+        String raised = mockMvc.perform(json(post("/finance/refunds"), "admin", body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING_APPROVAL"))
+                .andExpect(jsonPath("$.requestedBy").value("admin"))
+                .andReturn().getResponse().getContentAsString();
+        String ref = JsonPath.read(raised, "$.ref");
+        // One refund per source record.
+        mockMvc.perform(json(post("/finance/refunds"), "admin", body)).andExpect(status().isConflict());
+
+        mockMvc.perform(json(post("/finance/refunds/" + ref + "/approve"), "admin", "{}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("You raised refund " + ref + "; someone else must approve it."));
+        mockMvc.perform(json(post("/finance/refunds/" + ref + "/reject"), "admin", "{\"note\":\"Changed my mind\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/finance/refunds/" + ref + "/approve"), "finance", "{}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/finance/refunds/" + ref + "/approve"), "secadmin", "{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SETTLED"))
+                .andExpect(jsonPath("$.decidedBy").value("secadmin"));
+        mockMvc.perform(json(post("/finance/refunds/" + ref + "/approve"), "secadmin", "{}"))
+                .andExpect(status().isConflict());
+        assertThat(eventPayloads("RefundSettled", ref)).singleElement().asString()
+                .contains("\"requestedBy\":\"admin\"").contains("\"approvedBy\":\"secadmin\"")
+                .contains("\"amount\":\"340.50\"");
+        mockMvc.perform(get("/finance/refunds").with(signedIn("finance", "password")))
+                .andExpect(jsonPath("$[?(@.ref == '" + ref + "')].status").value(org.hamcrest.Matchers.hasItem("SETTLED")));
+    }
+
     @Test
     void meListsModulePermissionsAndTheReportHasSections() throws Exception {
         mockMvc.perform(get("/me").with(signedIn("finance", "password")))
@@ -447,6 +512,13 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(jsonPath("$.sections[?(@.error != null)]").isEmpty());
         mockMvc.perform(get("/reports/management").with(signedIn("service", "password")))
                 .andExpect(status().isForbidden());
+    }
+
+    /** Payloads of the events of a type, for one aggregate (or all of that type when {@code aggregate} is null). */
+    private List<String> eventPayloads(String type, String aggregate) {
+        return moduleJdbc.queryForList("select payload from int_outbox_event where event_type = ?"
+                + (aggregate == null ? "" : " and (aggregate_ref = ? or payload like ?)"), String.class,
+                aggregate == null ? new Object[] {type} : new Object[] {type, aggregate, "%\"sourceRef\":\"" + aggregate + "\"%"});
     }
 
     private void dispatch() throws Exception {

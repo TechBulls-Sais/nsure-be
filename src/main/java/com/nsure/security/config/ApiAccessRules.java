@@ -64,6 +64,9 @@ public final class ApiAccessRules {
             rule(GET, "/me", authenticated()),
             // Staff alerts; each user sees only alerts whose permission they hold.
             rule(GET, "/me/alerts", authenticated()),
+            // Spec §10 operation status: the requester or a holder of the operation's read permission (checked in
+            // Operations.status; anyone else gets 404).
+            rule(GET, "/operations/*", authenticated()),
 
             // ── customer portal: the service limits a customer to their own policies and claims ────────
             rule(GET, "/portfolio/shop", customer()),
@@ -152,6 +155,7 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/claims/*/confirm-payout", anyOf("SETTLE_CLAIM")),
             rule(POST, "/portfolio/claims/*/payout-failed", anyOf("SETTLE_CLAIM")),
             rule(POST, "/portfolio/claims/*/reopen", anyOf("APPROVE_CLAIM")),
+            rule(POST, "/portfolio/claims/*/close", anyOf("SETTLE_CLAIM")),
             rule(GET, "/portfolio/claims/*/financials", anyOf("READ_CLAIM")),
             rule(GET, "/portfolio/claims/*/documents", anyOf("READ_CLAIM")),
             rule(GET, "/portfolio/claims/*/documents/*", anyOf("READ_CLAIM")),
@@ -279,6 +283,11 @@ public final class ApiAccessRules {
             rule(POST, "/finance/suspense/*/clearance", anyOf("MANAGE_FINANCE")),
             rule(POST, "/finance/suspense/*/clearance/approve", anyOf("APPROVE_JOURNAL")),
             rule(POST, "/finance/suspense/*/clearance/reject", anyOf("APPROVE_JOURNAL")),
+            // AT-SH10-01 controlled refunds: raised by one person, approved by another (never the maker).
+            rule(GET, "/finance/refunds", anyOf("READ_FINANCE")),
+            rule(POST, "/finance/refunds", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/finance/refunds/*/approve", anyOf("APPROVE_JOURNAL")),
+            rule(POST, "/finance/refunds/*/reject", anyOf("APPROVE_JOURNAL")),
 
             // ── distribution and commissions SH06 (Distribution Administrator) ─────────────────────────
             rule(GET, "/distribution/**", anyOf("READ_DISTRIBUTION")),
@@ -325,6 +334,8 @@ public final class ApiAccessRules {
             rule(POST, "/care-cash/policies/*/events", anyOf("CREATE_CLAIM")),
             rule(POST, "/care-cash/events/*/decision", anyOf("APPROVE_CLAIM")),
             rule(POST, "/care-cash/events/*/payment", anyOf("SETTLE_CLAIM")),
+            rule(POST, "/care-cash/events/*/payment/confirm", anyOf("SETTLE_CLAIM")),
+            rule(POST, "/care-cash/events/*/payment/failed", anyOf("SETTLE_CLAIM")),
 
             // ── group lifecycle GL01/GL02/GL05/GL06 ────────────────────────────────────────────────────
             rule(GET, "/group-life/**", anyOf("READ_SCHEME")),
@@ -376,6 +387,7 @@ public final class ApiAccessRules {
             rule(POST, "/reinsurance/treaties", anyOf("MANAGE_REINSURANCE")),
             rule(POST, "/reinsurance/treaties/*/approve", anyOf("APPROVE_TREATY")),
             rule(POST, "/reinsurance/bordereaux", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/recoveries/*/receipt", anyOf("MANAGE_REINSURANCE")),
 
             // ── communications SH09B (Service Agent, Operations Manager) ───────────────────────────────
             rule(GET, "/communications/**", anyOf("READ_COMMUNICATION")),
