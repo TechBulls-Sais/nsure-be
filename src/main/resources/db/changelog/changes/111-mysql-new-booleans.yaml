@@ -1,0 +1,37 @@
+databaseChangeLog:
+  - changeSet:
+      id: 111-mysql-new-booleans
+      author: nsure
+      dbms: mysql
+      comment: >-
+        Liquibase creates a boolean column as tinyint(1) on MySQL, where Hibernate validates bit (as 007 and 012 fix for
+        earlier tables). The booleans added by changesets 090, 097 and 106 get the same treatment; a NOT NULL that
+        modifyDataType drops on MySQL is put back.
+      changes:
+        - modifyDataType:
+            tableName: crd_loan
+            columnName: claim_accidental
+            newDataType: bit
+        - modifyDataType:
+            tableName: grp_member
+            columnName: actively_at_work
+            newDataType: bit
+        - modifyDataType:
+            tableName: acc_review_item
+            columnName: desk_access
+            newDataType: bit
+        - addNotNullConstraint:
+            tableName: acc_review_item
+            columnName: desk_access
+            columnDataType: bit
+  # As for command_source (006) and 088: H2 maps clob to CLOB, which the LONGVARCHAR text mapping of the scheme event
+  # impact (needed so MySQL's longtext validates) does not accept.
+  - changeSet:
+      id: 111-h2-scheme-event-impact-longvarchar
+      author: nsure
+      dbms: h2
+      changes:
+        - modifyDataType:
+            tableName: grp_scheme_event
+            columnName: impact_detail
+            newDataType: longvarchar

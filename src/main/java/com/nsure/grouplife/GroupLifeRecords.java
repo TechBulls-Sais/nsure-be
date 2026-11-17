@@ -139,7 +139,8 @@ public final class GroupLifeRecords {
         String decisionNote;
         @Column(name = "target_scheme_ref", length = 20)
         String targetSchemeRef;
-        @jakarta.persistence.Lob
+        // A clob in Liquibase: longtext on MySQL, so mapped as long text rather than Hibernate's tinytext default.
+        @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.LONGVARCHAR)
         @Column(name = "impact_detail")
         String impactDetail;
     }
