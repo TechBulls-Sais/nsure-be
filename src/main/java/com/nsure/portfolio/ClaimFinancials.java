@@ -104,6 +104,26 @@ public class ClaimFinancials {
                 ClaimLedgers.LimitEntry.RESERVED, amount, actor == null ? WorkflowHistory.SYSTEM : actor));
     }
 
+    /** What the claim still holds reserved against its limits (reserved minus released). */
+    public BigDecimal reservedLimit(String claimRef) {
+        BigDecimal reserved = BigDecimal.ZERO;
+        for (ClaimLedgers.LimitEntry e : entries(claimRef)) {
+            reserved = ClaimLedgers.LimitEntry.RESERVED.equals(e.getEntry()) ? reserved.add(e.getAmount())
+                    : ClaimLedgers.LimitEntry.RELEASED.equals(e.getEntry()) ? reserved.subtract(e.getAmount()) : reserved;
+        }
+        return reserved;
+    }
+
+    /** Gives back a reservation that will not be paid (an approval set aside on reopening, NS-SH05-005). */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void releaseLimit(InsuranceClaim claim, String actor) {
+        BigDecimal reserved = reservedLimit(claim.getRef());
+        if (reserved.signum() > 0) {
+            em.persist(new ClaimLedgers.LimitEntry(claim.getPolicyRef(), lifeKey(claim), claim.getRef(),
+                    ClaimLedgers.LimitEntry.RELEASED, reserved, actor == null ? WorkflowHistory.SYSTEM : actor));
+        }
+    }
+
     /** The settled payout uses the limit for good: the reservation is released and the paid amount consumed. */
     @Transactional(propagation = Propagation.MANDATORY)
     public void consume(InsuranceClaim claim, String actor) {

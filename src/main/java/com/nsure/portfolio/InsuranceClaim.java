@@ -126,6 +126,16 @@ public class InsuranceClaim extends CoverRecord {
     @Column(name = "check_override_reason", length = 500)
     private String checkOverrideReason;
 
+    // §09 / NS-SH05-007: a settled claim is closed once its financial and recovery tasks are resolved or retained.
+    @Column(name = "closed_at")
+    private LocalDateTime closedAt;
+
+    @Column(name = "closed_by", length = 100)
+    private String closedBy;
+
+    @Column(name = "close_note", length = 500)
+    private String closeNote;
+
     // NS-SH05-003: why it was approved while mandatory evidence was not yet on file; null when none was missing.
     @Column(name = "evidence_override_reason", length = 500)
     private String evidenceOverrideReason;
@@ -498,10 +508,33 @@ public class InsuranceClaim extends CoverRecord {
         this.reserveAmount = reserveAmount;
     }
 
-    /** A rejected claim is reviewed again: the earlier decision stays in the history, not on the claim. */
+    /** A rejected or approved claim is reviewed again: the earlier decision stays in the history, not on the claim. */
     void reopen() {
         this.adjudicatedBy = null;
         this.resolvedAt = null;
         this.rejectionReason = null;
+        this.payoutAmount = null;
+        this.checkOverrideReason = null;
+        this.evidenceOverrideReason = null;
+        this.fourEyesOverrideReason = null;
+        this.fourEyesApplied = Boolean.FALSE;
+    }
+
+    void close(String by, String note) {
+        this.closedAt = LocalDateTime.now();
+        this.closedBy = by;
+        this.closeNote = note;
+    }
+
+    public LocalDateTime getClosedAt() {
+        return closedAt;
+    }
+
+    public String getClosedBy() {
+        return closedBy;
+    }
+
+    public String getCloseNote() {
+        return closeNote;
     }
 }

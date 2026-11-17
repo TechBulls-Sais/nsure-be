@@ -1152,6 +1152,8 @@ public class PortfolioService {
             case "confirm-payout" -> claimWorkflow.confirmPayout(ref, optional(input, "providerReference"), actor);
             case "payout-failed" -> claimWorkflow.payoutFailed(ref, optional(input, "reason"), actor);
             case "reopen" -> claimWorkflow.reopen(ref, optional(input, "reason"), actor);
+            case "close" -> claimWorkflow.close(ref, optional(input, "note"), input.path("retainRecovery").asBoolean(false),
+                    actor);
             default -> throw new IllegalArgumentException("Unknown claim action: " + action);
         };
         return claim(claim);
@@ -1647,7 +1649,7 @@ public class PortfolioService {
                 blank(row.getRecommendedBy()), blank(row.getAdjudicatedBy()), row.getFourEyesApplied(),
                 blank(row.getRejectionReason()), row.getPayoutAmount(), blank(row.getPayoutReference()),
                 row.getPaidAt() == null ? "" : row.getPaidAt().withNano(0).toString(),
-                ClaimWorkflow.allowedActions(row.getStatus()),
+                ClaimWorkflow.allowedActions(row),
                 ClaimDocumentService.views(em, row.getId()),
                 blank(row.getCheckOverrideReason()),
                 blank(ClaimWorkflow.auditFlag(row)),
@@ -1655,6 +1657,9 @@ public class PortfolioService {
                 blank(row.getStpIneligibleCode()),
                 blank(row.getFourEyesOverrideReason()),
                 blank(row.getEvidenceOverrideReason()),
+                row.getClosedAt() == null ? "" : row.getClosedAt().withNano(0).toString(),
+                blank(row.getClosedBy()),
+                blank(row.getCloseNote()),
                 row.getRowVersion(),
                 blank(row.getCoveredLifeName()).isEmpty() ? row.getCustomerName() : row.getCoveredLifeName(),
                 row.getReserveAmount(),

@@ -87,7 +87,9 @@ class ClaimWorkflowApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Paid"))
                 .andExpect(jsonPath("$.paidAt").isNotEmpty())
-                .andExpect(jsonPath("$.actions").isEmpty());
+                // §09: settled, it can only be closed.
+                .andExpect(jsonPath("$.actions[0]").value("close"))
+                .andExpect(jsonPath("$.actions.length()").value(1));
         assertThat(claimPaidEvents(claim)).isEqualTo(1L);
 
         mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
@@ -559,7 +561,7 @@ class ClaimWorkflowApiTest {
                 .andExpect(jsonPath("$.status").value("Approved"))
                 .andExpect(jsonPath("$.evidenceOverrideReason").value("Originals seen at the branch"));
         mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
-                .andExpect(jsonPath("$.decisions[0].decision").value("APPROVED"))
+                .andExpect(jsonPath("$.decisions[0].decision").value("PARTIALLY_APPROVED"))
                 .andExpect(jsonPath("$.decisions[0].reason").value(
                         "Approved without Death certificate, Identity document: Originals seen at the branch"));
         mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
@@ -682,6 +684,71 @@ class ClaimWorkflowApiTest {
         // A late failure notice cannot undo a confirmed settlement.
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/payout-failed"), "admin", "{\"reason\":\"Late bounce\"}"))
                 .andExpect(status().isUnprocessableEntity());
+    }
+
+    /**
+     * §09: a partial payout is recorded as a partial approval; an approval not yet paid can be reopened, giving back
+     * its limit reservation and keeping the set-aside decision; a settled claim is closed only once nothing is held.
+     */
+    @Test
+    void aPartialApprovalCanBeReopenedBeforePaymentAndASettledClaimIsClosed() throws Exception {
+        customer("Lame Lifecycle", "lamelifecycle");
+        String policy = activePolicy("Lame Lifecycle", 50000, 60);
+        beneficiary(policy, "Bonolo Lifecycle");
+        String claim = staffLodge(policy, "Bonolo Lifecycle");
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":30000," + EVIDENCE + "}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.actions").value(org.hamcrest.Matchers.hasItems("pay", "reopen")));
+        String approved = tx.execute(s -> em.createQuery("select e.payload from OutboxEvent e where e.aggregateRef = :ref"
+                + " and e.eventType = 'ClaimApproved'", String.class).setParameter("ref", claim).getSingleResult());
+        assertThat(approved).contains("\"outcome\":\"PARTIALLY_APPROVED\"").contains("\"claimed\":\"50000");
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.decisions[0].decision").value("PARTIALLY_APPROVED"))
+                .andExpect(jsonPath("$.lifeUsed").value(30000.0));
+
+        // New information before payment: the approval is set aside, its reservation released.
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reopen"), "onboarding", "{\"reason\":\"Second certificate disagrees\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reopen"), "admin", "{\"reason\":\"Second certificate disagrees\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Under Review"))
+                .andExpect(jsonPath("$.payoutAmount").doesNotExist())
+                .andExpect(jsonPath("$.reserve").value(50000.0));
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.lifeUsed").value(0.0))
+                .andExpect(jsonPath("$.decisions[0].supersededBy").value(2))
+                .andExpect(jsonPath("$.decisions[1].decision").value("REOPENED"));
+
+        // Decided again in full, paid and settled; then closed once nothing is held.
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{" + EVIDENCE + "}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/close"), "admin", "{}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value("Cannot close a claim that is Approved. Allowed from here: pay, reopen"));
+        String sent = mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reopen"), "admin", "{\"reason\":\"Too late to reopen now\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/confirm-payout"), "admin",
+                        "{\"providerReference\":\"" + JsonPath.read(sent, "$.payoutReference") + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.actions[0]").value("close"));
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/close"), "assessor2", "{}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/close"), "onboarding", "{}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].status").value("Paid"))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].closedBy").value("assessor2"))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].actions[0]").doesNotExist());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/close"), "admin", "{}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.action == 'Closed')].performedBy").value("assessor2"));
     }
 
     @Test

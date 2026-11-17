@@ -18,6 +18,8 @@ import java.time.LocalDateTime;
 public class ClaimDecision {
 
     public static final String APPROVED = "APPROVED";
+    /** Approved for less than the cover claimed (§09 PartiallyApproved); the amount is the approved payout. */
+    public static final String PARTIALLY_APPROVED = "PARTIALLY_APPROVED";
     public static final String REJECTED = "REJECTED";
     public static final String REOPENED = "REOPENED";
 

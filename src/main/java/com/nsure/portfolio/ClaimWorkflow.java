@@ -39,6 +39,8 @@ import org.springframework.transaction.annotation.Transactional;
  *   APPROVED / PAYOUT FAILED ──pay──▶ PAYOUT SENT ─┬─ confirm-payout ─▶ PAID (ClaimPaid)
  *                                                  └─ payout-failed (reason) ─▶ PAYOUT FAILED
  *   INITIATED / UNDER REVIEW / RECOMMENDED ──reject (reason required)──▶ REJECTED
+ *   REJECTED / APPROVED (not yet sent) ──reopen (reason, senior)──▶ UNDER REVIEW
+ *   PAID ──close (financial and recovery tasks resolved or retained)──▶ PAID, closed
  * </pre>
  *
  * A payout is Paid only when the provider or bank confirms it settled (NS-SH05-007, AT-SH05-03): sending the
@@ -77,7 +79,10 @@ public class ClaimWorkflow {
         TRANSITIONS.put("pay", new Transition(Set.of(APPROVED, PAYOUT_FAILED), PAYOUT_SENT, "SETTLE_CLAIM"));
         TRANSITIONS.put("confirm-payout", new Transition(Set.of(PAYOUT_SENT), PAID, "SETTLE_CLAIM"));
         TRANSITIONS.put("payout-failed", new Transition(Set.of(PAYOUT_SENT), PAYOUT_FAILED, "SETTLE_CLAIM"));
-        TRANSITIONS.put("reopen", new Transition(Set.of(REJECTED), UNDER_REVIEW, "APPROVE_CLAIM"));
+        // §09: a decision is reopened before anything is paid; a paid claim is corrected by a corrective transaction.
+        TRANSITIONS.put("reopen", new Transition(Set.of(REJECTED, APPROVED), UNDER_REVIEW, "APPROVE_CLAIM"));
+        // §09 / NS-SH05-007: a settled claim is closed once its financial and recovery tasks are done or retained.
+        TRANSITIONS.put("close", new Transition(Set.of(PAID), PAID, "SETTLE_CLAIM"));
     }
 
     private record Transition(Set<String> from, String to, String permission) {
@@ -117,6 +122,13 @@ public class ClaimWorkflow {
         return TRANSITIONS.entrySet().stream()
                 .filter(entry -> entry.getValue().from().contains(state))
                 .map(Map.Entry::getKey)
+                .toList();
+    }
+
+    /** Actions legal on this claim now: as {@link #allowedActions(String)}, without close once it is closed. */
+    public static List<String> allowedActions(InsuranceClaim claim) {
+        return allowedActions(claim.getStatus()).stream()
+                .filter(action -> !"close".equals(action) || claim.getClosedAt() == null)
                 .toList();
     }
 
@@ -464,14 +476,17 @@ public class ClaimWorkflow {
         financials.reserve(claim, payout, "Set to the approved payout", actor.getUsername());
         claim.setStatus(APPROVED);
         claim.resolve(actor.getUsername());
+        boolean partial = payout.compareTo(claim.getAmount()) < 0;
         String decisionReason = softFailed.isEmpty() ? null : reason;
         if (!missing.isEmpty()) {
             String withoutEvidence = "Approved without " + String.join(", ", missing) + ": " + evidenceReason;
             decisionReason = decisionReason == null ? withoutEvidence : decisionReason + " · " + withoutEvidence;
         }
-        recordDecision(claim, ClaimDecision.APPROVED, decisionReason, payout, actor.getUsername());
+        recordDecision(claim, partial ? ClaimDecision.PARTIALLY_APPROVED : ClaimDecision.APPROVED, decisionReason, payout,
+                actor.getUsername());
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Approved", previous, APPROVED,
-                clip("Payout: " + Money.display(payout) + (softFailed.isEmpty() ? ""
+                clip("Payout: " + Money.display(payout) + (partial ? " (partial approval of the "
+                        + Money.display(claim.getAmount()) + " claimed)" : "") + (softFailed.isEmpty() ? ""
                         : " · approved despite " + String.join(", ", softFailed) + ": " + reason) + switch (separation) {
                             case OVERRIDDEN -> " · FOUR-EYES OVERRIDDEN by the assessor: " + fourEyesReason;
                             case CONTROL_OFF -> " · four-eyes control OFF: separation not enforced";
@@ -479,7 +494,10 @@ public class ClaimWorkflow {
                         } + (missing.isEmpty() ? "" : " · evidence outstanding: " + String.join(", ", missing)
                                 + " · approved without it: " + evidenceReason)),
                 actor.getUsername());
-        publishDecision(Events.CLAIM_APPROVED, claim, null, actor);
+        Map<String, Object> approved = decisionPayload(claim, null);
+        approved.put("outcome", partial ? ClaimDecision.PARTIALLY_APPROVED : ClaimDecision.APPROVED);
+        approved.put("claimed", claim.getAmount().toPlainString());
+        outbox.publish(Events.CLAIM_APPROVED, ref, approved, actor.getUsername());
         return claim;
     }
 
@@ -534,8 +552,9 @@ public class ClaimWorkflow {
     }
 
     /**
-     * A rejected claim is reviewed again (NS-SH05-004): a senior decision with a written reason. The earlier
-     * rejection stays in the history; the case reserve is re-established and the checks run again.
+     * A rejected claim, or an approved one whose payout has not been sent, is reviewed again (NS-SH05-004, §09): a
+     * senior decision with a written reason. The earlier decision stays in the decision record and the history; an
+     * approval's limit reservation is released and the case reserve is re-established at the cover.
      */
     @Transactional
     public InsuranceClaim reopen(String ref, String reason, AppUser actor) {
@@ -556,6 +575,10 @@ public class ClaimWorkflow {
         if (setAside != null) {
             setAside.supersededBy(reopening.getSequenceNo());
         }
+        if (APPROVED.equals(previous)) {
+            // The approval is set aside before anything was sent: its limit reservation is given back.
+            financials.releaseLimit(claim, actor.getUsername());
+        }
         claim.reopen();
         claim.setStatus(UNDER_REVIEW);
         financials.reserve(claim, claim.getAmount(), "Re-established on reopening", actor.getUsername());
@@ -563,6 +586,48 @@ public class ClaimWorkflow {
                 "Reason: " + text + (setAside == null ? "" : " · setting aside the " + setAside.getDecision().toLowerCase(Locale.ROOT)
                         + " of " + setAside.getDecidedAt().toLocalDate() + " by " + setAside.getDecidedBy()
                         + (setAside.getReason() == null ? "" : ": " + setAside.getReason())), actor.getUsername());
+        return claim;
+    }
+
+    /**
+     * Closes a settled claim (§09, NS-SH05-007). It needs no case reserve or limit reservation left, and no
+     * reinsurance recovery still expected unless {@code retainRecovery} keeps it open apart from the claim, with
+     * {@code note} saying why. The claim stays Paid; it is marked closed and drops out of the open work.
+     */
+    @Transactional
+    public InsuranceClaim close(String ref, String note, boolean retainRecovery, AppUser actor) {
+        InsuranceClaim claim = claim(ref);
+        String previous = guard(claim, "close", actor);
+        if (claim.getClosedAt() != null) {
+            throw new IllegalArgumentException(ref + " is already closed.");
+        }
+        String text = trim(note);
+        if (text.length() > 500) {
+            throw new IllegalArgumentException("Keep the note to 500 characters.");
+        }
+        List<String> open = new ArrayList<>();
+        if (claim.getReserveAmount() != null && claim.getReserveAmount().signum() != 0) {
+            open.add("a case reserve of " + Money.display(claim.getReserveAmount()));
+        }
+        if (financials.reservedLimit(ref).signum() > 0) {
+            open.add("a benefit-limit reservation of " + Money.display(financials.reservedLimit(ref)));
+        }
+        if (!open.isEmpty()) {
+            throw new IllegalArgumentException("Cannot close " + ref + " while it still holds " + String.join(" and ", open)
+                    + ".");
+        }
+        List<String> recoveries = em.createQuery("select r.ref from Recovery r where r.claimRef = :ref"
+                + " and r.status = 'EXPECTED'", String.class).setParameter("ref", ref).getResultList();
+        if (!recoveries.isEmpty() && (!retainRecovery || text.isEmpty())) {
+            throw new IllegalArgumentException("Reinsurance recovery " + String.join(", ", recoveries) + " on " + ref
+                    + " is still expected. Close once it is received, or keep it open on its own (retainRecovery)"
+                    + " with a note saying why.");
+        }
+        claim.close(actor.getUsername(), text.isEmpty() ? null : text);
+        history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Closed", previous, previous,
+                "Financial tasks resolved" + (recoveries.isEmpty() ? "" : " · recovery " + String.join(", ", recoveries)
+                        + " retained apart from the claim") + (text.isEmpty() ? "" : " · " + text),
+                actor.getUsername());
         return claim;
     }
 

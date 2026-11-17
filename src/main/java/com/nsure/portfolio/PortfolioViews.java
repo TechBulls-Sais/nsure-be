@@ -200,6 +200,10 @@ public final class PortfolioViews {
             String fourEyesOverrideReason,
             // Why it was approved while mandatory evidence was not yet on file (NS-SH05-003); empty otherwise.
             String evidenceOverrideReason,
+            // §09: when a settled claim was closed, by whom and the note (empty while open).
+            String closedAt,
+            String closedBy,
+            String closeNote,
             // Send back in If-Match with a claim action (NS-TXN-001): a claim changed meanwhile is refused with 409.
             long version,
             // SH05: the covered life, the case reserve, the evidence checklist and other claims on the policy.
