@@ -621,6 +621,69 @@ class ClaimWorkflowApiTest {
                 + " order by e.aggregateVersion", String.class).setParameter("ref", claim).getResultList());
     }
 
+    /**
+     * §14 / AT-SH05-03: the bank's answer to a payout is unknown. The claim stays in flight (not paid, nothing posted,
+     * the limit still only reserved), it cannot be sent a second time, and when the confirmations arrive several at
+     * once it settles exactly once.
+     */
+    @Test
+    void anUnknownBankOutcomeLeavesThePayoutInFlightAndSettlesExactlyOnce() throws Exception {
+        customer("Kitso Unknown", "kitsounknown");
+        String policy = activePolicy("Kitso Unknown", 50000, 60);
+        beneficiary(policy, "Pono Unknown");
+        String claim = staffLodge(policy, "Pono Unknown");
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
+                        "{\"payoutAmount\":20000," + EVIDENCE + "}"))
+                .andExpect(status().isOk());
+        String sent = mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String payout = JsonPath.read(sent, "$.payoutReference");
+
+        // No answer from the bank: still in flight, and a second instruction is refused.
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("admin", "password")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.startsWith("Cannot pay a claim that is Payout Sent")));
+        mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.reserve").value(20000.0))
+                .andExpect(jsonPath("$.lifeUsed").value(20000.0));
+        assertThat(claimPaidEvents(claim)).isZero();
+        assertThat(eventTypes(claim)).doesNotContain("ClaimPaymentSettled");
+
+        // The confirmation arrives several times at once (callback, statement, operator): one settlement.
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+        java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+        List<java.util.concurrent.Future<Integer>> results = new java.util.ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            results.add(pool.submit(() -> {
+                go.await();
+                return mockMvc.perform(json(post("/portfolio/claims/" + claim + "/confirm-payout"), "admin",
+                                "{\"providerReference\":\"" + payout + "\"}"))
+                        .andReturn().getResponse().getStatus();
+            }));
+        }
+        go.countDown();
+        pool.shutdown();
+        assertThat(pool.awaitTermination(60, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        List<Integer> statuses = new java.util.ArrayList<>();
+        for (java.util.concurrent.Future<Integer> result : results) {
+            statuses.add(result.get());
+        }
+        assertThat(statuses).containsOnlyOnce(200);
+        assertThat(statuses).allMatch(s -> s == 200 || s == 409 || s == 422);
+        assertThat(claimPaidEvents(claim)).isEqualTo(1L);
+        assertThat(eventTypes(claim).stream().filter("ClaimPaymentSettled"::equals)).hasSize(1);
+        Long consumed = tx.execute(s -> em.createQuery("select count(e) from OutboxEvent e where e.eventType ="
+                + " 'BenefitLimitConsumed' and e.payload like :claim", Long.class)
+                .setParameter("claim", "%\"claimRef\":\"" + claim + "\"%").getSingleResult());
+        assertThat(consumed).isEqualTo(1L);
+        // A late failure notice cannot undo a confirmed settlement.
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/payout-failed"), "admin", "{\"reason\":\"Late bounce\"}"))
+                .andExpect(status().isUnprocessableEntity());
+    }
+
     @Test
     void concurrentApprovalsCannotTogetherExceedTheSharedLimit() throws Exception {
         customer("Lorato Limit", "loratolimit");

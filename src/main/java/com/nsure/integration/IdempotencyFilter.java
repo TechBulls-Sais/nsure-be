@@ -40,7 +40,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.util.ContentCachingResponseWrapper;
 
 /**
- * Idempotency-Key for the money-moving and batch commands (NS-API-002): claims and Care Cash, payments and checkout,
+ * Idempotency-Key for the money-moving and batch commands (NS-API-002): policy issue and premiums, claims and Care
+ * Cash, payments and checkout,
  * collections, finance and GL, reinsurance, distribution, group census and partner requests (paths in
  * {@code nsure.idempotency.paths}). The scope is the signed-in caller, the operation (method and path) and the key.
  * The first request records the hash of its method, path, query and body; repeating it with the same request returns
@@ -48,7 +49,8 @@ import org.springframework.web.util.ContentCachingResponseWrapper;
  * different request is refused with 409 IDEMPOTENCY_CONFLICT, and a repeat while the first is still running gets 409
  * IDEMPOTENCY_IN_PROGRESS. Only successful answers are kept: a refused request changed nothing and may be retried
  * with the same key. Records are kept for {@code nsure.idempotency.retention-hours} (partner retry windows), then
- * purged. Commands with their own key handling (access administration, policy issue) are not on the list.
+ * purged. Access administration keeps its own command framework. Policy issue keeps its own issue key as well;
+ * the filter in front of it adds the request-hash check (a changed request with a used key is a conflict).
  */
 @Component
 @Order(Ordered.LOWEST_PRECEDENCE - 10)
@@ -67,7 +69,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
     private final long retentionHours;
 
     public IdempotencyFilter(EntityManager em, PlatformTransactionManager transactions, ObjectMapper mapper,
-            @Value("${nsure.idempotency.paths:/portfolio/claims,/portfolio/shop/claims,/care-cash,/collections,"
+            @Value("${nsure.idempotency.paths:/portfolio/policies,/portfolio/claims,/portfolio/shop/claims,/care-cash,/collections,"
                     + "/finance,/checkout,/payments,/integration/payment-notifications,/reinsurance,/distribution,"
                     + "/group/schemes,/group/census-batches,/grouplife,/credit,/partner}") List<String> paths,
             @Value("${nsure.idempotency.retention-hours:72}") long retentionHours) {

@@ -93,6 +93,28 @@ class IdempotencyAndOperationsApiTest {
                 + " and aggregate_ref = ?", Integer.class, claim)).isEqualTo(1);
     }
 
+    /** §14: a repeated policy issue with the same key and a changed payload is a conflict, not a second policy. */
+    @Test
+    void aRepeatedIssueWithAChangedPayloadIsAConflict() throws Exception {
+        String customer = JsonPath.read(mockMvc.perform(json(post("/portfolio/customers"), "admin",
+                                "{\"name\":\"Issue Twice\",\"email\":\"twice@example.com\",\"phone\":\"+267 71 000 010\"}"))
+                        .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
+        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(signedIn("admin", "password")))
+                .andExpect(status().isOk());
+        String issue = "{\"customerRef\":\"" + customer + "\",\"product\":\"Term Life\",\"amount\":20000,\"premium\":50}";
+        String first = mockMvc.perform(json(post("/portfolio/policies"), "admin", issue).header("Idempotency-Key", "issue-twice"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        mockMvc.perform(json(post("/portfolio/policies"), "admin", issue).header("Idempotency-Key", "issue-twice"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value((String) JsonPath.read(first, "$.id")));
+        mockMvc.perform(json(post("/portfolio/policies"), "admin", issue.replace("20000", "30000"))
+                        .header("Idempotency-Key", "issue-twice"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("IDEMPOTENCY_CONFLICT"));
+        assertThat(jdbc.queryForObject("select count(*) from ins_policy where customer_ref = ?", Integer.class, customer))
+                .isEqualTo(1);
+    }
+
     @Test
     void theBillingRunRunsInTheBackgroundWithAStatusOnlyItsRequesterCanRead() throws Exception {
         String accepted = mockMvc.perform(post("/collections/billing-run").param("async", "true")
