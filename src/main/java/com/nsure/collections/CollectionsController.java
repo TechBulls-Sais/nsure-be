@@ -46,9 +46,19 @@ public class CollectionsController {
         return collections.adjust(ref, body);
     }
 
+    /**
+     * Issues upcoming instalments now. With {@code async=true} it answers 202 at once with an operation whose status
+     * is at {@code Location} (/operations/{id}, spec §10).
+     */
     @PostMapping("/billing-run")
-    public CollectionsViews.BillingRunView billingRun() {
-        return collections.billingRunNow();
+    public org.springframework.http.ResponseEntity<?> billingRun(
+            @RequestParam(name = "async", defaultValue = "false") boolean async) {
+        if (!async) {
+            return org.springframework.http.ResponseEntity.ok(collections.billingRunNow());
+        }
+        com.nsure.integration.Operations.OperationView operation = collections.billingRunInBackground();
+        return org.springframework.http.ResponseEntity.accepted()
+                .location(java.net.URI.create(operation.statusUrl())).body(operation);
     }
 
     /** Issues upcoming instalments every morning, after the lapse sweep. */

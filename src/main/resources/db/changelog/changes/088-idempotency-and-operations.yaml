@@ -1,0 +1,64 @@
+databaseChangeLog:
+  # NS-API-002: Idempotency-Key records, scoped to caller, operation and key, with the request hash and the answer.
+  - changeSet:
+      id: 088-idempotency-records
+      author: nsure
+      changes:
+        - createTable:
+            tableName: int_idempotency_record
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_int_idempotency_record}}
+              - column: {name: caller, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: operation, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: idem_key, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: request_hash, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: response_status, type: int}
+              - column: {name: response_type, type: varchar(100)}
+              - column: {name: response_body, type: clob}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: completed_at, type: datetime}
+              - column: {name: expires_at, type: datetime, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: int_idempotency_record
+            columnNames: caller, operation, idem_key
+            constraintName: uk_int_idempotency_scope
+        - createIndex:
+            tableName: int_idempotency_record
+            indexName: ix_int_idempotency_expires
+            columns:
+              - column: {name: expires_at}
+  # Spec §10: long-running commands run in the background with a status resource (GET /operations/{id}).
+  - changeSet:
+      id: 088-operations
+      author: nsure
+      changes:
+        - createTable:
+            tableName: int_operation
+            columns:
+              - column: {name: id, type: varchar(36), constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_int_operation}}
+              - column: {name: operation_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: read_permission, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: correlation_id, type: varchar(64)}
+              - column: {name: result_ref, type: varchar(100)}
+              - column: {name: result_summary, type: clob}
+              - column: {name: error_message, type: varchar(1000)}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: updated_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: finished_at, type: datetime}
+  # As for command_source (006): H2 maps clob to CLOB, which Hibernate's LONGVARCHAR text mapping does not accept.
+  - changeSet:
+      id: 088-h2-longvarchar
+      author: nsure
+      dbms: h2
+      changes:
+        - modifyDataType:
+            tableName: int_idempotency_record
+            columnName: response_body
+            newDataType: longvarchar
+        - modifyDataType:
+            tableName: int_operation
+            columnName: result_summary
+            newDataType: longvarchar

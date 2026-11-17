@@ -64,6 +64,9 @@ public final class ApiAccessRules {
             rule(GET, "/me", authenticated()),
             // Staff alerts; each user sees only alerts whose permission they hold.
             rule(GET, "/me/alerts", authenticated()),
+            // Spec §10 operation status: the requester or a holder of the operation's read permission (checked in
+            // Operations.status; anyone else gets 404).
+            rule(GET, "/operations/*", authenticated()),
 
             // ── customer portal: the service limits a customer to their own policies and claims ────────
             rule(GET, "/portfolio/shop", customer()),
