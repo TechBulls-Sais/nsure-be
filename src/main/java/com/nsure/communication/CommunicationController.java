@@ -42,12 +42,59 @@ public class CommunicationController {
         return communications.approveTemplate(id);
     }
 
+    /** {eventType, audience, subject, body}: rendered with sample values; nothing is saved. */
+    @PostMapping("/templates/preview")
+    public CommunicationViews.TemplatePreview previewTemplate(@RequestBody(required = false) JsonNode body) {
+        return communications.preview(body);
+    }
+
+    /** {reason}: asks to withdraw an approved version without a replacement; another user confirms (D-22). */
+    @PostMapping("/templates/{id}/withdraw")
+    public CommunicationViews.TemplateView requestWithdrawal(@PathVariable Long id,
+            @RequestBody(required = false) JsonNode body) {
+        return communications.requestWithdrawal(id, body);
+    }
+
+    @PostMapping("/templates/{id}/withdraw/approve")
+    public CommunicationViews.TemplateView approveWithdrawal(@PathVariable Long id) {
+        return communications.approveWithdrawal(id);
+    }
+
+    @PostMapping("/templates/{id}/withdraw/decline")
+    public CommunicationViews.TemplateView declineWithdrawal(@PathVariable Long id) {
+        return communications.declineWithdrawal(id);
+    }
+
     @GetMapping("/messages")
     public List<CommunicationViews.MessageView> messages(@RequestParam(required = false) String status) {
         return communications.messages(status);
     }
 
-    /** {customerRef, channel, subject, body}: a manual service message, subject to the customer's preferences. */
+    /** One message with its trail: states, provider reports (raw) and staff actions. */
+    @GetMapping("/messages/{id}")
+    public CommunicationViews.MessageDetailView message(@PathVariable Long id) {
+        return communications.message(id);
+    }
+
+    /** Body {@code {}} takes a failed message to work it; {@code {"release": true}} gives it back to the queue. */
+    @PostMapping("/messages/{id}/owner")
+    public CommunicationViews.MessageView own(@PathVariable Long id, @RequestBody(required = false) JsonNode body) {
+        return communications.own(id, body);
+    }
+
+    /** Messages raised per channel and per day over the last {@code days} days (default 30). */
+    @GetMapping("/metrics")
+    public CommunicationViews.MetricsView metrics(@RequestParam(required = false) Integer days) {
+        return communications.metrics(days);
+    }
+
+    /** A customer's conversation: messages sent and replies received, oldest first, with their service cases. */
+    @GetMapping("/conversations/{customerRef}")
+    public List<CommunicationViews.ConversationItem> conversation(@PathVariable String customerRef) {
+        return communications.conversation(customerRef);
+    }
+
+    /** {customerRef, channel, subject, body, caseRef?}: a manual service message, subject to the customer's preferences. */
     @PostMapping("/messages")
     public CommunicationViews.MessageView send(@RequestBody JsonNode body) {
         return communications.sendManual(body);
@@ -82,7 +129,19 @@ public class CommunicationController {
         return webhooks.list(status);
     }
 
-    /** Body: {@code {"customerRef": "CUS-1001"}}: who an unmatched message is from. */
+    /** How a sender may be verified before a triage message is linked (AT-SH09B-03). */
+    @GetMapping("/inbound/verification-methods")
+    public List<String> verificationMethods() {
+        return MessagingWebhooks.VERIFICATION_METHODS;
+    }
+
+    /** Body {@code {}} takes the verification task; {@code {"release": true}} gives it back. */
+    @PostMapping("/inbound/{id}/owner")
+    public CommunicationViews.InboundView ownInbound(@PathVariable Long id, @RequestBody(required = false) JsonNode body) {
+        return webhooks.own(id, body);
+    }
+
+    /** Body: {@code {"customerRef": "CUS-1001", "method": "...", "note": "..."}}: who sent it, and how that was verified. */
     @PostMapping("/inbound/{id}/assign")
     public CommunicationViews.InboundView assign(@PathVariable Long id, @RequestBody(required = false) JsonNode body) {
         return webhooks.assign(id, body);

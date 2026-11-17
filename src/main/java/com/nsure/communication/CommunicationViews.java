@@ -24,14 +24,31 @@ public final class CommunicationViews {
             String approvedBy,
             String approvedAt,
             List<String> placeholders,
-            List<String> knownFields) {
+            List<String> knownFields,
+            // D-22: a withdrawal asked for (pending while the status is still APPROVED) or confirmed (WITHDRAWN).
+            String withdrawalReason,
+            String withdrawalRequestedBy,
+            String withdrawalRequestedAt,
+            String withdrawnBy,
+            String withdrawnAt,
+            // Why messages from it are sent (MessagePurposes): always a service purpose, never promotional.
+            String purpose) {
 
         static TemplateView of(MessageTemplate t) {
             return new TemplateView(t.getId(), t.getCode(), t.getEventType(), t.getChannel(), t.getAudience(),
                     t.getVersion(), blank(t.getSubject()), t.getBody(), t.getStatus(), t.getCreatedBy(),
                     time(t.getCreatedAt()), blank(t.getApprovedBy()), time(t.getApprovedAt()),
-                    MergeFields.placeholders(t.getSubject(), t.getBody()), MergeFields.known(t.getEventType()));
+                    MergeFields.placeholders(t.getSubject(), t.getBody()),
+                    MergeFields.known(t.getEventType(), t.getAudience()),
+                    blank(t.getWithdrawalReason()), blank(t.getWithdrawalRequestedBy()),
+                    time(t.getWithdrawalRequestedAt()), blank(t.getWithdrawnBy()), time(t.getWithdrawnAt()),
+                    MessagePurposes.of(t.getEventType()));
         }
+    }
+
+    /** A template rendered with sample values before it is saved (template designer preview). */
+    public record TemplatePreview(String subject, String body, List<String> placeholders, List<String> knownFields,
+            List<String> unknownFields, String purpose) {
     }
 
     public record MessageView(
@@ -56,7 +73,13 @@ public final class CommunicationViews {
             String createdAt,
             String updatedAt,
             String deliveredAt,
-            String readAt) {
+            String readAt,
+            String acceptedAt,
+            String purpose,
+            String recipientRole,
+            String recipientBasis,
+            String owner,
+            String ownedAt) {
 
         static MessageView of(CommunicationMessage m) {
             return new MessageView(m.getId(), m.getRef(), blank(m.getEventId()), m.getEventType(),
@@ -64,8 +87,37 @@ public final class CommunicationViews {
                     mask(m.getContact()), blank(m.getTemplateCode()), m.getTemplateVersion(), blank(m.getSubject()),
                     m.getBody(), m.getStatus(), m.getAttempts(), blank(m.getProviderMessageId()),
                     blank(m.getLastError()), m.getCreatedBy(), time(m.getCreatedAt()), time(m.getUpdatedAt()),
-                    time(m.getDeliveredAt()), time(m.getReadAt()));
+                    time(m.getDeliveredAt()), time(m.getReadAt()), time(m.getAcceptedAt()), blank(m.getPurpose()),
+                    blank(m.getRecipientRole()), blank(m.getRecipientBasis()), blank(m.getOwner()),
+                    time(m.getOwnedAt()));
         }
+    }
+
+    /** One step of a message's trail: state, what happened, who or what did it, and the provider's raw report. */
+    public record MessageEventView(String status, String detail, String source, String rawPayload, String actor,
+            String occurredAt) {
+    }
+
+    /** A message with its full trail (NS-SH09B-007). */
+    public record MessageDetailView(MessageView message, List<MessageEventView> trail) {
+    }
+
+    /** One channel's messages raised in the period, by state, and the share delivered of those the provider took. */
+    public record ChannelMetrics(String channel, long total, long queued, long inFlight, long delivered, long read,
+            long failed, long suppressed, Double deliveryRate) {
+    }
+
+    /** One day's messages: raised, delivered and failed. */
+    public record DayMetrics(String day, long raised, long delivered, long failed) {
+    }
+
+    public record MetricsView(int days, String from, List<ChannelMetrics> channels, List<DayMetrics> byDay,
+            long failedUnowned) {
+    }
+
+    /** One entry of a customer's conversation: an outbound message or an inbound reply, oldest first. */
+    public record ConversationItem(String direction, String at, String channel, String ref, String subject,
+            String body, String status, String caseRef, String by) {
     }
 
     /**
@@ -89,12 +141,14 @@ public final class CommunicationViews {
 
     /** Inbound correspondence (Blueprint §5): matched to a customer and linked to a case, or waiting in triage. */
     public record InboundView(Long id, String channel, String sender, String body, String receivedAt, String status,
-            String customerRef, String caseRef, String note, String handledBy) {
+            String customerRef, String caseRef, String note, String handledBy, String verificationStatus,
+            String verificationMethod, String verificationNote, String taskOwner, String taskDueAt) {
 
         static InboundView of(InboundCorrespondence m) {
             return new InboundView(m.getId(), m.getChannel(), mask(m.getSender()), m.getBody(), time(m.getReceivedAt()),
                     m.getStatus(), blank(m.getCustomerRef()), blank(m.getCaseRef()), blank(m.getNote()),
-                    blank(m.getHandledBy()));
+                    blank(m.getHandledBy()), blank(m.getVerificationStatus()), blank(m.getVerificationMethod()),
+                    blank(m.getVerificationNote()), blank(m.getTaskOwner()), time(m.getTaskDueAt()));
         }
     }
 
@@ -108,7 +162,8 @@ public final class CommunicationViews {
             String decidedAt, Integer queued, Integer suppressed) {
     }
 
-    public record DispatchView(int processed, int delivered, int retrying, int failed) {
+    /** One dispatcher run: messages handed over and accepted, delivery reports applied, retries and failures. */
+    public record DispatchView(int processed, int accepted, int delivered, int retrying, int failed) {
     }
 
     static String mask(String contact) {

@@ -122,6 +122,7 @@ public final class ApiAccessRules {
             // The declaration consent log is evidence: audit.read (spec 04 §7).
             rule(GET, "/portfolio/policies/*/declarations", anyOf("READ_AUDIT")),
             rule(GET, "/portfolio/policies/*/documents", anyOf("READ_POLICY")),
+            rule(GET, "/portfolio/policies/*/documents/schedule/preview", anyOf("CREATE_POLICY", "UPDATE_POLICY")),
             rule(GET, "/portfolio/policies/*/documents/*", anyOf("READ_POLICY")),
             rule(POST, "/portfolio/policies/*/documents/schedule", anyOf("CREATE_POLICY", "UPDATE_POLICY")),
             // Blueprint §8: a controlled replacement with a reason (the old schedule is kept), and the download log.
@@ -151,6 +152,11 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/claims/*/documents", anyOf("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM")),
             rule(POST, "/portfolio/claims/*/documents/summary", anyOf("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM")),
             rule(GET, "/portfolio/claims/*/document-access", anyOf("READ_AUDIT")),
+            // The upload quarantine (AT-SH09A-02): the queue for claim staff, decisions for the document reviewer.
+            rule(GET, "/portfolio/document-quarantine", anyOf("READ_CLAIM")),
+            rule(GET, "/portfolio/document-quarantine/*/file", anyOf("RELEASE_DOCUMENT")),
+            rule(POST, "/portfolio/document-quarantine/*/release", anyOf("RELEASE_DOCUMENT")),
+            rule(POST, "/portfolio/document-quarantine/*/reject", anyOf("RELEASE_DOCUMENT")),
 
             // ── product catalogue (Product Configurator, Actuary) ──────────────────────────────────────
             // The catalogue is already public on the landing page; staff forms need it to pick a product.
@@ -354,7 +360,7 @@ public final class ApiAccessRules {
             rule(DELETE, "/ops/queue/claim", staff()),
             rule(POST, "/ops/queue/assign", anyOf("ASSIGN_WORK")),
             rule(GET, "/ops/queue/assignees", anyOf("ASSIGN_WORK")),
-            rule(GET, "/ops/documents", anyOf("READ_POLICY")),
+            rule(GET, "/ops/documents", anyOf("READ_POLICY", "READ_CLAIM")),
             rule(PUT, "/ops/documents/hold", anyOf("UPDATE_POLICY")),
             rule(PUT, "/ops/documents/retention", anyOf("MANAGE_CONFIG")),
             rule(GET, "/ops/payouts", anyOf("READ_CLAIM")),
@@ -369,11 +375,17 @@ public final class ApiAccessRules {
             rule(GET, "/communications/**", anyOf("READ_COMMUNICATION")),
             rule(POST, "/communications/templates", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/templates/*/approve", anyOf("APPROVE_TEMPLATE")),
+            rule(POST, "/communications/templates/*/withdraw", anyOf("MANAGE_COMMUNICATION", "APPROVE_TEMPLATE")),
+            rule(POST, "/communications/templates/*/withdraw/approve", anyOf("APPROVE_TEMPLATE")),
+            rule(POST, "/communications/templates/*/withdraw/decline", anyOf("APPROVE_TEMPLATE")),
             rule(POST, "/communications/messages", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/messages/*/retry", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/messages/*/owner", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/templates/preview", anyOf("MANAGE_COMMUNICATION", "APPROVE_TEMPLATE")),
             rule(POST, "/communications/dispatch", anyOf("MANAGE_COMMUNICATION")),
             rule(PUT, "/communications/preferences/*", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/inbound/*/assign", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/inbound/*/owner", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/bulk-notices", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/bulk-notices/*/approve", anyOf("APPROVE_TEMPLATE")),
             rule(POST, "/communications/bulk-notices/*/reject", anyOf("APPROVE_TEMPLATE")),

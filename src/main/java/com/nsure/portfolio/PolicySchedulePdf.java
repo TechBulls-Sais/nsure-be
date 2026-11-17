@@ -19,8 +19,15 @@ import java.util.Locale;
  */
 final class PolicySchedulePdf {
 
-    /** Stored with each schedule; bump it when the layout changes so older schedules are replaced on start-up. */
-    static final int LAYOUT_VERSION = 2;
+    /**
+     * Stored with each schedule; bump it when the layout changes (older schedules are replaced only on an operator's
+     * deliberate layout-upgrade run). 3 adds the policy wording clauses bound at issue.
+     */
+    static final int LAYOUT_VERSION = 3;
+
+    /** One approved wording clause bound to the schedule at issue (NS-SH09A-001/003). */
+    record Clause(String ref, int version, String clauseType, String title, String body) {
+    }
 
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.ENGLISH);
 
@@ -29,7 +36,7 @@ final class PolicySchedulePdf {
 
     /** {@code premiumMonths}: months one premium pays for; 0 means yearly (as {@link PolicyWorkflow} treats it). */
     static byte[] render(PortfolioViews.CoverView p, CustomerAccount customer, InsuranceProduct product,
-            ProductVersion terms, int premiumMonths, String issuedBy) {
+            ProductVersion terms, int premiumMonths, String issuedBy, List<Clause> wording) {
         int months = premiumMonths <= 0 ? 12 : premiumMonths;
         String per = months == 1 ? "a month" : months == 12 ? "a year" : "every " + months + " months";
         LocalDate coverStart = parse(p.coverStartDate());
@@ -153,6 +160,17 @@ final class PolicySchedulePdf {
                 + p.id() + ".");
         pdf.bullet("This schedule is issued once for this policy. Keep it with the policy wording; the policy wording "
                 + "and the product terms apply in full.");
+
+        // The wording clauses in force when this schedule was issued. A later revision of a clause does not change this
+        // schedule; it applies only to schedules issued after it is approved.
+        if (wording != null && !wording.isEmpty()) {
+            boolean covered = product != null && (!blank(product.getSummary()) || !blank(product.getBenefits()));
+            pdf.section((covered ? "8" : "7") + ". Policy wording");
+            for (Clause clause : wording) {
+                pdf.bullet(clause.title() + ": " + clause.body() + " (" + clause.ref() + " version " + clause.version()
+                        + ")");
+            }
+        }
         return pdf.bytes();
     }
 

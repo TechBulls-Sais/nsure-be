@@ -10,7 +10,9 @@ import java.time.LocalDateTime;
 
 /**
  * A reply or message received from a customer by Email or WhatsApp (Solution Blueprint §5). A sender matched to
- * exactly one customer is LINKED to a service case; an ambiguous or unknown sender waits in TRIAGE for a person.
+ * exactly one customer by a verified contact is LINKED to a service case; an ambiguous or unknown sender waits in
+ * TRIAGE as an identity-verification task (AT-SH09B-03): someone takes it, verifies who sent it by a recorded method,
+ * and only then links it to a customer. Nothing about a policy is disclosed to an unverified sender.
  */
 @Entity
 @Table(name = "com_inbound")
@@ -18,6 +20,11 @@ public class InboundCorrespondence {
 
     public static final String LINKED = "LINKED";
     public static final String TRIAGE = "TRIAGE";
+
+    /** Verification states: REQUIRED (a task), VERIFIED (by a person, with the method), MATCHED (verified contact). */
+    public static final String REQUIRED = "REQUIRED";
+    public static final String VERIFIED = "VERIFIED";
+    public static final String MATCHED = "MATCHED";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -56,6 +63,22 @@ public class InboundCorrespondence {
     @Column(name = "handled_at")
     private LocalDateTime handledAt;
 
+    @Column(name = "verification_status", length = 20)
+    private String verificationStatus;
+
+    @Column(name = "verification_method", length = 100)
+    private String verificationMethod;
+
+    @Column(name = "verification_note", length = 500)
+    private String verificationNote;
+
+    // The person working the verification task, and when it is due.
+    @Column(name = "task_owner", length = 100)
+    private String taskOwner;
+
+    @Column(name = "task_due_at")
+    private LocalDateTime taskDueAt;
+
     protected InboundCorrespondence() {
     }
 
@@ -69,7 +92,25 @@ public class InboundCorrespondence {
         this.status = TRIAGE;
     }
 
-    void linked(String customerRef, String caseRef, String note, String actor) {
+    /** Linked because the sender is a verified contact of exactly one customer. */
+    void matched(String customerRef, String caseRef, String actor) {
+        linked(customerRef, caseRef, "Matched by a verified contact", actor);
+        this.verificationStatus = MATCHED;
+    }
+
+    /** Linked by a person who verified the sender by {@code method}. */
+    void verified(String customerRef, String caseRef, String method, String note, String actor) {
+        linked(customerRef, caseRef, "Sender verified: " + method, actor);
+        this.verificationStatus = VERIFIED;
+        this.verificationMethod = method;
+        this.verificationNote = note;
+    }
+
+    void own(String owner) {
+        this.taskOwner = owner;
+    }
+
+    private void linked(String customerRef, String caseRef, String note, String actor) {
         this.status = LINKED;
         this.customerRef = customerRef;
         this.caseRef = caseRef;
@@ -78,9 +119,12 @@ public class InboundCorrespondence {
         this.handledAt = LocalDateTime.now();
     }
 
+    /** Waits as an identity-verification task, due a day after it arrived. */
     void triage(String note) {
         this.status = TRIAGE;
         this.note = note;
+        this.verificationStatus = REQUIRED;
+        this.taskDueAt = receivedAt.plusHours(24);
     }
 
     public Long getId() {
@@ -125,5 +169,25 @@ public class InboundCorrespondence {
 
     public String getHandledBy() {
         return handledBy;
+    }
+
+    public String getVerificationStatus() {
+        return verificationStatus;
+    }
+
+    public String getVerificationMethod() {
+        return verificationMethod;
+    }
+
+    public String getVerificationNote() {
+        return verificationNote;
+    }
+
+    public String getTaskOwner() {
+        return taskOwner;
+    }
+
+    public LocalDateTime getTaskDueAt() {
+        return taskDueAt;
     }
 }

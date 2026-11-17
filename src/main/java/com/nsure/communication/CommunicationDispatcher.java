@@ -6,6 +6,7 @@ import java.util.Locale;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -13,9 +14,12 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Sends queued messages through the (simulated) Email / WhatsApp provider, each message in its own transaction.
- * A provider error keeps the message queued for the next run; after {@link #MAX_ATTEMPTS} it moves to the failed
- * queue, where staff retry it (NS-SH09B-005). Messaging never touches the business transaction that caused it.
+ * Sends queued messages through the (simulated) Email / WhatsApp provider (NS-SH09B-004/005). Each message is marked
+ * SUBMITTED in its own transaction before the provider is called, and ACCEPTED with the provider's id after; that is
+ * not delivery. A provider error keeps the message queued for the next run; after {@link #MAX_ATTEMPTS} it moves to the
+ * failed queue, where staff retry it. Delivery is only ever set by the provider's delivery report: the simulated
+ * provider sends its report on the next run, through the same path as a real status callback. Messaging never touches
+ * the business transaction that caused it.
  */
 @Service
 public class CommunicationDispatcher {
@@ -26,9 +30,14 @@ public class CommunicationDispatcher {
 
     private final EntityManager em;
     private final TransactionTemplate tx;
+    private final MessageTrail trail;
+    private final boolean simulatedReports;
 
-    public CommunicationDispatcher(EntityManager em, PlatformTransactionManager transactions) {
+    public CommunicationDispatcher(EntityManager em, PlatformTransactionManager transactions, MessageTrail trail,
+            @Value("${nsure.communications.simulated-delivery-reports:true}") boolean simulatedReports) {
         this.em = em;
+        this.trail = trail;
+        this.simulatedReports = simulatedReports;
         this.tx = new TransactionTemplate(transactions);
         this.tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -43,47 +52,104 @@ public class CommunicationDispatcher {
         }
     }
 
-    /** One send attempt for every queued message. Synchronized so a message is never sent twice at once. */
+    /**
+     * One run: first the simulated provider's delivery reports for messages it accepted earlier, then one send attempt
+     * for every queued message. Synchronized so a message is never sent twice at once.
+     */
     public synchronized CommunicationViews.DispatchView dispatch() {
+        int delivered = simulatedReports ? deliveryReports() : 0;
         List<Long> queued = tx.execute(status -> em.createQuery(
                         "select m.id from CommunicationMessage m where m.status = :queued order by m.id asc", Long.class)
                 .setParameter("queued", CommunicationMessage.QUEUED)
                 .setMaxResults(BATCH)
                 .getResultList());
-        int delivered = 0;
+        int accepted = 0;
         int retrying = 0;
         int failed = 0;
         int processed = 0;
         for (Long id : queued == null ? List.<Long>of() : queued) {
-            String outcome = tx.execute(status -> send(id));
-            if (outcome == null) {
+            Handover handover = tx.execute(status -> submit(id));
+            if (handover == null) {
                 continue;
             }
+            String providerId = null;
+            String error = null;
+            try {
+                providerId = SimulatedProvider.send(handover.channel(), handover.contact());
+            } catch (SimulatedProvider.ProviderException ex) {
+                error = ex.getMessage();
+            }
+            String reportedId = providerId;
+            String reportedError = error;
+            String outcome = tx.execute(status -> answer(id, reportedId, reportedError));
             processed++;
-            switch (outcome) {
-                case CommunicationMessage.DELIVERED -> delivered++;
+            switch (outcome == null ? "" : outcome) {
+                case CommunicationMessage.ACCEPTED -> accepted++;
                 case CommunicationMessage.FAILED -> failed++;
                 default -> retrying++;
             }
         }
-        return new CommunicationViews.DispatchView(processed, delivered, retrying, failed);
+        return new CommunicationViews.DispatchView(processed, accepted, delivered, retrying, failed);
     }
 
-    private String send(Long id) {
+    private record Handover(String channel, String contact) {
+    }
+
+    /** QUEUED → SUBMITTED, committed before the provider is called. */
+    private Handover submit(Long id) {
         CommunicationMessage message = em.find(CommunicationMessage.class, id);
         if (message == null || !CommunicationMessage.QUEUED.equals(message.getStatus())) {
             return null;
         }
-        try {
-            message.submitted(SimulatedProvider.send(message.getChannel(), message.getContact()));
-            // The simulated provider reports delivery at once through the same path a real status callback uses.
-            message.providerStatus(CommunicationMessage.DELIVERED, null);
-        } catch (SimulatedProvider.ProviderException ex) {
-            message.failedAttempt(ex.getMessage() + " (attempt " + (message.getAttempts() + 1) + " of "
-                    + MAX_ATTEMPTS + ")", MAX_ATTEMPTS);
+        message.submitted();
+        trail.changed(message, "Handed to the " + message.getChannel().toLowerCase(Locale.ROOT) + " provider (attempt "
+                + message.getAttempts() + " of " + MAX_ATTEMPTS + ")", MessageEvent.SYSTEM, null, "system");
+        return new Handover(message.getChannel(), message.getContact());
+    }
+
+    /** The provider's answer: accepted with its id, or an error that is retried until the failed queue. */
+    private String answer(Long id, String providerId, String error) {
+        CommunicationMessage message = em.find(CommunicationMessage.class, id);
+        if (message == null || !CommunicationMessage.SUBMITTED.equals(message.getStatus())) {
+            return null;
+        }
+        if (providerId != null) {
+            message.accepted(providerId);
+            trail.changed(message, "Accepted by the provider as " + providerId + "; not yet delivered",
+                    MessageEvent.PROVIDER, null, "provider");
+        } else {
+            message.failedAttempt(error + " (attempt " + message.getAttempts() + " of " + MAX_ATTEMPTS + ")",
+                    MAX_ATTEMPTS);
+            trail.changed(message, message.getLastError(), MessageEvent.PROVIDER, null, "provider");
             log.warn("Message {} not sent: {}", message.getRef(), message.getLastError());
         }
         return message.getStatus();
+    }
+
+    /** The simulated provider reports delivery of what it accepted on an earlier run. */
+    private int deliveryReports() {
+        List<Long> accepted = tx.execute(status -> em.createQuery(
+                        "select m.id from CommunicationMessage m where m.status = :accepted order by m.id asc", Long.class)
+                .setParameter("accepted", CommunicationMessage.ACCEPTED)
+                .setMaxResults(BATCH)
+                .getResultList());
+        int delivered = 0;
+        for (Long id : accepted == null ? List.<Long>of() : accepted) {
+            Boolean done = tx.execute(status -> {
+                CommunicationMessage message = em.find(CommunicationMessage.class, id);
+                if (message == null || !message.providerStatus(CommunicationMessage.DELIVERED, null)) {
+                    return false;
+                }
+                trail.changed(message, "Delivery reported by the simulated provider", MessageEvent.PROVIDER,
+                        "{\"providerMessageId\":\"" + message.getProviderMessageId() + "\",\"status\":\"DELIVERED\","
+                                + "\"simulated\":true}", "provider");
+                return true;
+            });
+            if (Boolean.TRUE.equals(done)) {
+                delivered++;
+            }
+        }
+        return delivered;
     }
 
     /** Stands in for the Email and WhatsApp provider adapters until a real connector is configured. */

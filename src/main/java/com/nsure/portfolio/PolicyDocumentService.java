@@ -39,11 +39,13 @@ public class PolicyDocumentService {
     private final PortfolioService portfolio;
     private final DocumentFiles files;
     private final DocumentCustody custody;
+    private final com.fasterxml.jackson.databind.ObjectMapper mapper;
 
     public PolicyDocumentService(EntityManager em, PolicyWorkflow policies, WorkflowHistory history,
             PlatformSecurityContext security, PortfolioService portfolio, DocumentFiles files,
-            DocumentCustody custody) {
+            DocumentCustody custody, com.fasterxml.jackson.databind.ObjectMapper mapper) {
         this.custody = custody;
+        this.mapper = mapper;
         this.em = em;
         this.policies = policies;
         this.history = history;
@@ -106,6 +108,25 @@ public class PolicyDocumentService {
         return views(em, policy.getId());
     }
 
+    /**
+     * SH09A template preview: the schedule as it would be issued now, from the current policy data and wording, marked
+     * as a preview. Nothing is filed, hashed or sent; it is not a document of record.
+     */
+    @Transactional(readOnly = true)
+    public ClaimDocumentService.StoredFile previewSchedule(String ref) {
+        AppUser staff = security.authenticatedUser();
+        if (STAFF_GENERATE.stream().noneMatch(staff::hasPermissionTo)) {
+            throw new NoAuthorizationException("User has no authority to preview policy documents");
+        }
+        InsurancePolicy policy = policies.policy(ref);
+        CustomerAccount customer = customerOf(policy);
+        byte[] pdf = PolicySchedulePdf.render(portfolio.policyView(policy), customer, productOf(policy),
+                policies.terms(policy), policies.months(policy),
+                staff.getUsername() + " · PREVIEW, NOT ISSUED", wording(policy.getProduct()));
+        return new ClaimDocumentService.StoredFile(policy.getRef() + "-schedule-PREVIEW.pdf", "application/pdf",
+                pdf.length, new org.springframework.core.io.ByteArrayResource(pdf));
+    }
+
     /** Who downloaded this policy's documents, and when (READ_AUDIT). */
     @Transactional(readOnly = true)
     public List<DocumentCustody.AccessView> accessLog(String ref) {
@@ -141,8 +162,21 @@ public class PolicyDocumentService {
                         new PortfolioViews.DocumentView(d.getId(), d.getDocumentType(), d.getFileName(),
                                 d.getContentType(), d.getSizeBytes(), d.getUploadedBy(),
                                 d.getUploadedAt().withNano(0).toString(), d.getStatus(), d.getSha256(),
-                                d.getSupersededBy(), d.getSupersededReason())));
+                                d.getSupersededBy(), d.getSupersededReason(), DocumentIntake.GENERATED,
+                                DocumentIntake.sourceLabel(DocumentIntake.SYSTEM),
+                                DocumentIntake.classification(d.getDocumentType()), generatedFrom(d), null)));
         return byPolicy;
+    }
+
+    /** "Layout v3 · wording WRD-0001 v1, WRD-0002 v1 · policy data version 4": what the schedule was made from. */
+    private static String generatedFrom(PolicyDocument d) {
+        if (d.getSnapshotSha256() == null) {
+            return "Layout v" + d.getLayoutVersion() + "; issued before wording and data versions were recorded.";
+        }
+        return "Layout v" + d.getLayoutVersion() + " · wording "
+                + (d.getWordingVersions() == null || d.getWordingVersions().isBlank() ? "none on file" : d.getWordingVersions())
+                + " · policy data version " + d.getDataVersion() + " · data snapshot SHA-256 "
+                + d.getSnapshotSha256().substring(0, 12) + "…";
     }
 
     private static List<PortfolioViews.DocumentView> views(EntityManager em, Long policyId) {
@@ -237,41 +271,112 @@ public class PolicyDocumentService {
         return schedules.size();
     }
 
-    /** Renders the schedule from the policy as it stands now, files it, and records it in the policy history. */
+    /**
+     * Freezes the policy as it stands now (under the caller's row lock) into a data snapshot with the approved wording
+     * clauses for its product, renders the schedule from that, and files the PDF and the snapshot together with their
+     * hashes, the wording versions and the policy's data version (NS-SH09A-003). Records it in the policy history.
+     */
     private PolicyDocument issue(InsurancePolicy policy, String generatedBy, String note) {
-        CustomerAccount customer = policy.getCustomerRef() == null ? null : em.createQuery(
+        CustomerAccount customer = customerOf(policy);
+        InsuranceProduct product = productOf(policy);
+        PortfolioViews.CoverView view = portfolio.policyView(policy);
+        ProductVersion terms = policies.terms(policy);
+        int months = policies.months(policy);
+        List<PolicySchedulePdf.Clause> wording = wording(policy.getProduct());
+        String wordingVersions = String.join(", ", wording.stream().map(c -> c.ref() + " v" + c.version()).toList());
+        byte[] snapshot = snapshot(policy, view, customer, product, terms, months, wording, generatedBy);
+        byte[] pdf = PolicySchedulePdf.render(view, customer, product, terms, months, generatedBy, wording);
+
+        String fileName = policy.getRef() + "-schedule-" + LocalDateTime.now().format(FILE_STAMP) + ".pdf";
+        String storagePath = files.write(policy.getRef(), "pdf", pdf);
+        String snapshotPath = files.write(policy.getRef(), "json", snapshot);
+        PolicyDocument document = new PolicyDocument(policy.getId(), SCHEDULE_TYPE, fileName, "application/pdf",
+                pdf.length, storagePath, generatedBy, PolicySchedulePdf.LAYOUT_VERSION);
+        document.seal(DocumentCustody.sha256(pdf));
+        document.generatedFrom(wordingVersions, policy.getRowVersion(), snapshotPath, DocumentCustody.sha256(snapshot));
+        try {
+            em.persist(document);
+            em.flush();
+        } catch (RuntimeException e) {
+            files.deleteQuietly(storagePath);
+            files.deleteQuietly(snapshotPath);
+            throw e;
+        }
+        DocumentText.index(em, DocumentText.POLICY_TABLE, document.getId(), pdf, "application/pdf");
+        history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Schedule Generated",
+                policy.getStatus(), policy.getStatus(),
+                SCHEDULE_TYPE + ": " + fileName + (note == null ? "" : " · " + note), generatedBy);
+        return document;
+    }
+
+    private CustomerAccount customerOf(InsurancePolicy policy) {
+        return policy.getCustomerRef() == null ? null : em.createQuery(
                         "select c from CustomerAccount c where c.ref = :ref", CustomerAccount.class)
                 .setParameter("ref", policy.getCustomerRef())
                 .setMaxResults(1)
                 .getResultStream()
                 .findFirst()
                 .orElse(null);
-        InsuranceProduct product = em.createQuery(
-                        "select p from InsuranceProduct p where p.name = :name", InsuranceProduct.class)
+    }
+
+    private InsuranceProduct productOf(InsurancePolicy policy) {
+        return em.createQuery("select p from InsuranceProduct p where p.name = :name", InsuranceProduct.class)
                 .setParameter("name", policy.getProduct())
                 .setMaxResults(1)
                 .getResultStream()
                 .findFirst()
                 .orElse(null);
-        byte[] pdf = PolicySchedulePdf.render(portfolio.policyView(policy), customer, product, policies.terms(policy),
-                policies.months(policy), generatedBy);
+    }
 
-        String fileName = policy.getRef() + "-schedule-" + LocalDateTime.now().format(FILE_STAMP) + ".pdf";
-        String storagePath = files.write(policy.getRef(), "pdf", pdf);
-        PolicyDocument document = new PolicyDocument(policy.getId(), SCHEDULE_TYPE, fileName, "application/pdf",
-                pdf.length, storagePath, generatedBy, PolicySchedulePdf.LAYOUT_VERSION);
-        document.seal(DocumentCustody.sha256(pdf));
-        try {
-            em.persist(document);
-            em.flush();
-        } catch (RuntimeException e) {
-            files.deleteQuietly(storagePath);
-            throw e;
+    /** The approved, effective wording clauses for the product, in reference order (NS-SH09A-001). */
+    private List<PolicySchedulePdf.Clause> wording(String product) {
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = em.createNativeQuery("select record_ref, version_no, clause_type, title, body from doc_wording"
+                        + " where product = ?1 and status = 'APPROVED' and (effective_from is null or effective_from <= ?2)"
+                        + " order by record_ref")
+                .setParameter(1, product)
+                .setParameter(2, java.sql.Date.valueOf(java.time.LocalDate.now()))
+                .getResultList();
+        return rows.stream().map(r -> new PolicySchedulePdf.Clause((String) r[0], ((Number) r[1]).intValue(),
+                (String) r[2], (String) r[3], (String) r[4])).toList();
+    }
+
+    /** The data the schedule is rendered from, as JSON: kept beside the PDF so the issue can be traced and replayed. */
+    private byte[] snapshot(InsurancePolicy policy, PortfolioViews.CoverView view, CustomerAccount customer,
+            InsuranceProduct product, ProductVersion terms, int months, List<PolicySchedulePdf.Clause> wording,
+            String generatedBy) {
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("policyRef", policy.getRef());
+        data.put("dataVersion", policy.getRowVersion());
+        data.put("takenAt", LocalDateTime.now().toString());
+        data.put("issuedBy", generatedBy);
+        data.put("layoutVersion", PolicySchedulePdf.LAYOUT_VERSION);
+        data.put("policy", view);
+        if (customer != null) {
+            Map<String, Object> c = new java.util.LinkedHashMap<>();
+            c.put("ref", customer.getRef());
+            c.put("dateOfBirth", customer.getDateOfBirth() == null ? null : customer.getDateOfBirth().toString());
+            c.put("poiType", customer.getPoiType());
+            c.put("email", customer.getEmail());
+            c.put("phone", customer.getPhone());
+            data.put("customer", c);
         }
-        history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Schedule Generated",
-                policy.getStatus(), policy.getStatus(),
-                SCHEDULE_TYPE + ": " + fileName + (note == null ? "" : " · " + note), generatedBy);
-        return document;
+        if (product != null) {
+            data.put("product", Map.of("summary", String.valueOf(product.getSummary()),
+                    "benefits", String.valueOf(product.getBenefits())));
+        }
+        if (terms != null) {
+            data.put("terms", Map.of("label", String.valueOf(terms.getLabel()),
+                    "wordingRef", String.valueOf(terms.getWordingRef()),
+                    "waitingPeriodDays", terms.getWaitingPeriodDays(), "gracePeriodDays", terms.getGracePeriodDays()));
+        }
+        data.put("premiumMonths", months);
+        data.put("wording", wording);
+        try {
+            return mapper.writeValueAsBytes(data);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("The schedule data could not be frozen", e);
+        }
     }
 
     private ClaimDocumentService.StoredFile open(InsurancePolicy policy, Long id, String username, String channel) {

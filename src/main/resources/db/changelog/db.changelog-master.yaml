@@ -249,6 +249,15 @@ databaseChangeLog:
       file: changes/098-security-event-handling.yaml
       relativeToChangelogFile: true
   - include:
+      file: changes/100-communication-controls.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/101-document-quarantine.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/102-document-records.yaml
+      relativeToChangelogFile: true
+  - include:
       file: changes/105-group-scheme-lifecycle.yaml
       relativeToChangelogFile: true
   - include:

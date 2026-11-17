@@ -130,7 +130,7 @@ so a replay never posts, pays or messages twice. Only the roles in the Nsure rol
 reinsurance and integration modules are reached through the Super Admin role's explicit grants until their codes are granted to a spec role. Customer
 Support Representative (`support`) and Compliance & Auditor (`compliance`) come from migration 045; demo password `password`.
 
-Partner portal logins come from migration 077: `agent` (intermediary INT-00001), `employer` (scheme SCH-001) and `lender` (LND-0001), each with only `USE_PARTNER_PORTAL` and tied to that one partner through `portal_account`. The same migration adds the work queue (`/ops/queue`), workflow definitions and business calendar (`/ops/workflow`), the document register with retention and legal hold (`/ops/documents`; the upload scan result is fixed at Clean because no scanner is connected) and the combined benefit payouts list (`/ops/payouts`).
+Partner portal logins come from migration 077: `agent` (intermediary INT-00001), `employer` (scheme SCH-001) and `lender` (LND-0001), each with only `USE_PARTNER_PORTAL` and tied to that one partner through `portal_account`. The same migration adds the work queue (`/ops/queue`), workflow definitions and business calendar (`/ops/workflow`), the document register with retention and legal hold (`/ops/documents`) and the combined benefit payouts list (`/ops/payouts`).
 
 ### Work queue (SH10)
 
@@ -196,3 +196,34 @@ lapses or is terminated. A credit claim terminates its policy, and a daily job (
 ends credit cover whose loan term has run out. Product configurations go Draft → In review → Active (a second person
 activates); ProductVersionApproved, ProductActivated and ProductWithdrawn are published for product terms, product
 configurations and configuration releases.
+
+## Uploads, quarantine and the document register (SH09A)
+
+Every uploaded file (claim evidence, from staff or the customer portal) is held in quarantine (`doc_quarantine`). It
+is stored and hashed but is not a document of record: no normal download serves it and it never satisfies an evidence
+checklist. No malware scanner ships, so the release is a person's decision: a holder of `RELEASE_DOCUMENT` (Super
+Admin and Claims Assessor by default) who is not the uploader inspects the file (`GET
+/portfolio/document-quarantine/{id}/file`, logged) and releases it with a note or rejects it with a reason the uploader
+sees. A release is recorded as `RELEASED_UNSCANNED` and in the evidence chain; nothing is ever labelled clean unless a
+scanner said so. An installation that connects a scanner registers one `UploadScanner` bean: a clean verdict then
+releases the file at once, an infected one rejects it, and a scanner failure leaves it waiting for a person.
+
+
+Policy schedules are rendered from a frozen snapshot (policy, customer, terms and the approved wording clauses for
+the product), stored as JSON beside the PDF; the document row records the snapshot hash, the wording clause versions
+and the policy's data version, so a later wording revision never changes an issued schedule. The register
+(`/ops/documents`) shows policy documents to `READ_POLICY` holders and claim evidence to `READ_CLAIM` holders only,
+filters by customer, record, class and date, searches the text of generated and released PDFs (no OCR), and logs every
+search in the evidence chain.
+
+## Communications (SH09B)
+
+A message moves QUEUED → SUBMITTED (handed to the provider) → ACCEPTED (the provider's id; not delivery) → DELIVERED /
+READ, which only a delivery report sets: a signed callback, or the simulated provider's report on its next dispatcher
+run (`nsure.communications.simulated-delivery-reports`, on by default because no real provider ships). Every step,
+staff action and raw provider report is kept in the message's trail (`GET /communications/messages/{id}`), with the
+message's purpose and the basis on which its recipient was chosen. Approved `INTERMEDIARY` templates go to the active
+agent servicing the policy and may use references only. An approved template is withdrawn by one user and confirmed by
+another. A reply from an unverified sender is a verification task: it is linked to a customer only once someone records
+how the sender was verified. The bus carries `CommunicationRequested`, `MessageDelivered`, `MessageFailed` and
+`InboundMessageReceived`, with references only.

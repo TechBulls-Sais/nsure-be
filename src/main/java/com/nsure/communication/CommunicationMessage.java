@@ -10,8 +10,12 @@ import java.time.LocalDateTime;
 
 /**
  * One outgoing message with its rendered content snapshot and template version (NS-SH09B-007). The dedup key
- * (event + recipient + template version) is unique, so a replayed event never sends twice (AT-SH09B-01). A message
- * that may not be sent is kept as SUPPRESSED with the reason (AT-SH09B-02).
+ * (event + recipient + purpose + template version) is unique, so a replayed event never sends twice (AT-SH09B-01). A
+ * message that may not be sent is kept as SUPPRESSED with the reason (AT-SH09B-02).
+ *
+ * <p>States (NS-SH09B-004): QUEUED, SUBMITTED (handed to the provider), ACCEPTED (the provider took it and gave an id;
+ * not yet delivery), DELIVERED and READ (only from the provider's delivery report), FAILED, SUPPRESSED. Every change is
+ * kept in the message's trail ({@link MessageEvent}) with the provider's evidence.
  */
 @Entity
 @Table(name = "com_message")
@@ -19,6 +23,8 @@ public class CommunicationMessage {
 
     public static final String QUEUED = "QUEUED";
     public static final String SUBMITTED = "SUBMITTED";
+    /** The provider accepted the message and gave its id. Acceptance is not delivery (NS-SH09B-004). */
+    public static final String ACCEPTED = "ACCEPTED";
     public static final String DELIVERED = "DELIVERED";
     public static final String FAILED = "FAILED";
     public static final String SUPPRESSED = "SUPPRESSED";
@@ -95,6 +101,28 @@ public class CommunicationMessage {
     @Column(name = "read_at")
     private LocalDateTime readAt;
 
+    @Column(name = "accepted_at")
+    private LocalDateTime acceptedAt;
+
+    // Why the message exists, from MessagePurposes: every purpose today is a service notice, never promotional.
+    @Column(name = "purpose", length = 40)
+    private String purpose;
+
+    // CUSTOMER or INTERMEDIARY.
+    @Column(name = "recipient_role", length = 20)
+    private String recipientRole;
+
+    // Why this person was chosen (NS-SH09B-007), e.g. "Policyholder on PolicyIssued for POL-..." or the bulk notice.
+    @Column(name = "recipient_basis", length = 300)
+    private String recipientBasis;
+
+    // The person working this message in the failed queue (SH09B workspace).
+    @Column(name = "owner", length = 100)
+    private String owner;
+
+    @Column(name = "owned_at")
+    private LocalDateTime ownedAt;
+
     protected CommunicationMessage() {
     }
 
@@ -120,6 +148,19 @@ public class CommunicationMessage {
         this.body = cut(body == null ? "" : body, 2000);
     }
 
+    /** Who the message is for and why (NS-SH09B-007), and its purpose. */
+    void recipient(String role, String basis, String purpose) {
+        this.recipientRole = role;
+        this.recipientBasis = cut(basis, 300);
+        this.purpose = purpose;
+    }
+
+    /** Takes or gives up ownership of a message in the failed queue. */
+    void own(String owner) {
+        this.owner = owner;
+        this.ownedAt = owner == null ? null : LocalDateTime.now();
+    }
+
     void queue(String contact) {
         this.contact = contact;
         this.status = QUEUED;
@@ -135,25 +176,32 @@ public class CommunicationMessage {
         this.ref = String.format("MSG-%06d", id);
     }
 
-    /** The provider accepted the message (Blueprint §5: submitted is not yet delivered). */
-    void submitted(String providerMessageId) {
+    /** Handed to the provider, which has not answered yet (Blueprint §5: submitted is not yet delivered). */
+    void submitted() {
         attempts++;
         status = SUBMITTED;
-        this.providerMessageId = providerMessageId;
-        lastError = null;
         updatedAt = LocalDateTime.now();
     }
 
+    /** The provider took the message and gave its id. It is not delivered until the provider reports delivery. */
+    void accepted(String providerMessageId) {
+        status = ACCEPTED;
+        this.providerMessageId = providerMessageId;
+        lastError = null;
+        acceptedAt = LocalDateTime.now();
+        updatedAt = acceptedAt;
+    }
+
     /**
-     * A provider status callback. States only move forward (submitted → delivered → read); a late or repeated
-     * callback for an earlier state is ignored, so out-of-order delivery cannot undo a later state. Failure is accepted
-     * only before delivery. Returns whether anything changed.
+     * A provider status callback. States only move forward (submitted → accepted → delivered → read); a late or
+     * repeated callback for an earlier state is ignored, so out-of-order delivery cannot undo a later state. Failure is
+     * accepted only before delivery. Returns whether anything changed.
      */
     boolean providerStatus(String reported, String detail) {
         int current = rank(status);
         int next = rank(reported);
         if (FAILED.equals(reported)) {
-            if (!SUBMITTED.equals(status)) {
+            if (!SUBMITTED.equals(status) && !ACCEPTED.equals(status)) {
                 return false;
             }
             status = FAILED;
@@ -180,8 +228,9 @@ public class CommunicationMessage {
         return switch (state == null ? "" : state) {
             case QUEUED -> 0;
             case SUBMITTED -> 1;
-            case DELIVERED -> 2;
-            case READ -> 3;
+            case ACCEPTED -> 2;
+            case DELIVERED -> 3;
+            case READ -> 4;
             default -> -1;
         };
     }
@@ -194,9 +243,8 @@ public class CommunicationMessage {
         return readAt;
     }
 
-    /** A provider error: stays queued for the next run until maxAttempts, then lands in the failed queue. */
+    /** A provider error on the attempt just submitted: queued again until maxAttempts, then the failed queue. */
     void failedAttempt(String error, int maxAttempts) {
-        attempts++;
         lastError = cut(error, 500);
         status = attempts >= maxAttempts ? FAILED : QUEUED;
         updatedAt = LocalDateTime.now();
@@ -294,5 +342,29 @@ public class CommunicationMessage {
 
     public LocalDateTime getUpdatedAt() {
         return updatedAt;
+    }
+
+    public LocalDateTime getAcceptedAt() {
+        return acceptedAt;
+    }
+
+    public String getPurpose() {
+        return purpose;
+    }
+
+    public String getRecipientRole() {
+        return recipientRole;
+    }
+
+    public String getRecipientBasis() {
+        return recipientBasis;
+    }
+
+    public String getOwner() {
+        return owner;
+    }
+
+    public LocalDateTime getOwnedAt() {
+        return ownedAt;
     }
 }

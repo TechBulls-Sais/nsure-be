@@ -127,6 +127,8 @@ public enum PermissionCatalog {
     READ_COMMUNICATION(null),
     MANAGE_COMMUNICATION(null),
     APPROVE_TEMPLATE(null),
+    // Releases or rejects an upload held in quarantine (SH09A AT-SH09A-02).
+    RELEASE_DOCUMENT(null),
     READ_SERVICE_CASE(null),
     MANAGE_SERVICE_CASE(null),
     READ_INTEGRATION(null),

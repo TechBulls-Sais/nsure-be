@@ -19,6 +19,15 @@ final class MergeFields {
 
     static final String CUSTOMER_REF = "customerRef";
     static final String PORTAL_LINK = "portalLink";
+    static final String INTERMEDIARY_REF = "intermediaryRef";
+    static final String INTERMEDIARY_NAME = "intermediaryName";
+
+    /**
+     * NS-SH09B-001/003: what an intermediary-audience template may show. References, the product and the customer's
+     * name only: never amounts, reasons or other detail an agent should read in the secure portal.
+     */
+    private static final Set<String> INTERMEDIARY_SAFE = Set.of("policyRef", "claimRef", "caseRef", "product",
+            "customerName", "dueDate");
 
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{\\{\\s*([A-Za-z][A-Za-z0-9_]*)\\s*}}");
 
@@ -55,6 +64,42 @@ final class MergeFields {
         return fields;
     }
 
+    /** The fields a template for this audience may use; an intermediary gets references only (see INTERMEDIARY_SAFE). */
+    static List<String> known(String eventType, String audience) {
+        if (!CommunicationService.INTERMEDIARY.equals(audience)) {
+            return known(eventType);
+        }
+        List<String> fields = new ArrayList<>(BY_EVENT.getOrDefault(eventType, List.of()).stream()
+                .filter(INTERMEDIARY_SAFE::contains).toList());
+        fields.add(INTERMEDIARY_REF);
+        fields.add(INTERMEDIARY_NAME);
+        fields.add(PORTAL_LINK);
+        return fields;
+    }
+
+    /** The placeholders in the texts that a template for this event and audience may not use. */
+    static List<String> unknownFor(String eventType, String audience, String... texts) {
+        List<String> known = known(eventType, audience);
+        return placeholders(texts).stream().filter(field -> !known.contains(field)).toList();
+    }
+
+    /** Sample values for a template preview: the field name in brackets, or a realistic example. */
+    static String sample(String field) {
+        return switch (field) {
+            case "policyRef" -> "POL-000123";
+            case "claimRef" -> "CLM-000045";
+            case "caseRef" -> "SR-000067";
+            case "customerName" -> "Kagiso Molefe";
+            case CUSTOMER_REF -> "CUS-1001";
+            case "product" -> "Term Life";
+            case "amount", "sumAssured", "premium" -> "BWP 1,000.00";
+            case "dueDate" -> "2026-12-01";
+            case INTERMEDIARY_REF -> "INT-00001";
+            case INTERMEDIARY_NAME -> "Example Brokers";
+            default -> "[" + field + "]";
+        };
+    }
+
     static List<String> placeholders(String... texts) {
         Set<String> found = new LinkedHashSet<>();
         for (String text : texts) {
@@ -69,10 +114,6 @@ final class MergeFields {
         return List.copyOf(found);
     }
 
-    static List<String> unknown(String eventType, String... texts) {
-        List<String> known = known(eventType);
-        return placeholders(texts).stream().filter(field -> !known.contains(field)).toList();
-    }
 
     /** Replaces every placeholder with its value; a missing value renders as empty text. */
     static String render(String text, Function<String, String> values) {

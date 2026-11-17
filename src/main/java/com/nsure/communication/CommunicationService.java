@@ -1,6 +1,8 @@
 package com.nsure.communication;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.nsure.audit.evidence.EvidenceChain;
+import com.nsure.common.exception.ConflictException;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.integration.DomainEvent;
 import com.nsure.integration.Events;
@@ -37,21 +39,25 @@ public class CommunicationService {
     private static final Set<String> CHANNELS = Set.of(EMAIL, WHATSAPP);
     private static final Set<String> AUDIENCES = Set.of(CUSTOMER, INTERMEDIARY);
     private static final Set<String> MESSAGE_STATES = Set.of(CommunicationMessage.QUEUED,
-            CommunicationMessage.SUBMITTED, CommunicationMessage.DELIVERED, CommunicationMessage.FAILED,
-            CommunicationMessage.SUPPRESSED, CommunicationMessage.READ);
+            CommunicationMessage.SUBMITTED, CommunicationMessage.ACCEPTED, CommunicationMessage.DELIVERED,
+            CommunicationMessage.FAILED, CommunicationMessage.SUPPRESSED, CommunicationMessage.READ);
     private static final Logger log = LoggerFactory.getLogger(CommunicationService.class);
 
     private final EntityManager em;
     private final PlatformSecurityContext security;
     private final CommunicationDispatcher dispatcher;
+    private final EvidenceChain audit;
+    private final MessageTrail trail;
     private final String portalLink;
 
     public CommunicationService(EntityManager em, PlatformSecurityContext security,
-            CommunicationDispatcher dispatcher,
+            CommunicationDispatcher dispatcher, EvidenceChain audit, MessageTrail trail,
             @Value("${nsure.communications.portal-link:http://127.0.0.1:5180}") String portalLink) {
         this.em = em;
         this.security = security;
         this.dispatcher = dispatcher;
+        this.audit = audit;
+        this.trail = trail;
         this.portalLink = portalLink;
     }
 
@@ -99,13 +105,48 @@ public class CommunicationService {
         if (!AUDIENCES.contains(audience)) {
             throw new IllegalArgumentException("Audience must be CUSTOMER or INTERMEDIARY.");
         }
+        String purpose = upper(text(body, "purpose"));
+        if (purpose != null && MessagePurposes.PROMOTIONAL.contains(purpose)) {
+            // NS-SH09B-007: campaigns need their own permission, consent basis and approval, which this release lacks.
+            throw new IllegalArgumentException("Templates are for service notices about a policy, claim or case. "
+                    + "Promotional campaigns need a separate permission, marketing consent and approval, and are not "
+                    + "available.");
+        }
         String subject = text(body, "subject");
         String content = text(body, "body");
         validateContent(channel, subject, content);
         MessageTemplate template = new MessageTemplate(code, eventType, channel, audience,
                 latest == null ? 1 : latest.getVersion() + 1, subject, content, user.getUsername());
         em.persist(template);
+        audit.record(user.getUsername(), "Template drafted", "Message template",
+                template.getCode() + " v" + template.getVersion(), template.getEventType() + " · " + template.getChannel()
+                        + " · " + template.getAudience());
         return CommunicationViews.TemplateView.of(template);
+    }
+
+    /**
+     * The template designer's preview: {eventType, audience, subject, body} rendered with sample values, with the
+     * merge fields the audience may use and any it may not. Nothing is saved.
+     */
+    @Transactional(readOnly = true)
+    public CommunicationViews.TemplatePreview preview(JsonNode body) {
+        AppUser user = security.authenticatedUser();
+        if (!user.hasPermissionTo("MANAGE_COMMUNICATION") && !user.hasPermissionTo("APPROVE_TEMPLATE")) {
+            throw new NoAuthorizationException("User has no authority to design message templates");
+        }
+        String eventType = text(body, "eventType");
+        if (eventType == null || !MergeFields.eventTypes().contains(eventType)) {
+            throw new IllegalArgumentException("Choose the event the template is for: "
+                    + String.join(", ", MergeFields.eventTypes()) + ".");
+        }
+        String audience = upper(text(body, "audience"));
+        audience = audience == null ? CUSTOMER : audience;
+        String subject = text(body, "subject");
+        String content = text(body, "body");
+        return new CommunicationViews.TemplatePreview(MergeFields.render(subject, MergeFields::sample),
+                MergeFields.render(content, MergeFields::sample), MergeFields.placeholders(subject, content),
+                MergeFields.known(eventType, audience), MergeFields.unknownFor(eventType, audience, subject, content),
+                MessagePurposes.of(eventType));
     }
 
     /**
@@ -115,10 +156,7 @@ public class CommunicationService {
     @Transactional
     public CommunicationViews.TemplateView approveTemplate(Long id) {
         AppUser user = user("APPROVE_TEMPLATE");
-        MessageTemplate template = em.find(MessageTemplate.class, id);
-        if (template == null) {
-            throw new NotFoundException("Template " + id + " not found");
-        }
+        MessageTemplate template = template(id);
         if (!MessageTemplate.DRAFT.equals(template.getStatus())) {
             throw new IllegalArgumentException("Only a draft can be approved; " + template.getCode() + " v"
                     + template.getVersion() + " is " + template.getStatus() + ".");
@@ -127,11 +165,12 @@ public class CommunicationService {
             throw new NoAuthorizationException(
                     "You drafted this template version, so another user must approve it (maker-checker).");
         }
-        List<String> unknown = MergeFields.unknown(template.getEventType(), template.getSubject(), template.getBody());
+        List<String> unknown = MergeFields.unknownFor(template.getEventType(), template.getAudience(),
+                template.getSubject(), template.getBody());
         if (!unknown.isEmpty()) {
             throw new IllegalArgumentException("Unknown merge field " + braces(unknown) + " for "
-                    + template.getEventType() + ". Use only: " + braces(MergeFields.known(template.getEventType()))
-                    + ".");
+                    + template.getEventType() + (INTERMEDIARY.equals(template.getAudience()) ? " to an intermediary" : "")
+                    + ". Use only: " + braces(MergeFields.known(template.getEventType(), template.getAudience())) + ".");
         }
         em.createQuery("select t from MessageTemplate t where t.code = :code and t.status = :approved",
                         MessageTemplate.class)
@@ -140,7 +179,84 @@ public class CommunicationService {
                 .getResultList()
                 .forEach(MessageTemplate::retire);
         template.approve(user.getUsername());
+        audit.record(user.getUsername(), "Template approved", "Message template",
+                template.getCode() + " v" + template.getVersion(), "Drafted by " + template.getCreatedBy());
         return CommunicationViews.TemplateView.of(template);
+    }
+
+    /**
+     * D-22, first step of withdrawing an approved version without a replacement: {reason}. The version keeps being used
+     * until another holder of APPROVE_TEMPLATE confirms, as with any approval of template content.
+     */
+    @Transactional
+    public CommunicationViews.TemplateView requestWithdrawal(Long id, JsonNode body) {
+        AppUser user = security.authenticatedUser();
+        if (!user.hasPermissionTo("MANAGE_COMMUNICATION") && !user.hasPermissionTo("APPROVE_TEMPLATE")) {
+            throw new NoAuthorizationException("User has no authority to withdraw message templates");
+        }
+        MessageTemplate template = template(id);
+        if (!MessageTemplate.APPROVED.equals(template.getStatus())) {
+            throw new IllegalArgumentException("Only an approved template can be withdrawn; " + template.getCode() + " v"
+                    + template.getVersion() + " is " + template.getStatus() + ".");
+        }
+        if (template.isWithdrawalPending()) {
+            throw new ConflictException(template.getCode() + " v" + template.getVersion()
+                    + " already has a withdrawal waiting for approval, asked by " + template.getWithdrawalRequestedBy()
+                    + ".");
+        }
+        String reason = text(body, "reason");
+        if (reason == null || reason.length() < 10 || reason.length() > 500) {
+            throw new IllegalArgumentException("Give the reason for withdrawing the template (10 to 500 characters).");
+        }
+        template.requestWithdrawal(user.getUsername(), reason);
+        audit.record(user.getUsername(), "Template withdrawal requested", "Message template",
+                template.getCode() + " v" + template.getVersion(), reason);
+        return CommunicationViews.TemplateView.of(template);
+    }
+
+    /** D-22, second step: someone other than the requester confirms; no new message uses the version from now on. */
+    @Transactional
+    public CommunicationViews.TemplateView approveWithdrawal(Long id) {
+        AppUser user = user("APPROVE_TEMPLATE");
+        MessageTemplate template = pendingWithdrawal(id);
+        if (template.getWithdrawalRequestedBy().equalsIgnoreCase(user.getUsername())) {
+            throw new NoAuthorizationException(
+                    "You asked for this withdrawal, so another user must approve it (maker-checker).");
+        }
+        template.withdraw(user.getUsername());
+        audit.record(user.getUsername(), "Template withdrawn", "Message template",
+                template.getCode() + " v" + template.getVersion(),
+                "Asked by " + template.getWithdrawalRequestedBy() + ": " + template.getWithdrawalReason());
+        return CommunicationViews.TemplateView.of(template);
+    }
+
+    /** D-22: the withdrawal is declined and the version stays approved. */
+    @Transactional
+    public CommunicationViews.TemplateView declineWithdrawal(Long id) {
+        AppUser user = user("APPROVE_TEMPLATE");
+        MessageTemplate template = pendingWithdrawal(id);
+        String asked = template.getWithdrawalRequestedBy() + ": " + template.getWithdrawalReason();
+        template.declineWithdrawal();
+        audit.record(user.getUsername(), "Template withdrawal declined", "Message template",
+                template.getCode() + " v" + template.getVersion(), "Asked by " + asked);
+        return CommunicationViews.TemplateView.of(template);
+    }
+
+    private MessageTemplate pendingWithdrawal(Long id) {
+        MessageTemplate template = template(id);
+        if (!template.isWithdrawalPending()) {
+            throw new ConflictException(template.getCode() + " v" + template.getVersion()
+                    + " has no withdrawal waiting for approval.");
+        }
+        return template;
+    }
+
+    private MessageTemplate template(Long id) {
+        MessageTemplate template = em.find(MessageTemplate.class, id);
+        if (template == null) {
+            throw new NotFoundException("Template " + id + " not found");
+        }
+        return template;
     }
 
     // ── messages ─────────────────────────────────────────────────────────────────────────────────────
@@ -162,6 +278,50 @@ public class CommunicationService {
                 .getResultList().stream().map(CommunicationViews.MessageView::of).toList();
     }
 
+    /** One message with its trail: every state, the provider's reports and the staff actions (NS-SH09B-007). */
+    @Transactional(readOnly = true)
+    public CommunicationViews.MessageDetailView message(Long id) {
+        user("READ_COMMUNICATION");
+        CommunicationMessage message = messageById(id);
+        return new CommunicationViews.MessageDetailView(CommunicationViews.MessageView.of(message),
+                trail.of(message.getId()));
+    }
+
+    /** {release?}: takes a failed message to work it, or gives it back to the queue (SH09B failed-message queue). */
+    @Transactional
+    public CommunicationViews.MessageView own(Long id, JsonNode body) {
+        AppUser user = user("MANAGE_COMMUNICATION");
+        CommunicationMessage message = messageById(id);
+        boolean release = body != null && body.path("release").asBoolean(false);
+        if (release) {
+            if (message.getOwner() == null) {
+                throw new ConflictException(message.getRef() + " has no owner.");
+            }
+            String previous = message.getOwner();
+            message.own(null);
+            trail.noted(message, "Given back to the queue (was " + previous + ")", user.getUsername());
+        } else {
+            if (!CommunicationMessage.FAILED.equals(message.getStatus())) {
+                throw new IllegalArgumentException("Only a message in the failed queue is taken; " + message.getRef()
+                        + " is " + message.getStatus() + ".");
+            }
+            if (message.getOwner() != null && !message.getOwner().equalsIgnoreCase(user.getUsername())) {
+                throw new ConflictException(message.getRef() + " is already being worked by " + message.getOwner() + ".");
+            }
+            message.own(user.getUsername());
+            trail.noted(message, "Taken by " + user.getUsername(), user.getUsername());
+        }
+        return CommunicationViews.MessageView.of(message);
+    }
+
+    private CommunicationMessage messageById(Long id) {
+        CommunicationMessage message = em.find(CommunicationMessage.class, id);
+        if (message == null) {
+            throw new NotFoundException("Message " + id + " not found");
+        }
+        return message;
+    }
+
     /** A service message written by staff; consent and opt-out apply exactly as for event messages. */
     @Transactional
     public CommunicationViews.MessageView sendManual(JsonNode body) {
@@ -175,7 +335,10 @@ public class CommunicationService {
         String subject = text(body, "subject");
         String content = text(body, "body");
         validateContent(channel, subject, content);
-        if (WHATSAPP.equals(channel)) {
+        // Consent first (AT-SH09B-02): an opted-out or not-opted-in channel is recorded as SUPPRESSED with the reason,
+        // whatever else would have stopped the send, so the opt-out is visible in the log (D-23).
+        Route route = route(customer, channel);
+        if (route.reason() == null && WHATSAPP.equals(channel)) {
             // Blueprint §5 / WhatsApp Business policy: a free-form message only within 24 hours of the customer's last
             // WhatsApp message; outside that window only approved templates are sent.
             java.time.LocalDateTime last = lastInbound(customer.getRef(), WHATSAPP);
@@ -184,28 +347,48 @@ public class CommunicationService {
                         + customer.getName() + "'s last WhatsApp message. Use Email, or an approved template.");
             }
         }
+        // SH09B: a reply on a service case joins that case's conversation.
+        String caseRef = upper(text(body, "caseRef"));
+        if (caseRef != null) {
+            String owner = em.createQuery("select c.customerRef from ServiceCase c where c.ref = :ref", String.class)
+                    .setParameter("ref", caseRef).getResultStream().findFirst().orElse(null);
+            if (owner == null || !owner.equals(customer.getRef())) {
+                throw new IllegalArgumentException("Service case " + caseRef + " is not " + customer.getName() + "'s.");
+            }
+        }
         CommunicationMessage message = new CommunicationMessage("manual:" + UUID.randomUUID(), null,
-                SERVICE_MESSAGE, customer.getRef(), customer.getRef(), customer.getName(), channel,
-                user.getUsername());
+                SERVICE_MESSAGE, caseRef != null ? caseRef : customer.getRef(), customer.getRef(), customer.getName(),
+                channel, user.getUsername());
         message.content(null, null, subject, content);
-        route(message, customer, channel);
+        message.recipient(CUSTOMER, "Customer " + customer.getRef() + " chosen by " + user.getUsername()
+                + " for a service message" + (caseRef == null ? "" : " on case " + caseRef),
+                MessagePurposes.of(SERVICE_MESSAGE));
+        if (route.reason() == null) {
+            message.queue(route.contact());
+        } else {
+            message.suppress(route.contact(), route.reason());
+        }
         save(message);
+        trail.requested(message, user.getUsername(), null);
+        audit.record(user.getUsername(), "Service message written", "Message", message.getRef(),
+                label(channel) + " to " + customer.getRef() + " · " + message.getStatus());
         return CommunicationViews.MessageView.of(message);
     }
 
     /** Puts a message from the failed queue back in the send queue with a fresh set of attempts. */
     @Transactional
     public CommunicationViews.MessageView retry(Long id) {
-        user("MANAGE_COMMUNICATION");
-        CommunicationMessage message = em.find(CommunicationMessage.class, id);
-        if (message == null) {
-            throw new NotFoundException("Message " + id + " not found");
-        }
+        AppUser user = user("MANAGE_COMMUNICATION");
+        CommunicationMessage message = messageById(id);
         if (!CommunicationMessage.FAILED.equals(message.getStatus())) {
             throw new IllegalArgumentException("Only a failed message can be retried; " + message.getRef() + " is "
                     + message.getStatus() + ".");
         }
+        String error = message.getLastError();
         message.retry();
+        trail.changed(message, "Queued again by " + user.getUsername() + " after: " + error, MessageEvent.STAFF, null,
+                user.getUsername());
+        audit.record(user.getUsername(), "Message retried", "Message", message.getRef(), error);
         return CommunicationViews.MessageView.of(message);
     }
 
@@ -258,6 +441,7 @@ public class CommunicationService {
         boolean verified = contact != null && (EMAIL.equals(channel)
                 ? contact.equalsIgnoreCase(String.valueOf(customer.getEmail()))
                 : digits(contact).equals(digits(customer.getPhone())));
+        String before = preference == null ? "not set" : preference.getStatus();
         if (preference == null) {
             preference = new ChannelPreference(customer.getRef(), channel);
             preference.set(status, contact, verified, user.getUsername());
@@ -265,78 +449,80 @@ public class CommunicationService {
         } else {
             preference.set(status, contact, verified, user.getUsername());
         }
+        audit.record(user.getUsername(), "Channel preference changed", "Customer", customer.getRef(),
+                label(channel) + ": " + before + " -> " + status + (verified ? " (verified contact)" : ""));
         return preferencesOf(customer);
     }
 
     // ── event notifications ──────────────────────────────────────────────────────────────────────────
 
     /**
-     * One message per approved customer template of the event type. Idempotent: the dedup key (event + recipient +
-     * template version) already present means the event was handled. A recipient who cannot be messaged gets a
-     * SUPPRESSED message with the reason; nothing is dropped silently.
+     * One message per approved template of the event type (AT-SH09B-01): customer templates go to the customer the
+     * event names; intermediary templates go to the authorised agent servicing the policy, if there is one, and show
+     * only references (MergeFields). Idempotent: the dedup key (event + recipient + purpose + template version) already
+     * present means the event was handled. A recipient who cannot be messaged gets a SUPPRESSED message with the reason;
+     * nothing is dropped silently. Each message records why its recipient was chosen (NS-SH09B-007).
      */
     @Transactional
     public int notifyFor(DomainEvent event) {
         List<MessageTemplate> templates = em.createQuery(
                         "select t from MessageTemplate t where t.eventType = :type and t.status = :approved"
-                                + " and t.audience = :audience order by t.code asc", MessageTemplate.class)
+                                + " order by t.code asc", MessageTemplate.class)
                 .setParameter("type", event.eventType())
                 .setParameter("approved", MessageTemplate.APPROVED)
-                .setParameter("audience", CUSTOMER)
                 .getResultList();
         if (templates.isEmpty()) {
             return 0;
         }
-        String name = event.text("customerName");
-        CustomerAccount customer = null;
-        String unresolved = null;
-        String ref = event.text("customerRef");
-        if (ref != null) {
-            customer = em.createQuery("select c from CustomerAccount c where c.ref = :ref", CustomerAccount.class)
-                    .setParameter("ref", ref).getResultStream().findFirst().orElse(null);
-        }
-        if (customer == null) {
-            List<CustomerAccount> named = name == null ? List.of() : em.createQuery(
-                            "select c from CustomerAccount c where c.name = :name order by c.id asc",
-                            CustomerAccount.class)
-                    .setParameter("name", name).getResultList();
-            if (named.size() == 1) {
-                customer = named.get(0);
-            } else if (named.isEmpty()) {
-                unresolved = "No customer record matches " + (name == null ? "the event" : name) + ".";
-            } else {
-                unresolved = named.size() + " customers are named " + name
-                        + "; the recipient is ambiguous, so nothing was sent.";
-            }
-        }
+        String purpose = MessagePurposes.of(event.eventType());
         int created = 0;
+        Recipient customer = null;
+        Recipient agent = null;
         for (MessageTemplate template : templates) {
-            String recipientKey = customer == null ? "UNRESOLVED" : customer.getRef();
-            String dedupKey = event.eventId() + ":" + recipientKey + ":" + template.getCode() + ":v"
+            Recipient to;
+            if (INTERMEDIARY.equals(template.getAudience())) {
+                agent = agent != null ? agent : intermediaryFor(event);
+                to = agent;
+            } else {
+                customer = customer != null ? customer : customerFor(event);
+                to = customer;
+            }
+            if (to.key() == null) {
+                continue; // an intermediary template on a policy no intermediary services: nobody to message
+            }
+            String dedupKey = event.eventId() + ":" + to.key() + ":" + purpose + ":" + template.getCode() + ":v"
                     + template.getVersion();
+            // Messages created before the purpose joined the key carry the older key: a replay must not repeat them.
+            String earlierKey = event.eventId() + ":" + to.key() + ":" + template.getCode() + ":v" + template.getVersion();
             Long existing = em.createQuery(
-                            "select count(m) from CommunicationMessage m where m.dedupKey = :key", Long.class)
-                    .setParameter("key", dedupKey).getSingleResult();
+                            "select count(m) from CommunicationMessage m where m.dedupKey in :keys", Long.class)
+                    .setParameter("keys", List.of(dedupKey, earlierKey)).getSingleResult();
             if (existing > 0) {
                 continue;
             }
             CommunicationMessage message = new CommunicationMessage(dedupKey, event.eventId(), event.eventType(),
-                    event.aggregateRef(), customer == null ? null : customer.getRef(),
-                    customer == null ? name : customer.getName(), template.getChannel(), "system");
-            String customerRef = customer == null ? "" : customer.getRef();
-            java.util.function.Function<String, String> values = field -> switch (field) {
-                case MergeFields.CUSTOMER_REF -> customerRef;
-                case MergeFields.PORTAL_LINK -> portalLink;
-                default -> event.text(field);
-            };
+                    event.aggregateRef(), to.customer() == null ? null : to.customer().getRef(), to.name(),
+                    template.getChannel(), "system");
+            Recipient recipient = to;
+            java.util.function.Function<String, String> values = field -> recipient.value(field, event, portalLink);
             message.content(template.getCode(), template.getVersion(),
                     MergeFields.render(template.getSubject(), values), MergeFields.render(template.getBody(), values));
-            if (customer == null) {
-                message.suppress(null, unresolved);
+            message.recipient(template.getAudience(), to.basis(), purpose);
+            if (to.unavailable() != null) {
+                message.suppress(to.contact(template.getChannel()), to.unavailable());
+            } else if (to.customer() != null) {
+                route(message, to.customer(), template.getChannel());
             } else {
-                route(message, customer, template.getChannel());
+                String contact = to.contact(template.getChannel());
+                if (contact == null) {
+                    message.suppress(null, "No " + (EMAIL.equals(template.getChannel()) ? "email address" : "mobile number")
+                            + " on file for intermediary " + to.key() + ".");
+                } else {
+                    message.queue(contact);
+                }
             }
             save(message);
+            trail.requested(message, "system", event.correlationId());
             if (CommunicationMessage.SUPPRESSED.equals(message.getStatus())) {
                 log.info("Message {} for event {} suppressed: {}", message.getRef(), event.eventId(),
                         message.getLastError());
@@ -346,17 +532,110 @@ public class CommunicationService {
         return created;
     }
 
-    // ── helpers ──────────────────────────────────────────────────────────────────────────────────────
+    /**
+     * Who a message goes to: {@code key} (customer or intermediary reference, UNRESOLVED, or null for nobody), a
+     * customer record to route by preference, or an intermediary's contacts; {@code unavailable} suppresses with a reason.
+     */
+    private record Recipient(String key, String name, CustomerAccount customer, String email, String mobile,
+            String basis, String unavailable, String intermediaryName) {
+
+        String contact(String channel) {
+            return EMAIL.equals(channel) ? blankToNull(email) : blankToNull(mobile);
+        }
+
+        String value(String field, DomainEvent event, String portalLink) {
+            if (intermediaryName != null) {
+                // An intermediary never gets a field outside MergeFields' safe list, even if one slipped into a template.
+                return switch (field) {
+                    case MergeFields.INTERMEDIARY_REF -> key;
+                    case MergeFields.INTERMEDIARY_NAME -> intermediaryName;
+                    case MergeFields.PORTAL_LINK -> portalLink;
+                    default -> MergeFields.known(event.eventType(), INTERMEDIARY).contains(field) ? event.text(field) : "";
+                };
+            }
+            return switch (field) {
+                case MergeFields.CUSTOMER_REF -> customer == null ? "" : customer.getRef();
+                case MergeFields.PORTAL_LINK -> portalLink;
+                default -> event.text(field);
+            };
+        }
+    }
+
+    /** The customer the event names: by reference, else by a unique name; ambiguity or no match suppresses. */
+    private Recipient customerFor(DomainEvent event) {
+        String name = event.text("customerName");
+        String ref = event.text("customerRef");
+        CustomerAccount customer = null;
+        if (ref != null) {
+            customer = em.createQuery("select c from CustomerAccount c where c.ref = :ref", CustomerAccount.class)
+                    .setParameter("ref", ref).getResultStream().findFirst().orElse(null);
+        }
+        String basis = "Customer named on " + event.eventType() + " for " + event.aggregateRef();
+        if (customer != null) {
+            return new Recipient(customer.getRef(), customer.getName(), customer, null, null,
+                    basis + " (customer reference " + customer.getRef() + ")", null, null);
+        }
+        List<CustomerAccount> named = name == null ? List.of() : em.createQuery(
+                        "select c from CustomerAccount c where c.name = :name order by c.id asc", CustomerAccount.class)
+                .setParameter("name", name).getResultList();
+        if (named.size() == 1) {
+            customer = named.get(0);
+            return new Recipient(customer.getRef(), customer.getName(), customer, null, null,
+                    basis + " (the only customer named " + name + ": " + customer.getRef() + ")", null, null);
+        }
+        String reason = named.isEmpty() ? "No customer record matches " + (name == null ? "the event" : name) + "."
+                : named.size() + " customers are named " + name + "; the recipient is ambiguous, so nothing was sent.";
+        return new Recipient("UNRESOLVED", name, null, null, null, basis + " (not resolved)", reason, null);
+    }
+
+    /**
+     * The intermediary servicing the event's policy (AT-SH09B-01): the open policy assignment, else the one who sold
+     * the application. Only an ACTIVE intermediary with a current appointment is messaged; any other is suppressed
+     * with the reason. Null key when no intermediary services the policy.
+     */
+    private Recipient intermediaryFor(DomainEvent event) {
+        String policyRef = event.text("policyRef");
+        Recipient nobody = new Recipient(null, null, null, null, null, null, null, null);
+        if (policyRef == null) {
+            return nobody;
+        }
+        String basis = "Intermediary servicing policy " + policyRef + " (open assignment)";
+        List<?> rows = em.createNativeQuery("select i.record_ref, i.name, i.status, i.appointment_expiry, i.email, i.mobile"
+                        + " from dist_intermediary i join dist_policy_assignment a on a.intermediary_id = i.id"
+                        + " where a.policy_ref = ?1 and a.ended_on is null")
+                .setParameter(1, policyRef).getResultList();
+        if (rows.isEmpty()) {
+            basis = "Intermediary who sold the application for policy " + policyRef;
+            rows = em.createNativeQuery("select i.record_ref, i.name, i.status, i.appointment_expiry, i.email, i.mobile"
+                            + " from dist_intermediary i join ins_application ap on ap.intermediary_code = i.record_ref"
+                            + " join ins_policy p on p.application_ref = ap.record_ref where p.record_ref = ?1")
+                    .setParameter(1, policyRef).getResultList();
+        }
+        if (rows.isEmpty()) {
+            return nobody;
+        }
+        Object[] row = (Object[]) rows.get(0);
+        String ref = (String) row[0];
+        String name = (String) row[1];
+        String status = (String) row[2];
+        java.time.LocalDate expiry = row[3] instanceof java.sql.Date d ? d.toLocalDate()
+                : row[3] instanceof java.time.LocalDate l ? l : null;
+        String unavailable = !"ACTIVE".equals(status) ? "Intermediary " + ref + " is " + status
+                + ", so it is not authorised to receive policy messages."
+                : expiry != null && expiry.isBefore(java.time.LocalDate.now())
+                        ? "Intermediary " + ref + "'s appointment expired on " + expiry + "." : null;
+        return new Recipient(ref, name, null, (String) row[4], (String) row[5], basis + ": " + ref, unavailable, name);
+    }
 
     // ── provider status callbacks (Blueprint §5) ─────────────────────────────────────────────────────
 
     /**
-     * Applies a provider status callback (already authenticated by its signature) to the message it names. Unknown
-     * message ids and states that would move a message backwards are ignored, so retried or out-of-order callbacks
-     * are harmless. Returns the message status after the callback, or null for an unknown message.
+     * Applies a provider status callback (already authenticated by its signature) to the message it names, keeping the
+     * raw callback as delivery evidence. Unknown message ids and states that would move a message backwards are
+     * ignored, so retried or out-of-order callbacks are harmless. Returns the status after the callback, or null.
      */
     @Transactional
-    public String providerStatus(String providerMessageId, String status, String detail) {
+    public String providerStatus(String providerMessageId, String status, String detail, String rawPayload) {
         String reported = upper(status);
         if (!Set.of(CommunicationMessage.DELIVERED, CommunicationMessage.READ, CommunicationMessage.FAILED)
                 .contains(reported)) {
@@ -370,9 +649,14 @@ public class CommunicationService {
             log.info("Status callback for unknown provider message {} ignored", providerMessageId);
             return null;
         }
-        message.providerStatus(reported, detail);
+        if (message.providerStatus(reported, detail)) {
+            trail.changed(message, "Provider reported " + reported.toLowerCase(Locale.ROOT)
+                    + (detail == null ? "" : ": " + detail), MessageEvent.PROVIDER, rawPayload, "provider");
+        }
         return message.getStatus();
     }
+
+    // ── helpers ──────────────────────────────────────────────────────────────────────────────────────
 
     /** When the customer last wrote to us on the channel, for the WhatsApp customer-service window. */
     java.time.LocalDateTime lastInbound(String customerRef, String channel) {
@@ -414,6 +698,78 @@ public class CommunicationService {
             }
         }
         return new ArrayList<>(found.values());
+    }
+
+    // ── delivery dashboard and conversations (SH09B workspace) ───────────────────────────────────────
+
+    /** Per channel, the messages raised in the last {@code days} days by state, and per day raised/delivered/failed. */
+    @Transactional(readOnly = true)
+    public CommunicationViews.MetricsView metrics(Integer days) {
+        user("READ_COMMUNICATION");
+        int period = days == null ? 30 : days;
+        if (period < 1 || period > 366) {
+            throw new IllegalArgumentException("Choose a period of 1 to 366 days.");
+        }
+        java.time.LocalDate first = java.time.LocalDate.now().minusDays(period - 1L);
+        List<CommunicationMessage> raised = em.createQuery("select m from CommunicationMessage m where m.createdAt >= :from",
+                        CommunicationMessage.class)
+                .setParameter("from", first.atStartOfDay()).getResultList();
+        List<CommunicationViews.ChannelMetrics> channels = new ArrayList<>();
+        for (String channel : List.of(EMAIL, WHATSAPP)) {
+            List<CommunicationMessage> mine = raised.stream().filter(m -> channel.equals(m.getChannel())).toList();
+            long delivered = count(mine, CommunicationMessage.DELIVERED);
+            long read = count(mine, CommunicationMessage.READ);
+            long failed = count(mine, CommunicationMessage.FAILED);
+            long inFlight = count(mine, CommunicationMessage.SUBMITTED) + count(mine, CommunicationMessage.ACCEPTED);
+            long handed = delivered + read + failed + inFlight;
+            channels.add(new CommunicationViews.ChannelMetrics(channel, mine.size(),
+                    count(mine, CommunicationMessage.QUEUED), inFlight, delivered + read, read, failed,
+                    count(mine, CommunicationMessage.SUPPRESSED),
+                    handed == 0 ? null : Math.round((delivered + read) * 1000.0 / handed) / 10.0));
+        }
+        List<CommunicationViews.DayMetrics> byDay = new ArrayList<>();
+        for (java.time.LocalDate day = first; !day.isAfter(java.time.LocalDate.now()); day = day.plusDays(1)) {
+            java.time.LocalDate d = day;
+            List<CommunicationMessage> that = raised.stream()
+                    .filter(m -> m.getCreatedAt().toLocalDate().equals(d)).toList();
+            byDay.add(new CommunicationViews.DayMetrics(d.toString(), that.size(),
+                    count(that, CommunicationMessage.DELIVERED) + count(that, CommunicationMessage.READ),
+                    count(that, CommunicationMessage.FAILED)));
+        }
+        long unowned = em.createQuery("select count(m) from CommunicationMessage m where m.status = :failed"
+                + " and m.owner is null", Long.class).setParameter("failed", CommunicationMessage.FAILED).getSingleResult();
+        return new CommunicationViews.MetricsView(period, first.toString(), channels, byDay, unowned);
+    }
+
+    private static long count(List<CommunicationMessage> messages, String status) {
+        return messages.stream().filter(m -> status.equals(m.getStatus())).count();
+    }
+
+    /**
+     * A customer's conversation, oldest first: every message sent to them and every reply linked to them, with the
+     * service case each belongs to (SH09B case conversation timeline).
+     */
+    @Transactional(readOnly = true)
+    public List<CommunicationViews.ConversationItem> conversation(String customerRef) {
+        user("READ_COMMUNICATION");
+        CustomerAccount customer = customerByRef(customerRef);
+        List<CommunicationViews.ConversationItem> items = new ArrayList<>();
+        for (CommunicationMessage m : em.createQuery("select m from CommunicationMessage m where m.customerRef = :ref"
+                + " and (m.recipientRole is null or m.recipientRole = :customer) order by m.id", CommunicationMessage.class)
+                .setParameter("ref", customer.getRef()).setParameter("customer", CUSTOMER).getResultList()) {
+            String caseRef = m.getBusinessRef() != null && m.getBusinessRef().startsWith("SR-") ? m.getBusinessRef() : "";
+            items.add(new CommunicationViews.ConversationItem("OUT", CommunicationViews.time(m.getCreatedAt()),
+                    m.getChannel(), m.getRef(), CommunicationViews.blank(m.getSubject()), m.getBody(), m.getStatus(),
+                    caseRef, m.getCreatedBy()));
+        }
+        for (InboundCorrespondence i : em.createQuery("select i from InboundCorrespondence i where i.customerRef = :ref"
+                + " order by i.id", InboundCorrespondence.class).setParameter("ref", customer.getRef()).getResultList()) {
+            items.add(new CommunicationViews.ConversationItem("IN", CommunicationViews.time(i.getReceivedAt()),
+                    i.getChannel(), "IN-" + i.getId(), "", i.getBody(), i.getStatus(),
+                    CommunicationViews.blank(i.getCaseRef()), CommunicationViews.mask(i.getSender())));
+        }
+        items.sort(java.util.Comparator.comparing(CommunicationViews.ConversationItem::at));
+        return items;
     }
 
     // ── bulk operational notices (Blueprint §5) ──────────────────────────────────────────────────────
@@ -481,8 +837,12 @@ public class CommunicationService {
             };
             message.content(template.getCode(), template.getVersion(),
                     MergeFields.render(template.getSubject(), values), MergeFields.render(template.getBody(), values));
+            message.recipient(CUSTOMER, "Holds " + (notice.getProduct() == null ? "a" : "a " + notice.getProduct())
+                    + " policy that is " + notice.getPolicyStatus() + ": bulk notice " + notice.getRef() + " requested by "
+                    + notice.getRequestedBy() + ", approved by " + user.getUsername(), MessagePurposes.OPERATIONAL_NOTICE);
             route(message, customer, template.getChannel());
             save(message);
+            trail.requested(message, user.getUsername(), null);
             if (CommunicationMessage.SUPPRESSED.equals(message.getStatus())) {
                 suppressed++;
             } else {
@@ -490,6 +850,9 @@ public class CommunicationService {
             }
         }
         notice.sent(queued, suppressed, user.getUsername());
+        audit.record(user.getUsername(), "Bulk notice approved", "Bulk notice", notice.getRef(),
+                "Requested by " + notice.getRequestedBy() + ": " + notice.getReason() + "; " + queued + " queued, "
+                        + suppressed + " suppressed");
         return bulkView(notice);
     }
 
@@ -498,6 +861,8 @@ public class CommunicationService {
         AppUser user = user("APPROVE_TEMPLATE");
         BulkNotice notice = pendingNotice(ref);
         notice.rejected(user.getUsername());
+        audit.record(user.getUsername(), "Bulk notice rejected", "Bulk notice", notice.getRef(),
+                "Requested by " + notice.getRequestedBy() + ": " + notice.getReason());
         return bulkView(notice);
     }
 

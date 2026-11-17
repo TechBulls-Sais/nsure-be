@@ -109,12 +109,19 @@ class CommunicationApiTest {
         }
         assertThat(messagesFor(policy)).hasSize(3);
 
+        // NS-SH09B-004: the provider's acceptance is not delivery; delivery comes from its report (next run).
         mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.delivered").isNumber());
+                .andExpect(jsonPath("$.accepted").value(org.hamcrest.Matchers.greaterThanOrEqualTo(2)));
+        messages = messagesFor(policy);
+        assertThat(one(messages, "POLICY_ISSUED_EMAIL").get("status")).isEqualTo("ACCEPTED");
+        assertThat((String) one(messages, "POLICY_ISSUED_EMAIL").get("providerMessageId")).startsWith("EML-");
+        assertThat((String) one(messages, "POLICY_ISSUED_EMAIL").get("deliveredAt")).isEmpty();
+        mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.delivered").value(org.hamcrest.Matchers.greaterThanOrEqualTo(2)));
         messages = messagesFor(policy);
         assertThat(one(messages, "POLICY_ISSUED_EMAIL").get("status")).isEqualTo("DELIVERED");
-        assertThat((String) one(messages, "POLICY_ISSUED_EMAIL").get("providerMessageId")).startsWith("EML-");
         assertThat(one(messages, "PREMIUM_RECEIVED_EMAIL").get("status")).isEqualTo("DELIVERED");
         assertThat(one(messages, "POLICY_ISSUED_WHATSAPP").get("status")).isEqualTo("SUPPRESSED");
         mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
@@ -166,6 +173,8 @@ class CommunicationApiTest {
 
         mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
                 .andExpect(status().isOk());
+        mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
+                .andExpect(status().isOk());
         messages = messagesFor(policy);
         assertThat(one(messages, "POLICY_ISSUED_WHATSAPP").get("status")).isEqualTo("DELIVERED");
         assertThat(one(messages, "POLICY_ISSUED_EMAIL").get("status")).isEqualTo("SUPPRESSED");
@@ -200,6 +209,23 @@ class CommunicationApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("QUEUED"));
 
+        // D-23 / AT-SH09B-02: once the customer opts out of WhatsApp, a new send is suppressed with the reason.
+        mockMvc.perform(json(put("/communications/preferences/" + ref), "service",
+                        "{\"channel\":\"WHATSAPP\",\"status\":\"OPTED_OUT\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.channels[1].deliverable").value(false));
+        mockMvc.perform(json(post("/communications/messages"), "service", whatsapp))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUPPRESSED"))
+                .andExpect(jsonPath("$.lastError").value("Customer opted out of WhatsApp messages."));
+        // The opt-out is checked before the 24-hour window, so it shows even when the window has closed.
+        jdbc.update("update com_inbound set received_at = ? where customer_ref = ?",
+                java.sql.Timestamp.valueOf(java.time.LocalDateTime.now().minusDays(3)), ref);
+        mockMvc.perform(json(post("/communications/messages"), "service", whatsapp))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUPPRESSED"))
+                .andExpect(jsonPath("$.lastError").value("Customer opted out of WhatsApp messages."));
+
         mockMvc.perform(get("/communications/messages?status=SUPPRESSED").with(signedIn("ops", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].status").value("SUPPRESSED"));
@@ -227,6 +253,16 @@ class CommunicationApiTest {
 
         mockMvc.perform(get("/communications/messages?status=FAILED").with(signedIn("service", "password")))
                 .andExpect(jsonPath("$[?(@.id == " + id + ")].status").value("FAILED"));
+        // SH09B-EVENTS: landing in the failed queue publishes MessageFailed (references only).
+        assertThat(eventsFor(Events.MESSAGE_FAILED, (String) email.get("ref"))).hasSize(1)
+                .allSatisfy(payload -> assertThat(payload).contains("\"purpose\":\"POLICY_ISSUANCE\"")
+                        .doesNotContain("@example.com"));
+        // The failed queue has owners: one person takes a message, another is told who has it.
+        mockMvc.perform(json(post("/communications/messages/" + id + "/owner"), "service", "{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.owner").value("service"));
+        mockMvc.perform(json(post("/communications/messages/" + id + "/owner"), "admin", "{}"))
+                .andExpect(status().isConflict());
         mockMvc.perform(post("/communications/messages/" + id + "/retry").with(signedIn("ops", "password")))
                 .andExpect(status().isForbidden());
         mockMvc.perform(post("/communications/messages/" + id + "/retry").with(signedIn("service", "password")))
@@ -306,7 +342,269 @@ class CommunicationApiTest {
                 .andExpect(status().isUnprocessableEntity());
     }
 
+    /** D-22: an approved template is withdrawn without a replacement, with a reason and a second person. */
+    @Test
+    void anApprovedTemplateIsWithdrawnWithAReasonAndASecondPerson() throws Exception {
+        String drafted = mockMvc.perform(json(post("/communications/templates"), "service",
+                        "{\"code\":\"CLAIM_REJECTED_EMAIL_D22\",\"eventType\":\"ClaimRejected\",\"channel\":\"EMAIL\","
+                                + "\"subject\":\"Claim {{claimRef}}\",\"body\":\"Dear {{customerName}}, see {{portalLink}}\"}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Number id = JsonPath.read(drafted, "$.id");
+        String path = "/communications/templates/" + id;
+
+        // A draft cannot be withdrawn: it is not in use.
+        mockMvc.perform(json(post(path + "/withdraw"), "service", "{\"reason\":\"Wrong wording for this event\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(post(path + "/approve").with(signedIn("ops", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"));
+
+        // A reason is required; the customer never reaches it.
+        mockMvc.perform(json(post(path + "/withdraw"), "service", "{\"reason\":\"short\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post(path + "/withdraw"), "customer", "{\"reason\":\"Wrong wording for this event\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post(path + "/withdraw"), "service", "{\"reason\":\"Wrong wording for this event\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.withdrawalRequestedBy").value("service"))
+                .andExpect(jsonPath("$.withdrawalReason").value("Wrong wording for this event"));
+        mockMvc.perform(json(post(path + "/withdraw"), "service", "{\"reason\":\"Wrong wording for this event\"}"))
+                .andExpect(status().isConflict());
+        // The requester cannot confirm (service lacks APPROVE_TEMPLATE; admin asking and confirming is refused too).
+        mockMvc.perform(post(path + "/withdraw/approve").with(signedIn("service", "password")))
+                .andExpect(status().isForbidden());
+        // Declined: still approved, the request cleared.
+        mockMvc.perform(post(path + "/withdraw/decline").with(signedIn("ops", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.withdrawalRequestedBy").value(""));
+
+        mockMvc.perform(json(post(path + "/withdraw"), "admin", "{\"reason\":\"Sends the wrong appeal address\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(post(path + "/withdraw/approve").with(signedIn("admin", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post(path + "/withdraw/approve").with(signedIn("ops", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("WITHDRAWN"))
+                .andExpect(jsonPath("$.withdrawnBy").value("ops"))
+                .andExpect(jsonPath("$.withdrawalReason").value("Sends the wrong appeal address"));
+        mockMvc.perform(post(path + "/withdraw/approve").with(signedIn("ops", "password")))
+                .andExpect(status().isConflict());
+        assertThat(jdbc.queryForObject("select count(*) from audit_evidence where entity_ref = ?", Long.class,
+                "CLAIM_REJECTED_EMAIL_D22 v1")).isGreaterThanOrEqualTo(4L);
+
+        // A withdrawn version sends nothing: the event finds no approved template for the code.
+        DomainEvent event = new DomainEvent(java.util.UUID.randomUUID().toString(), Events.CLAIM_REJECTED, "CLM-D22",
+                java.util.UUID.randomUUID().toString(), java.time.LocalDateTime.now(),
+                mapper.readTree("{\"claimRef\":\"CLM-D22\",\"customerName\":\"Nobody D22\"}"));
+        tx.executeWithoutResult(status -> handler.handle(event));
+        assertThat(messagesFor("CLM-D22")).noneMatch(m -> "CLAIM_REJECTED_EMAIL_D22".equals(m.get("templateCode")));
+        // A new version can still be drafted for the code.
+        mockMvc.perform(json(post("/communications/templates"), "service",
+                        "{\"code\":\"CLAIM_REJECTED_EMAIL_D22\",\"subject\":\"Claim {{claimRef}}\",\"body\":\"Corrected\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(2));
+    }
+
+    /**
+     * AT-SH09B-01 / NS-SH09B-003: an issue event messages the customer and, through an approved intermediary template,
+     * the authorised agent servicing the policy, each once even after replay. The agent's message carries references
+     * only; an agent who is not active is suppressed with the reason.
+     */
+    @Test
+    void anIssueEventMessagesTheCustomerAndTheAuthorisedAgentOnceEvenAfterReplay() throws Exception {
+        // An intermediary template may use references only: an amount is refused at approval.
+        String risky = mockMvc.perform(json(post("/communications/templates"), "service",
+                        "{\"code\":\"POLICY_ISSUED_AGENT_RISKY\",\"eventType\":\"PolicyIssued\",\"channel\":\"EMAIL\","
+                                + "\"audience\":\"INTERMEDIARY\",\"subject\":\"{{policyRef}}\",\"body\":\"Premium {{premium}}\"}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        mockMvc.perform(post("/communications/templates/" + JsonPath.read(risky, "$.id") + "/approve")
+                        .with(signedIn("ops", "password")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("{{premium}}")));
+        String agentTemplate = mockMvc.perform(json(post("/communications/templates"), "service",
+                        "{\"code\":\"POLICY_ISSUED_AGENT_EMAIL\",\"eventType\":\"PolicyIssued\",\"channel\":\"EMAIL\","
+                                + "\"audience\":\"INTERMEDIARY\",\"subject\":\"Policy {{policyRef}} issued\","
+                                + "\"body\":\"Dear {{intermediaryName}}, {{customerName}}'s {{product}} policy {{policyRef}}"
+                                + " is issued. Details in the partner portal: {{portalLink}}\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.knownFields").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasItem("premium"))))
+                .andReturn().getResponse().getContentAsString();
+        mockMvc.perform(post("/communications/templates/" + JsonPath.read(agentTemplate, "$.id") + "/approve")
+                        .with(signedIn("ops", "password")))
+                .andExpect(status().isOk());
+
+        customer("Lorato Agentless", "loratoa");
+        String policy = buyAndPay("loratoa");
+        intermediary("INT-AGT01", "Kgosi Brokers", "ACTIVE", "kgosi.brokers@example.com");
+        assign(policy, "INT-AGT01");
+        outbox.dispatch();
+        outbox.dispatch();
+
+        List<Map<String, Object>> messages = messagesFor(policy);
+        Map<String, Object> agent = one(messages, "POLICY_ISSUED_AGENT_EMAIL");
+        assertThat(agent.get("recipientRole")).isEqualTo("INTERMEDIARY");
+        assertThat(agent.get("recipientName")).isEqualTo("Kgosi Brokers");
+        assertThat(agent.get("customerRef")).isEqualTo("");
+        assertThat(agent.get("status")).isEqualTo("QUEUED");
+        assertThat(agent.get("contact")).isEqualTo("kg***@example.com");
+        assertThat((String) agent.get("recipientBasis")).contains("Intermediary servicing policy " + policy, "INT-AGT01");
+        assertThat((String) agent.get("body")).contains("Kgosi Brokers", "Lorato Agentless", policy).doesNotContain("BWP");
+        Map<String, Object> customerMessage = one(messages, "POLICY_ISSUED_EMAIL");
+        assertThat(customerMessage.get("recipientRole")).isEqualTo("CUSTOMER");
+        assertThat((String) customerMessage.get("recipientBasis")).contains("Customer named on PolicyIssued");
+        int count = messages.size();
+
+        // Replaying the issue event creates nothing new for either recipient.
+        replay(policy);
+        assertThat(messagesFor(policy)).hasSize(count);
+
+        // An agent who is not active is not messaged: the message is kept as suppressed with the reason.
+        customer("Mpho Suspended", "mphos");
+        String second = buyAndPay("mphos");
+        intermediary("INT-AGT02", "Lapsed Agency", "SUSPENDED", "lapsed@example.com");
+        assign(second, "INT-AGT02");
+        outbox.dispatch();
+        Map<String, Object> suspended = one(messagesFor(second), "POLICY_ISSUED_AGENT_EMAIL");
+        assertThat(suspended.get("status")).isEqualTo("SUPPRESSED");
+        assertThat((String) suspended.get("lastError")).contains("INT-AGT02 is SUSPENDED");
+        // A policy no intermediary services gets no agent message at all.
+        customer("Neo Direct", "neodirect");
+        String direct = buyAndPay("neodirect");
+        outbox.dispatch();
+        assertThat(messagesFor(direct)).noneMatch(m -> "POLICY_ISSUED_AGENT_EMAIL".equals(m.get("templateCode")));
+    }
+
+    /**
+     * NS-SH09B-004/007 and SH09B-EVENTS: each message keeps its trail (queued, submitted, accepted, delivered; staff
+     * actions; the provider's raw report), its purpose and why its recipient was chosen; the bus carries
+     * CommunicationRequested, MessageDelivered and InboundMessageReceived with references only. The workspace gets a
+     * template preview, a delivery dashboard and the customer's conversation; promotional templates are refused.
+     */
+    @Test
+    void messagesKeepTheirTrailAndPublishTheirEvents() throws Exception {
+        String ref = customer("Dineo Trail", "dineot");
+        String policy = buyAndPay("dineot");
+        outbox.dispatch();
+        Map<String, Object> email = one(messagesFor(policy), "POLICY_ISSUED_EMAIL");
+        String messageRef = (String) email.get("ref");
+        assertThat(email.get("purpose")).isEqualTo("POLICY_ISSUANCE");
+        assertThat(eventsFor(Events.COMMUNICATION_REQUESTED, messageRef)).hasSize(1)
+                .allSatisfy(payload -> assertThat(payload).contains("\"status\":\"QUEUED\"", "\"channel\":\"EMAIL\"")
+                        .doesNotContain("dineot@example.com", "Dear"));
+
+        mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")));
+        String providerId = (String) one(messagesFor(policy), "POLICY_ISSUED_EMAIL").get("providerMessageId");
+        String read = "{\"providerMessageId\":\"" + providerId + "\",\"status\":\"READ\",\"detail\":\"opened\"}";
+        callback("status", read).andExpect(jsonPath("$.status").value("READ"));
+        assertThat(eventsFor(Events.MESSAGE_DELIVERED, messageRef)).isEmpty();
+        mockMvc.perform(get("/communications/messages/" + email.get("id")).with(signedIn("ops", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message.recipientBasis").value(containsString(ref)))
+                .andExpect(jsonPath("$.trail[*].status").value(org.hamcrest.Matchers.contains("QUEUED", "SUBMITTED",
+                        "ACCEPTED", "READ")))
+                .andExpect(jsonPath("$.trail[3].source").value("PROVIDER"))
+                .andExpect(jsonPath("$.trail[3].rawPayload").value(read));
+
+        // A message delivered by the provider's report publishes MessageDelivered.
+        Map<String, Object> receipt = one(messagesFor(policy), "PREMIUM_RECEIVED_EMAIL");
+        mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")));
+        assertThat(one(messagesFor(policy), "PREMIUM_RECEIVED_EMAIL").get("status")).isEqualTo("DELIVERED");
+        assertThat(eventsFor(Events.MESSAGE_DELIVERED, (String) receipt.get("ref"))).hasSize(1);
+
+        // An inbound reply publishes InboundMessageReceived without the sender or the text.
+        callback("inbound", "{\"providerMessageId\":\"trail-in-1\",\"channel\":\"EMAIL\",\"from\":\"dineot@example.com\","
+                + "\"text\":\"Thank you for the welcome letter\"}")
+                .andExpect(jsonPath("$.status").value("LINKED"));
+        List<String> inbound = jdbc.queryForList("select payload from int_outbox_event where event_type = ?",
+                String.class, Events.INBOUND_MESSAGE_RECEIVED);
+        assertThat(inbound).anySatisfy(payload -> assertThat(payload).contains("\"status\":\"LINKED\"", ref)
+                .doesNotContain("dineot@example.com", "welcome letter"));
+
+        // A manual reply on the case joins the customer's conversation timeline with the inbound message.
+        String caseRef = jdbc.queryForObject("select case_ref from com_inbound where provider_message_id = 'trail-in-1'",
+                String.class);
+        mockMvc.perform(json(post("/communications/messages"), "service", "{\"customerRef\":\"" + ref
+                        + "\",\"channel\":\"EMAIL\",\"subject\":\"Re: your letter\",\"body\":\"You are welcome.\","
+                        + "\"caseRef\":\"" + caseRef + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.businessRef").value(caseRef))
+                .andExpect(jsonPath("$.purpose").value("SERVICE_UPDATE"));
+        mockMvc.perform(get("/communications/conversations/" + ref).with(signedIn("ops", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.direction == 'IN')].caseRef").value(org.hamcrest.Matchers.hasItem(caseRef)))
+                .andExpect(jsonPath("$[?(@.direction == 'OUT' && @.caseRef == '" + caseRef + "')].subject")
+                        .value(org.hamcrest.Matchers.hasItem("Re: your letter")));
+        mockMvc.perform(json(post("/communications/messages"), "service", "{\"customerRef\":\"" + ref
+                        + "\",\"channel\":\"EMAIL\",\"subject\":\"x\",\"body\":\"y\",\"caseRef\":\"SR-999999\"}"))
+                .andExpect(status().isUnprocessableEntity());
+
+        // Staff actions are in the evidence chain.
+        assertThat(jdbc.queryForObject("select count(*) from audit_evidence where action = 'Service message written'"
+                + " and actor = 'service'", Long.class)).isPositive();
+
+        // The delivery dashboard counts per channel over the period.
+        mockMvc.perform(get("/communications/metrics?days=7").with(signedIn("ops", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.channels[0].channel").value("EMAIL"))
+                .andExpect(jsonPath("$.channels[0].delivered").value(org.hamcrest.Matchers.greaterThanOrEqualTo(2)))
+                .andExpect(jsonPath("$.byDay.length()").value(7));
+
+        // The template designer previews with sample values and flags fields the audience may not use.
+        mockMvc.perform(json(post("/communications/templates/preview"), "service", "{\"eventType\":\"ClaimPaid\","
+                        + "\"audience\":\"INTERMEDIARY\",\"subject\":\"{{claimRef}}\",\"body\":\"Paid {{amount}} to {{customerName}}\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.subject").value("CLM-000045"))
+                .andExpect(jsonPath("$.unknownFields").value(org.hamcrest.Matchers.contains("amount")))
+                .andExpect(jsonPath("$.purpose").value("CLAIM_PROGRESS"));
+        // Promotional campaigns are a separate purpose that is not available.
+        mockMvc.perform(json(post("/communications/templates"), "service", "{\"code\":\"SUMMER_PROMO\","
+                        + "\"eventType\":\"OperationalNotice\",\"channel\":\"EMAIL\",\"purpose\":\"PROMOTIONAL\","
+                        + "\"subject\":\"Offer\",\"body\":\"Buy more cover\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("Promotional")));
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────────
+
+    /** The payloads of the outbox events of a type for an aggregate. */
+    private List<String> eventsFor(String type, String aggregateRef) {
+        return jdbc.queryForList("select payload from int_outbox_event where event_type = ? and aggregate_ref = ?",
+                String.class, type, aggregateRef);
+    }
+
+    private void intermediary(String ref, String name, String status, String emailAddress) {
+        jdbc.update("insert into dist_intermediary (record_ref, name, intermediary_type, licence_number, status,"
+                + " appointment_expiry, email, mobile, created_by, created_at, updated_by, updated_at)"
+                + " values (?, ?, 'BROKER', ?, ?, ?, ?, '+267 72 555 100', 'test', ?, 'test', ?)", ref, name, "LIC-" + ref,
+                status, java.sql.Date.valueOf(java.time.LocalDate.now().plusYears(1)), emailAddress,
+                java.sql.Timestamp.valueOf(java.time.LocalDateTime.now()), java.sql.Timestamp.valueOf(java.time.LocalDateTime.now()));
+    }
+
+    private void assign(String policy, String intermediary) {
+        jdbc.update("insert into dist_policy_assignment (policy_ref, open_policy_ref, intermediary_id, effective_from,"
+                + " assigned_by, assigned_at) select ?, ?, id, ?, 'test', ? from dist_intermediary where record_ref = ?",
+                policy, policy, java.sql.Date.valueOf(java.time.LocalDate.now()),
+                java.sql.Timestamp.valueOf(java.time.LocalDateTime.now()), intermediary);
+    }
+
+    /** Hands the policy's events straight to the communications handler again, as a replay would. */
+    private void replay(String policy) throws Exception {
+        List<OutboxEvent> events = tx.execute(status -> em.createQuery(
+                        "select e from OutboxEvent e where e.aggregateRef = :ref", OutboxEvent.class)
+                .setParameter("ref", policy).getResultList());
+        for (OutboxEvent event : events) {
+            if (handler.eventTypes().contains(event.getEventType())) {
+                DomainEvent domainEvent = new DomainEvent(event.getEventId(), event.getEventType(),
+                        event.getAggregateRef(), event.getCorrelationId(), event.getOccurredAt(),
+                        mapper.readTree(event.getPayload()));
+                tx.executeWithoutResult(status -> handler.handle(domainEvent));
+            }
+        }
+    }
 
     private String customer(String name, String username) throws Exception {
         return customer(name, username, "+267 71 000 001");
@@ -371,7 +669,7 @@ class CommunicationApiTest {
         mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
                 .andExpect(status().isOk());
         Map<String, Object> issued = one(messagesFor(policy), "POLICY_ISSUED_EMAIL");
-        assertThat(issued.get("status")).isEqualTo("DELIVERED");
+        assertThat(issued.get("status")).isEqualTo("ACCEPTED");
         String providerId = (String) issued.get("providerMessageId");
 
         // Status callbacks: signed only; states move forward; late or repeated callbacks change nothing.
@@ -417,14 +715,34 @@ class CommunicationApiTest {
                 .andReturn().getResponse().getContentAsString();
         Integer triageId = JsonPath.<List<Integer>>read(triage, "$[*].id").get(0);
         assertThat(JsonPath.read(unknown, "$.caseRef") == null).isTrue();
-        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "ops", "{\"customerRef\":\"" + ref + "\"}"))
+        // AT-SH09B-03: an unverified sender is a verification task with a due time; nothing is linked or disclosed.
+        assertThat(JsonPath.<List<String>>read(triage, "$[*].verificationStatus")).containsOnly("REQUIRED");
+        assertThat(JsonPath.<List<String>>read(triage, "$[*].taskDueAt")).allSatisfy(due -> assertThat(due).isNotBlank());
+        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/owner"), "service", "{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.taskOwner").value("service"));
+        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/owner"), "admin", "{}"))
+                .andExpect(status().isConflict());
+        String verified = "{\"customerRef\":\"" + ref + "\",\"method\":\"Called back on the registered number\","
+                + "\"note\":\"Confirmed she wrote from a work address\"}";
+        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "ops", verified))
                 .andExpect(status().isForbidden());
+        // Linking needs a recorded verification method.
         mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "service", "{\"customerRef\":\"" + ref + "\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("verified the sender")));
+        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "service", verified))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("LINKED"))
-                .andExpect(jsonPath("$.handledBy").value("service"));
-        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "service", "{\"customerRef\":\"" + ref + "\"}"))
+                .andExpect(jsonPath("$.handledBy").value("service"))
+                .andExpect(jsonPath("$.verificationStatus").value("VERIFIED"))
+                .andExpect(jsonPath("$.verificationMethod").value("Called back on the registered number"));
+        mockMvc.perform(json(post("/communications/inbound/" + triageId + "/assign"), "service", verified))
                 .andExpect(status().isConflict());
+        assertThat(jdbc.queryForObject("select count(*) from audit_evidence where action = 'Inbound sender verified'",
+                Long.class)).isEqualTo(1L);
+        mockMvc.perform(get("/communications/inbound/verification-methods").with(signedIn("ops", "password")))
+                .andExpect(jsonPath("$.length()").value(4));
 
         // A bulk operational notice is requested by one person and released by another.
         String templates = mockMvc.perform(get("/communications/templates").with(signedIn("ops", "password")))
