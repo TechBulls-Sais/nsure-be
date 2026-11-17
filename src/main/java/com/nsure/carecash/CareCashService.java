@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.nsure.audit.evidence.EvidenceChain;
 import com.nsure.common.Money;
 import com.nsure.common.exception.ConflictException;
+import com.nsure.common.exception.InvalidFieldException;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.integration.Events;
 import com.nsure.integration.Outbox;
@@ -249,7 +250,8 @@ public class CareCashService {
         String method = text(body, "payoutMethod");
         String account = text(body, "accountRef");
         if (payee == null || method == null || account == null) {
-            throw new IllegalArgumentException("Give the payee, the payout method and the account or wallet number.");
+            throw new InvalidFieldException(method == null ? "payoutMethod" : account == null ? "accountRef" : "payeeName",
+                    "Give the payee, the payout method and the account or wallet number.");
         }
         if (payee.length() > 150 || method.length() > 40 || account.length() > 60) {
             throw new IllegalArgumentException("The payee details are too long.");
@@ -343,18 +345,18 @@ public class CareCashService {
         String type = upper(text(body, "eventType"));
         String cause = upper(text(body, "cause"));
         if (type == null || !TYPES.contains(type)) {
-            throw new IllegalArgumentException("eventType must be ADMISSION, DAY_CASE, MATERNITY or ACCIDENTAL_DEATH.");
+            throw new InvalidFieldException("eventType", "eventType must be ADMISSION, DAY_CASE, MATERNITY or ACCIDENTAL_DEATH.");
         }
         cause = cause == null ? "ILLNESS" : cause;
         if (!Set.of("ILLNESS", "ACCIDENT").contains(cause)) {
-            throw new IllegalArgumentException("cause must be ILLNESS or ACCIDENT.");
+            throw new InvalidFieldException("cause", "cause must be ILLNESS or ACCIDENT.");
         }
         String life = text(body, "lifeName") == null ? p.getCustomerName() : text(body, "lifeName");
         if (text(body, "admitDate") == null) {
-            throw new IllegalArgumentException("admitDate is required.");
+            throw new InvalidFieldException("admitDate", "admitDate is required.");
         }
-        LocalDate admit = LocalDate.parse(text(body, "admitDate"));
-        LocalDate discharge = text(body, "dischargeDate") == null ? admit : LocalDate.parse(text(body, "dischargeDate"));
+        LocalDate admit = date(body, "admitDate");
+        LocalDate discharge = text(body, "dischargeDate") == null ? admit : date(body, "dischargeDate");
         if (discharge.isBefore(admit) || admit.isAfter(LocalDate.now())) {
             throw new IllegalArgumentException("Check the dates: discharge cannot be before admission, and the"
                     + " admission cannot be in the future.");
@@ -563,6 +565,15 @@ public class CareCashService {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo(permission);
         return user;
+    }
+
+    /** A date field, or a 400 naming the field (NS-API-001). */
+    private static LocalDate date(JsonNode body, String field) {
+        try {
+            return LocalDate.parse(text(body, field));
+        } catch (java.time.format.DateTimeParseException ex) {
+            throw new InvalidFieldException(field, field + " must be a date like 2026-04-12.");
+        }
     }
 
     private static String upper(String v) {

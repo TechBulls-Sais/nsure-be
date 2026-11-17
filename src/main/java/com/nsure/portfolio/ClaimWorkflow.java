@@ -1032,7 +1032,8 @@ public class ClaimWorkflow {
         try {
             date = LocalDate.parse(required(value, "eventDate"));
         } catch (DateTimeParseException e) {
-            throw new IllegalArgumentException("Date of the event must be a date like 2026-04-12.");
+            throw new com.nsure.common.exception.InvalidFieldException("eventDate",
+                    "Date of the event must be a date like 2026-04-12.");
         }
         if (date.isAfter(LocalDate.now())) {
             throw new IllegalArgumentException("The date of the event cannot be in the future");
@@ -1042,7 +1043,7 @@ public class ClaimWorkflow {
 
     private static String required(String value, String field) {
         if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException(field + " is required");
+            throw new com.nsure.common.exception.InvalidFieldException(field, field + " is required");
         }
         return value.trim();
     }

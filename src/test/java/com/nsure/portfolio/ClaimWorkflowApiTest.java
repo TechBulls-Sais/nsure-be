@@ -238,6 +238,16 @@ class ClaimWorkflowApiTest {
         mockMvc.perform(json(post("/portfolio/shop/claims"), "dikeledi", lodgement(policy, "Dikeledi Sebina", -2)))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("The date of the event cannot be in the future"));
+        // NS-API-001: a missing or malformed field is a 400 naming it; a future date above is a business rule (422).
+        mockMvc.perform(json(post("/portfolio/claims"), "assessor", lodgement(policy, "Dikeledi Sebina", 1)
+                        .replace("\"claimantMobile\":\"+267 72 000 000\",", "")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("claimantMobile"));
+        mockMvc.perform(json(post("/portfolio/claims"), "assessor", lodgement(policy, "Dikeledi Sebina", 1)
+                        .replaceAll("\"eventDate\":\"[0-9-]+\"", "\"eventDate\":\"12/04/2026\"")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("eventDate"));
         mockMvc.perform(json(post("/portfolio/claims"), "onboarding", lodgement(policy, "Dikeledi Sebina", 1)))
                 .andExpect(status().isForbidden());
     }
@@ -312,9 +322,12 @@ class ClaimWorkflowApiTest {
                     .andExpect(status().isForbidden())
                     .andExpect(jsonPath("$.message").value("This payout of P 45,000.00 exceeds your approval limit of "
                             + "P 10,000.00. It needs a more senior approver."));
+            // NS-API-001: a malformed field is a 400 schema error naming the field, not a business rule refusal.
             mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":\"ten\"}"))
-                    .andExpect(status().isUnprocessableEntity())
-                    .andExpect(jsonPath("$.message").value("Payout amount must be a number"));
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.message").value("Payout amount must be a number"))
+                    .andExpect(jsonPath("$.fieldErrors[0].field").value("payoutAmount"));
             mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":9000," + EVIDENCE + "}"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.status").value("Approved"))

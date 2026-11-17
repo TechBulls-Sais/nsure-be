@@ -80,6 +80,12 @@ public class ApiExceptionHandler {
      * A business rule refused the request (NS-API-001): 422. A malformed request (unreadable JSON, a parameter of
      * the wrong type, a missing parameter or file) is 400, below.
      */
+    /** A missing or malformed body field (NS-API-001 schema error): 400 with the field named in fieldErrors. */
+    @ExceptionHandler(InvalidFieldException.class)
+    public ResponseEntity<ApiError> invalidField(InvalidFieldException ex) {
+        return invalid(ex.getField(), ex.getMessage());
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ApiError> businessRule(IllegalArgumentException ex) {
         return problem(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage());

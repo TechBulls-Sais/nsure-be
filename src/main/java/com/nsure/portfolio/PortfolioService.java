@@ -1128,11 +1128,12 @@ public class PortfolioService {
         try {
             amount = value.isNumber() ? value.decimalValue() : new BigDecimal(value.asText().trim());
         } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException("Payout amount must be a number");
+            throw new com.nsure.common.exception.InvalidFieldException("payoutAmount", "Payout amount must be a number");
         }
         // Pula and thebe (NS-DAT-003): more than two decimal places is not an amount of money.
         if (amount.stripTrailingZeros().scale() > 2) {
-            throw new IllegalArgumentException("Payout amount can have at most two decimal places");
+            throw new com.nsure.common.exception.InvalidFieldException("payoutAmount",
+                    "Payout amount can have at most two decimal places");
         }
         return amount.setScale(2, RoundingMode.UNNECESSARY);
     }

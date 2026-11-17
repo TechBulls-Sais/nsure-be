@@ -321,7 +321,8 @@ class ReinsuranceApiTest {
 
         mockMvc.perform(json(post("/reinsurance/bordereaux"), "reinsurance",
                         "{\"treatyRef\":\"TRT-00001\",\"period\":\"2026-13\"}"))
-                .andExpect(status().isUnprocessableEntity());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("period"));
         mockMvc.perform(json(post("/reinsurance/bordereaux"), "reinsurance",
                         "{\"treatyRef\":\"TRT-00001\",\"period\":\"" + YearMonth.now().plusMonths(1) + "\"}"))
                 .andExpect(status().isUnprocessableEntity());

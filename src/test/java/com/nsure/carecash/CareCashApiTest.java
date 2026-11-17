@@ -37,6 +37,14 @@ class CareCashApiTest {
         double daily = ((Number) JsonPath.read(mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.dailyBenefit")).doubleValue();
 
+        // NS-API-001: a malformed date is a 400 naming the field (it used to fail as a server error).
+        mockMvc.perform(json(post(base + "/assessment"), "admin", "{\"eventType\":\"ADMISSION\",\"admitDate\":\"yesterday\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("admitDate"));
+        mockMvc.perform(json(post(base + "/assessment"), "admin", "{\"eventType\":\"SPA\",\"admitDate\":\"2026-01-01\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("eventType"));
+
         // One night does not qualify; two do, and are paid from day one.
         mockMvc.perform(json(post(base + "/assessment"), "admin", event("ADMISSION", "ILLNESS", 11, 10, 0, false)))
                 .andExpect(jsonPath("$.amount").value(0.0))

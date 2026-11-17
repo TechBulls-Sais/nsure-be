@@ -2,6 +2,7 @@ package com.nsure.reinsurance;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.nsure.common.exception.ConflictException;
+import com.nsure.common.exception.InvalidFieldException;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.integration.Events;
 import com.nsure.integration.Outbox;
@@ -188,7 +189,7 @@ public class ReinsuranceService {
         try {
             month = YearMonth.parse(period);
         } catch (DateTimeParseException ex) {
-            throw new IllegalArgumentException("period must be a month (yyyy-MM).");
+            throw new InvalidFieldException("period", "period must be a month (yyyy-MM).");
         }
         List<Bordereau> existing = em.createQuery("select b from Bordereau b join fetch b.treaty"
                         + " where b.treaty = :treaty and b.period = :period", Bordereau.class)
@@ -349,11 +350,11 @@ public class ReinsuranceService {
 
     private static String required(JsonNode body, String field, int max) {
         if (body == null || !body.hasNonNull(field) || body.get(field).asText().isBlank()) {
-            throw new IllegalArgumentException(field + " is required.");
+            throw new InvalidFieldException(field, field + " is required.");
         }
         String value = body.get(field).asText().trim();
         if (value.length() > max) {
-            throw new IllegalArgumentException(field + " must be at most " + max + " characters.");
+            throw new InvalidFieldException(field, field + " must be at most " + max + " characters.");
         }
         return value;
     }
@@ -363,7 +364,7 @@ public class ReinsuranceService {
         try {
             return new BigDecimal(value);
         } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException(field + " must be a number.");
+            throw new InvalidFieldException(field, field + " must be a number.");
         }
     }
 
@@ -371,7 +372,7 @@ public class ReinsuranceService {
         try {
             return LocalDate.parse(required(body, field, 10));
         } catch (DateTimeParseException ex) {
-            throw new IllegalArgumentException(field + " must be a date (yyyy-MM-dd).");
+            throw new InvalidFieldException(field, field + " must be a date (yyyy-MM-dd).");
         }
     }
 

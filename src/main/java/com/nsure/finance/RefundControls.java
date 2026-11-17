@@ -68,7 +68,8 @@ public class RefundControls {
         try {
             amount = new BigDecimal(text(body, "amount", "")).setScale(2, RoundingMode.UNNECESSARY);
         } catch (NumberFormatException | ArithmeticException ex) {
-            throw new IllegalArgumentException("amount must be an amount of money, e.g. 250.00.");
+            throw new com.nsure.common.exception.InvalidFieldException("amount",
+                    "amount must be an amount of money, e.g. 250.00.");
         }
         return view(raise(source, text(body, "sourceRef", null), text(body, "policyRef", null),
                 text(body, "payeeName", null), text(body, "payoutMethod", null), text(body, "accountRef", null), amount,
