@@ -11,7 +11,9 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.springframework.core.Ordered;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -122,14 +124,37 @@ public class EvidenceChain {
 
     /** Recent evidence, newest first, optionally for one record or one actor. */
     public List<AuditEvidence> search(String entityType, String entityRef, String actor, int limit) {
-        return separate.execute(status -> em.createQuery("select e from AuditEvidence e"
-                        + " where (:type is null or e.entityType = :type) and (:ref is null or e.entityRef = :ref)"
-                        + " and (:actor is null or e.actor = :actor) order by e.sequenceNo desc", AuditEvidence.class)
-                .setParameter("type", blankToNull(entityType))
-                .setParameter("ref", blankToNull(entityRef))
-                .setParameter("actor", blankToNull(actor))
-                .setMaxResults(Math.max(1, Math.min(limit, 500)))
-                .getResultList());
+        return search(entityType, entityRef, actor, null, null, limit, 500);
+    }
+
+    /**
+     * Evidence newest first, filtered by record type and reference, actor and a time window (from inclusive, to
+     * exclusive); at most {@code limit}, capped at {@code max}.
+     */
+    public List<AuditEvidence> search(String entityType, String entityRef, String actor, LocalDateTime from,
+            LocalDateTime to, int limit, int max) {
+        List<String> where = new ArrayList<>();
+        Map<String, Object> params = new LinkedHashMap<>();
+        filter(where, params, "e.entityType = :type", "type", blankToNull(entityType));
+        filter(where, params, "e.entityRef = :ref", "ref", blankToNull(entityRef));
+        filter(where, params, "e.actor = :actor", "actor", blankToNull(actor));
+        filter(where, params, "e.occurredAt >= :from", "from", from);
+        filter(where, params, "e.occurredAt < :to", "to", to);
+        String jpql = "select e from AuditEvidence e" + (where.isEmpty() ? "" : " where " + String.join(" and ", where))
+                + " order by e.sequenceNo desc";
+        return separate.execute(status -> {
+            var query = em.createQuery(jpql, AuditEvidence.class);
+            params.forEach(query::setParameter);
+            return query.setMaxResults(Math.max(1, Math.min(limit, max))).getResultList();
+        });
+    }
+
+    private static void filter(List<String> where, Map<String, Object> params, String clause, String name,
+            Object value) {
+        if (value != null) {
+            where.add(clause);
+            params.put(name, value);
+        }
     }
 
     private void append(List<Pending> pending) {

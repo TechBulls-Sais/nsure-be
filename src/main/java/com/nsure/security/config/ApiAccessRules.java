@@ -197,11 +197,12 @@ public final class ApiAccessRules {
             rule(GET, "/audits", anyOf("READ_AUDIT")),
             rule(GET, "/audits/*", anyOf("READ_AUDIT")),
             rule(GET, "/audits/evidence/verify", anyOf("READ_AUDIT")),
+            rule(GET, "/audits/evidence/export", anyOf("READ_AUDIT")),
             // The service then needs CHECKER_<code of the pending command>, and the checker is never the maker.
-            rule(POST, "/audits/*/approve", anyOf(
-                    "CHECKER_UPDATE_USER", "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
-            rule(POST, "/audits/*/reject", anyOf(
-                    "CHECKER_UPDATE_USER", "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
+            rule(POST, "/audits/*/approve", anyOf("CHECKER_CREATE_USER", "CHECKER_UPDATE_USER", "CHECKER_DELETE_USER",
+                    "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
+            rule(POST, "/audits/*/reject", anyOf("CHECKER_CREATE_USER", "CHECKER_UPDATE_USER", "CHECKER_DELETE_USER",
+                    "CHECKER_UPDATE_ROLE", "CHECKER_PERMISSIONS_ROLE")),
 
             // ── emergency access (Nsure Life NS-SH11-003) ──────────────────────────────────────────────
             // Time-limited break-glass grants: an identity administrator grants or revokes, Compliance reviews.
