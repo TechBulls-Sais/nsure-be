@@ -250,6 +250,11 @@ public final class ApiAccessRules {
             rule(POST, "/finance/suspense/*/clearance", anyOf("MANAGE_FINANCE")),
             rule(POST, "/finance/suspense/*/clearance/approve", anyOf("APPROVE_JOURNAL")),
             rule(POST, "/finance/suspense/*/clearance/reject", anyOf("APPROVE_JOURNAL")),
+            // AT-SH10-01 controlled refunds: raised by one person, approved by another (never the maker).
+            rule(GET, "/finance/refunds", anyOf("READ_FINANCE")),
+            rule(POST, "/finance/refunds", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/finance/refunds/*/approve", anyOf("APPROVE_JOURNAL")),
+            rule(POST, "/finance/refunds/*/reject", anyOf("APPROVE_JOURNAL")),
 
             // ── distribution and commissions SH06 (Distribution Administrator) ─────────────────────────
             rule(GET, "/distribution/**", anyOf("READ_DISTRIBUTION")),

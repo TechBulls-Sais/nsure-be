@@ -245,3 +245,6 @@ databaseChangeLog:
   - include:
       file: changes/088-idempotency-and-operations.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/089-controlled-refunds.yaml
+      relativeToChangelogFile: true

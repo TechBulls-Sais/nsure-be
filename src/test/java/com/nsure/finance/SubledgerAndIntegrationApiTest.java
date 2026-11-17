@@ -457,6 +457,47 @@ class SubledgerAndIntegrationApiTest {
         return JsonPath.<List<Integer>>read(suspense, "$[?(@.providerRef == '" + providerRef + "')].id").get(0);
     }
 
+    /**
+     * AT-SH10-01: the maker of a controlled refund cannot approve it even holding every role (admin holds every code,
+     * the checker's included); a different checker approves and the refund settles once with RefundSettled.
+     */
+    @Test
+    void theMakerCannotApproveTheirOwnControlledRefund() throws Exception {
+        String body = "{\"source\":\"CREDIT_EARLY_SETTLEMENT\",\"sourceRef\":\"LN-REFUND-1\",\"policyRef\":\"POL-X\","
+                + "\"payeeName\":\"Mpho Borrower\",\"payoutMethod\":\"Bank Account\",\"accountRef\":\"62001111\","
+                + "\"amount\":\"340.50\",\"reason\":\"Unexpired premium after early loan settlement\"}";
+        mockMvc.perform(json(post("/finance/refunds"), "ops", body)).andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/finance/refunds"), "admin", body.replace("340.50", "-1")))
+                .andExpect(status().isUnprocessableEntity());
+        String raised = mockMvc.perform(json(post("/finance/refunds"), "admin", body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING_APPROVAL"))
+                .andExpect(jsonPath("$.requestedBy").value("admin"))
+                .andReturn().getResponse().getContentAsString();
+        String ref = JsonPath.read(raised, "$.ref");
+        // One refund per source record.
+        mockMvc.perform(json(post("/finance/refunds"), "admin", body)).andExpect(status().isConflict());
+
+        mockMvc.perform(json(post("/finance/refunds/" + ref + "/approve"), "admin", "{}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("You raised refund " + ref + "; someone else must approve it."));
+        mockMvc.perform(json(post("/finance/refunds/" + ref + "/reject"), "admin", "{\"note\":\"Changed my mind\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/finance/refunds/" + ref + "/approve"), "finance", "{}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/finance/refunds/" + ref + "/approve"), "secadmin", "{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SETTLED"))
+                .andExpect(jsonPath("$.decidedBy").value("secadmin"));
+        mockMvc.perform(json(post("/finance/refunds/" + ref + "/approve"), "secadmin", "{}"))
+                .andExpect(status().isConflict());
+        assertThat(eventPayloads("RefundSettled", ref)).singleElement().asString()
+                .contains("\"requestedBy\":\"admin\"").contains("\"approvedBy\":\"secadmin\"")
+                .contains("\"amount\":\"340.50\"");
+        mockMvc.perform(get("/finance/refunds").with(signedIn("finance", "password")))
+                .andExpect(jsonPath("$[?(@.ref == '" + ref + "')].status").value(org.hamcrest.Matchers.hasItem("SETTLED")));
+    }
+
     @Test
     void meListsModulePermissionsAndTheReportHasSections() throws Exception {
         mockMvc.perform(get("/me").with(signedIn("finance", "password")))

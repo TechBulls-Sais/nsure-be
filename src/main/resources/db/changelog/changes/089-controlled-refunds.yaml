@@ -1,0 +1,25 @@
+databaseChangeLog:
+  # AT-SH10-01: controlled refunds, raised by one person and approved (and paid) by another.
+  - changeSet:
+      id: 089-controlled-refunds
+      author: nsure
+      changes:
+        - createTable:
+            tableName: fin_refund
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_fin_refund}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_fin_refund_ref}}
+              - column: {name: source, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: source_ref, type: varchar(60)}
+              - column: {name: policy_ref, type: varchar(40)}
+              - column: {name: payee_name, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: payout_method, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: payout_account, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: datetime}
+              - column: {name: decision_note, type: varchar(500)}
