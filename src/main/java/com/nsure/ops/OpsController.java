@@ -84,9 +84,16 @@ public class OpsController {
         return ops.release(key);
     }
 
+    /** Filters: q (details and document text), customerRef, ownerRef (policy or claim), documentClass, from, to. */
     @GetMapping("/documents")
-    public Map<String, Object> documents(@RequestParam(required = false) String q) {
-        return ops.documents(q);
+    public Map<String, Object> documents(@RequestParam(required = false) String q,
+            @RequestParam(required = false) String customerRef, @RequestParam(required = false) String ownerRef,
+            @RequestParam(required = false) String documentClass,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate from,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate to) {
+        return ops.documents(q, customerRef, ownerRef, documentClass, from, to);
     }
 
     @PutMapping("/documents/hold")

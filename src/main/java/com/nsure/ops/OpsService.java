@@ -337,57 +337,95 @@ public class OpsService {
 
     // ── documents: register, scan status, retention, legal hold, search (NS-SH09A-004..006) ───────
 
-    /** Every policy and claim document, optionally filtered by a search term. */
-    @Transactional(readOnly = true)
-    public Map<String, Object> documents(String q) {
-        user("READ_POLICY");
+    /**
+     * The document register (NS-SH09A-005): policy documents for READ_POLICY holders, claim evidence (and uploads held
+     * in quarantine) for READ_CLAIM holders, so a search never shows a document its owning record would not. Indexed by
+     * customer (party), owning policy or claim, document class and date. {@code q} matches the file name, type, owner
+     * and customer, and the text of released and generated PDFs. Every search is logged as sensitive access.
+     */
+    @Transactional
+    public Map<String, Object> documents(String q, String customerRef, String ownerRef, String documentClass,
+            LocalDate from, LocalDate to) {
+        AppUser user = security.authenticatedUser();
+        boolean policies = user.hasPermissionTo("READ_POLICY");
+        boolean claims = user.hasPermissionTo("READ_CLAIM");
+        if (!policies && !claims) {
+            throw new NoAuthorizationException("User has no authority to read policy or claim documents");
+        }
         Map<String, Integer> retention = new LinkedHashMap<>();
         jdbc.query("select document_class, retain_years from doc_retention", rs -> {
             retention.put(rs.getString(1), rs.getInt(2));
         });
         Map<String, Map<String, Object>> controls = jdbc.query("select * from doc_control", ROW).stream()
                 .collect(Collectors.toMap(c -> (String) c.get("docKey"), c -> c));
-        List<Map<String, Object>> docs = new ArrayList<>();
-        for (Map<String, Object> d : jdbc.query("select d.id, d.document_type, d.file_name, d.status, d.uploaded_at,"
-                + " d.uploaded_by, p.record_ref as owner_ref, p.customer_name from ins_policy_document d join ins_policy p"
-                + " on p.id = d.policy_id", ROW)) {
-            d.put("docKey", "P:" + d.get("id"));
-            d.put("documentClass", "Policy document");
-            docs.add(d);
-        }
-        for (Map<String, Object> d : jdbc.query("select d.id, d.document_type, d.file_name, d.status, d.uploaded_at,"
-                + " d.uploaded_by, d.scan_status, c.record_ref as owner_ref, c.customer_name from ins_claim_document d"
-                + " join ins_claim c on c.id = d.claim_id", ROW)) {
-            d.put("docKey", "C:" + d.get("id"));
-            d.put("documentClass", "Claim evidence");
-            docs.add(d);
-        }
-        // Uploads still in quarantine, or refused: on record (and under retention) but not documents of the claim.
-        for (Map<String, Object> d : jdbc.query("select q.id, q.document_type, q.file_name, q.status, q.uploaded_at,"
-                + " q.uploaded_by, q.owner_ref, c.customer_name from doc_quarantine q join ins_claim c on c.id = q.owner_id"
-                + " where q.owner_kind = 'CLAIM' and q.status <> 'RELEASED'", ROW)) {
-            d.put("docKey", "U:" + d.get("id"));
-            d.put("documentClass", "Claim evidence");
-            d.put("scanStatus", "PENDING".equals(d.get("status")) ? DocumentIntake.QUARANTINED : DocumentIntake.REJECTED);
-            d.put("status", "PENDING".equals(d.get("status")) ? DocumentIntake.QUARANTINED : DocumentIntake.REJECTED);
-            docs.add(d);
-        }
         String term = q == null ? "" : q.trim().toLowerCase(Locale.ROOT);
+        List<Map<String, Object>> docs = new ArrayList<>();
+        if (policies) {
+            Set<Long> inText = contentMatches("ins_policy_document", term);
+            for (Map<String, Object> d : jdbc.query("select d.id, d.document_type, d.file_name, d.status, d.uploaded_at,"
+                    + " d.uploaded_by, p.record_ref as owner_ref, p.customer_ref, p.customer_name from ins_policy_document d"
+                    + " join ins_policy p on p.id = d.policy_id", ROW)) {
+                d.put("docKey", "P:" + d.get("id"));
+                d.put("documentClass", "Policy document");
+                d.put("ownerKind", "POLICY");
+                d.put("contentMatch", inText.contains(((Number) d.get("id")).longValue()));
+                docs.add(d);
+            }
+        }
+        if (claims) {
+            Set<Long> inText = contentMatches("ins_claim_document", term);
+            for (Map<String, Object> d : jdbc.query("select d.id, d.document_type, d.file_name, d.status, d.uploaded_at,"
+                    + " d.uploaded_by, d.scan_status, c.record_ref as owner_ref, c.customer_ref, c.customer_name"
+                    + " from ins_claim_document d join ins_claim c on c.id = d.claim_id", ROW)) {
+                d.put("docKey", "C:" + d.get("id"));
+                d.put("documentClass", "Claim evidence");
+                d.put("ownerKind", "CLAIM");
+                d.put("contentMatch", inText.contains(((Number) d.get("id")).longValue()));
+                docs.add(d);
+            }
+            // Uploads still in quarantine, or refused: on record (and under retention) but not documents of the claim,
+            // and never indexed for content.
+            for (Map<String, Object> d : jdbc.query("select q.id, q.document_type, q.file_name, q.status, q.uploaded_at,"
+                    + " q.uploaded_by, q.owner_ref, c.customer_ref, c.customer_name from doc_quarantine q join ins_claim c"
+                    + " on c.id = q.owner_id where q.owner_kind = 'CLAIM' and q.status <> 'RELEASED'", ROW)) {
+                d.put("docKey", "U:" + d.get("id"));
+                d.put("documentClass", "Claim evidence");
+                d.put("ownerKind", "CLAIM");
+                d.put("scanStatus", "PENDING".equals(d.get("status")) ? DocumentIntake.QUARANTINED : DocumentIntake.REJECTED);
+                d.put("status", "PENDING".equals(d.get("status")) ? DocumentIntake.QUARANTINED : DocumentIntake.REJECTED);
+                d.put("contentMatch", false);
+                docs.add(d);
+            }
+        }
+        String party = blankToNull(customerRef);
+        String owner = blankToNull(ownerRef);
+        String docClass = blankToNull(documentClass);
         LocalDate today = LocalDate.now();
         List<Map<String, Object>> out = new ArrayList<>();
         for (Map<String, Object> d : docs) {
-            if (!term.isEmpty() && !(d.get("fileName") + " " + d.get("documentType") + " " + d.get("ownerRef") + " "
-                    + d.get("customerName")).toLowerCase(Locale.ROOT).contains(term)) {
+            boolean details = (d.get("fileName") + " " + d.get("documentType") + " " + d.get("ownerRef") + " "
+                    + d.get("customerRef") + " " + d.get("customerName")).toLowerCase(Locale.ROOT).contains(term);
+            if (!term.isEmpty() && !details && !Boolean.TRUE.equals(d.get("contentMatch"))) {
                 continue;
             }
+            LocalDate stored = ((LocalDateTime) d.get("uploadedAt")).toLocalDate();
+            if ((party != null && !party.equalsIgnoreCase(String.valueOf(d.get("customerRef"))))
+                    || (owner != null && !owner.equalsIgnoreCase(String.valueOf(d.get("ownerRef"))))
+                    || (docClass != null && !docClass.equals(d.get("documentClass")))
+                    || (from != null && stored.isBefore(from)) || (to != null && stored.isAfter(to))) {
+                continue;
+            }
+            d.put("contentMatch", !term.isEmpty() && !details && Boolean.TRUE.equals(d.get("contentMatch")));
             Map<String, Object> control = controls.get((String) d.get("docKey"));
             boolean hold = control != null && Boolean.TRUE.equals(control.get("legalHold"));
-            LocalDate retainUntil = ((LocalDateTime) d.get("uploadedAt")).toLocalDate()
-                    .plusYears(retention.getOrDefault((String) d.get("documentClass"), 7));
+            LocalDate retainUntil = stored.plusYears(retention.getOrDefault((String) d.get("documentClass"), 7));
             // No malware scanner is connected: an upload is called clean only if a scanner said so (AT-SH09A-02).
             String scan = d.get("scanStatus") == null ? DocumentIntake.GENERATED : (String) d.get("scanStatus");
             d.put("scanStatus", scan);
             d.put("scanLabel", DocumentIntake.scanLabel(scan));
+            d.put("classification", DocumentIntake.classification((String) d.get("documentType")));
+            d.put("retentionPolicy", d.get("documentClass") + ": "
+                    + retention.getOrDefault((String) d.get("documentClass"), 7) + " years from storage");
             d.put("retainUntil", retainUntil);
             d.put("legalHold", hold);
             d.put("holdReason", control == null ? null : control.get("holdReason"));
@@ -395,16 +433,57 @@ public class OpsService {
             out.add(d);
         }
         out.sort(Comparator.comparing((Map<String, Object> d) -> (LocalDateTime) d.get("uploadedAt")).reversed());
+        // A register search reaches many customers' records at once: sensitive access (NS-SH09A-005, NS-SH11-005).
+        List<String> filters = new ArrayList<>();
+        if (!term.isEmpty()) {
+            filters.add("text \"" + term + "\"");
+        }
+        if (party != null) {
+            filters.add("customer " + party);
+        }
+        if (owner != null) {
+            filters.add("record " + owner);
+        }
+        if (docClass != null) {
+            filters.add("class " + docClass);
+        }
+        if (from != null || to != null) {
+            filters.add("stored " + (from == null ? "…" : from) + " to " + (to == null ? "…" : to));
+        }
+        audit.record(user.getUsername(), "Document register searched", "Document register",
+                policies && claims ? "policies and claims" : policies ? "policies" : "claims",
+                (filters.isEmpty() ? "no filter" : String.join(", ", filters)) + "; " + out.size() + " result(s)");
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("documents", out);
         result.put("retention", retention);
+        result.put("classes", policies && claims ? List.of("Policy document", "Claim evidence")
+                : policies ? List.of("Policy document") : List.of("Claim evidence"));
         return result;
+    }
+
+    /** Ids of the documents in the table whose indexed text contains the term (stored lower-cased). */
+    private Set<Long> contentMatches(String table, String term) {
+        if (term.length() < 3) {
+            return Set.of();
+        }
+        // '!' escapes the wildcards: a backslash would itself need escaping in a MySQL string literal.
+        String like = "%" + term.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
+        return jdbc.queryForList("select id from " + table + " where search_text like ? escape '!'", Long.class, like)
+                .stream().collect(Collectors.toSet());
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     /** {hold, reason}: places or lifts a legal hold. A held document is never eligible for disposal. */
     @Transactional
     public Map<String, Object> legalHold(String docKey, JsonNode body) {
         AppUser user = user("UPDATE_POLICY");
+        if (!docKey.startsWith("P:")) {
+            // Claim evidence is under the claim's permission, as in the register (NS-SH09A-005).
+            user.validateHasPermissionTo("READ_CLAIM");
+        }
         boolean hold = body.path("hold").asBoolean(false);
         String reason = hold ? required(body, "reason") : null;
         jdbc.update("delete from doc_control where doc_key = ?", docKey);

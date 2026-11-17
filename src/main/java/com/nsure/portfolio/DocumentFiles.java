@@ -47,12 +47,17 @@ public class DocumentFiles {
 
     /** The SHA-256 of the stored file, to compare with the hash recorded when it was issued (Blueprint §8). */
     String sha256Of(String storagePath, String what) {
+        return DocumentCustody.sha256(bytes(storagePath, what));
+    }
+
+    /** The stored file's bytes. */
+    byte[] bytes(String storagePath, String what) {
         Path path = resolve(storagePath);
         if (!Files.isRegularFile(path)) {
             throw new NotFoundException("The file for " + what + " is missing from storage.");
         }
         try {
-            return DocumentCustody.sha256(Files.readAllBytes(path));
+            return Files.readAllBytes(path);
         } catch (IOException e) {
             throw new UncheckedIOException("Could not read the document", e);
         }

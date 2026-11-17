@@ -304,6 +304,7 @@ public class ClaimDocumentService {
             files.deleteQuietly(storagePath);
             throw e;
         }
+        DocumentText.index(em, DocumentText.CLAIM_TABLE, document.getId(), bytes, contentType);
         history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), historyAction,
                 claim.getStatus(), claim.getStatus(),
                 documentType + ": " + fileName + (note == null ? "" : " · " + note), uploadedBy);

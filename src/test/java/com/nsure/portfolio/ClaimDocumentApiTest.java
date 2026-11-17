@@ -41,6 +41,12 @@ class ClaimDocumentApiTest {
     @Autowired
     private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
+    @Autowired
+    private com.nsure.security.session.SessionTokenService sessions;
+
+    @Autowired
+    private org.springframework.security.core.userdetails.UserDetailsService users;
+
     @Test
     void customerAndStaffShareTheEvidenceOnAClaim() throws Exception {
         String claim = customerClaim("Lerato Dube", "lerato");
@@ -368,6 +374,97 @@ class ClaimDocumentApiTest {
         mockMvc.perform(json(post("/portfolio/document-quarantine/" + second + "/release"), "assessor2",
                         "{\"note\":\"Changed my mind\"}"))
                 .andExpect(status().isConflict());
+    }
+
+    /**
+     * NS-SH09A-005: the register shows a document only to someone who may read its owning record (claim evidence
+     * needs READ_CLAIM), filters by customer, record, class and date, searches the text of generated documents, and
+     * logs every search as sensitive access.
+     */
+    @Test
+    void theRegisterAppliesTheOwningRecordsPermissionAndSearchesDocumentText() throws Exception {
+        com.nsure.support.ModuleTestUsers.provision(jdbc);
+        String claim = customerClaim("Tebogo Phiri", "tebogop");
+        mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk());
+        String customerRef = jdbc.queryForObject("select customer_ref from ins_claim where record_ref = ?", String.class, claim);
+
+        // The text of the generated summary is searchable; details alone do not contain this phrase.
+        String found = mockMvc.perform(get("/ops/documents").param("q", "This is an interim summary")
+                        .with(signedIn("assessor", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(JsonPath.<java.util.List<String>>read(found, "$.documents[*].ownerRef")).contains(claim);
+        assertThat(JsonPath.<java.util.List<Boolean>>read(found, "$.documents[?(@.ownerRef == '" + claim
+                + "')].contentMatch")).containsOnly(true);
+
+        // Indexed by party, record, class and date.
+        mockMvc.perform(get("/ops/documents").param("customerRef", customerRef).param("documentClass", "Claim evidence")
+                        .param("from", LocalDate.now().toString()).with(signedIn("assessor", "password")))
+                .andExpect(jsonPath("$.documents.length()").value(1))
+                .andExpect(jsonPath("$.documents[0].ownerRef").value(claim))
+                .andExpect(jsonPath("$.documents[0].customerRef").value(customerRef))
+                .andExpect(jsonPath("$.documents[0].classification").value("Confidential"))
+                .andExpect(jsonPath("$.documents[0].retentionPolicy").value("Claim evidence: 7 years from storage"));
+        mockMvc.perform(get("/ops/documents").param("ownerRef", claim).param("to", LocalDate.now().minusDays(1).toString())
+                        .with(signedIn("assessor", "password")))
+                .andExpect(jsonPath("$.documents.length()").value(0));
+
+        // A policy-only reader never sees claim evidence, whatever they search for.
+        mockMvc.perform(get("/ops/documents").param("q", claim).with(signedIn("distribution", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.classes").value(Matchers.contains("Policy document")))
+                .andExpect(jsonPath("$.documents.length()").value(0));
+        mockMvc.perform(get("/ops/documents").param("q", "This is an interim summary")
+                        .with(signedIn("distribution", "password")))
+                .andExpect(jsonPath("$.documents.length()").value(0));
+        // Nor may they put claim evidence on hold.
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/ops/documents/hold")
+                        .param("docKey", "C:1").with(signedIn("distribution", "password"))
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content("{\"hold\":true,\"reason\":\"x\"}"))
+                .andExpect(status().isForbidden());
+
+        assertThat(jdbc.queryForObject("select count(*) from audit_evidence where action = 'Document register searched'"
+                + " and actor = 'distribution'", Long.class)).isGreaterThanOrEqualTo(2L);
+    }
+
+    /**
+     * AT-SH09A-03: a broker (partner portal login) finds no documents through the register's search, the quarantine
+     * queue or a copied download link; a link also stops working for anyone once their session ends.
+     */
+    @Test
+    void aBrokerFindsNoDocumentsThroughSearchOrACopiedLink() throws Exception {
+        String claim = customerClaim("Mothusi Kgang", "mothusi");
+        String list = mockMvc.perform(post("/portfolio/claims/" + claim + "/documents/summary")
+                        .with(signedIn("assessor", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Integer id = JsonPath.read(list, "$[0].id");
+        String link = "/portfolio/claims/" + claim + "/documents/" + id;
+
+        mockMvc.perform(get("/ops/documents").param("q", claim).with(signedIn("agent", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/ops/documents").param("q", "This is an interim summary").with(signedIn("agent", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/portfolio/document-quarantine").with(signedIn("agent", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get(link).with(signedIn("agent", "password"))).andExpect(status().isForbidden());
+        mockMvc.perform(get("/portfolio/shop/claims/" + claim + "/documents/" + id).with(signedIn("agent", "password")))
+                .andExpect(status().isForbidden());
+
+        // A copied link is not a credential: it needs a live session, and an ended one no longer opens it.
+        String token = signInToken("assessor");
+        mockMvc.perform(get(link).header("Authorization", "Bearer " + token)).andExpect(status().isOk());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete("/auth/session")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().is2xxSuccessful());
+        mockMvc.perform(get(link).header("Authorization", "Bearer " + token)).andExpect(status().isUnauthorized());
+        mockMvc.perform(get(link)).andExpect(status().isUnauthorized());
+    }
+
+    /** A session token for a staff user, as the sign-in code step would issue it. */
+    private String signInToken(String username) {
+        return sessions.issue((com.nsure.security.domain.AppUser) users.loadUserByUsername(username)).token();
     }
 
     /** Whether the claim's evidence checklist marks the document type received. */

@@ -295,6 +295,7 @@ public class PolicyDocumentService {
             files.deleteQuietly(snapshotPath);
             throw e;
         }
+        DocumentText.index(em, DocumentText.POLICY_TABLE, document.getId(), pdf, "application/pdf");
         history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Schedule Generated",
                 policy.getStatus(), policy.getStatus(),
                 SCHEDULE_TYPE + ": " + fileName + (note == null ? "" : " · " + note), generatedBy);

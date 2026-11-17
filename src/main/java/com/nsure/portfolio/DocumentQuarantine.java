@@ -196,6 +196,9 @@ public class DocumentQuarantine {
         document.intake(scanStatus, upload.getChannel(), releasedBy, upload.getUploadedAt());
         em.persist(document);
         em.flush();
+        // Indexed for the register's content search only now that it is released (NS-SH09A-005).
+        DocumentText.index(em, DocumentText.CLAIM_TABLE, document.getId(),
+                files.bytes(upload.getStoragePath(), "upload " + upload.getId()), upload.getContentType());
         upload.released(releasedBy, note, document.getId());
         history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Document Added",
                 claim.getStatus(), claim.getStatus(), upload.getDocumentType() + ": " + upload.getFileName()

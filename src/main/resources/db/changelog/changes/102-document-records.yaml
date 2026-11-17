@@ -15,3 +15,18 @@ databaseChangeLog:
               - column: {name: data_version, type: bigint}
               - column: {name: snapshot_path, type: varchar(255)}
               - column: {name: snapshot_sha256, type: varchar(64)}
+  - changeSet:
+      id: 102-document-search-text
+      author: nsure
+      comment: >-
+        NS-SH09A-005: the extracted text of a PDF document (lower-cased), for the register's content search. Filled
+        when a document is generated or an upload is released from quarantine; images have no text (no OCR).
+      changes:
+        - addColumn:
+            tableName: ins_policy_document
+            columns:
+              - column: {name: search_text, type: clob}
+        - addColumn:
+            tableName: ins_claim_document
+            columns:
+              - column: {name: search_text, type: clob}
