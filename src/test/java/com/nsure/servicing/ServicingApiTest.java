@@ -52,6 +52,10 @@ class ServicingApiTest {
 
         // NS-IL03-003: the preview changes nothing and names the route.
         String payer = "{\"type\":\"PAYER\",\"payerName\":\"Kabelo Payer\",\"payerRelationship\":\"Spouse\",\"reason\":\"Spouse now pays\"}";
+        // Test C-42: a missing value is named in plain language, not by its API field name.
+        mockMvc.perform(json(post(base + "/endorsements/preview"), "admin", payer.replace("Kabelo Payer", " ")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value("Enter the payer's name."));
         mockMvc.perform(json(post(base + "/endorsements/preview"), "admin", payer))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.route").value("APPLY"))
@@ -298,17 +302,47 @@ class ServicingApiTest {
                 .andExpect(jsonPath("$.contractStatus").value("Active"));
         assertThat(events("PolicyReinstated", policy)).isEqualTo(1);
 
-        // A termination states its cause.
+        // A termination states its cause; lapse keeps its own process.
         mockMvc.perform(json(post("/servicing/policies/" + policy + "/termination"), "admin",
-                        "{\"reason\":\"CANCELLATION\",\"note\":\"wrong route\"}"))
+                        "{\"reason\":\"LAPSE\",\"note\":\"wrong route\"}"))
                 .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/servicing/policies/" + policy + "/termination"), "admin",
                         "{\"reason\":\"OTHER\",\"note\":\"Court order received\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.contractStatus").value("Terminated"))
-                .andExpect(jsonPath("$.terminationReason").value("OTHER"));
+                .andExpect(jsonPath("$.terminationReason").value("OTHER"))
+                // Test C-37: an ended contract has no premium due.
+                .andExpect(jsonPath("$.nextPremiumDue").doesNotExist())
+                .andExpect(jsonPath("$.paymentStatus").value("Closed"));
         mockMvc.perform(json(put("/servicing/rules/" + rule), "admin", "{\"reinstatementNeedsApproval\":false}"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void terminationCausesDistinguishCancellationAndExpiry() throws Exception {
+        // Test C-37 / IL03: cancellation and expiry are causes too; a cancellation takes the cancellation process.
+        String cancelled = activePolicy("Mpho Cancel", "Term Life", "Bronze", "");
+        mockMvc.perform(json(post("/servicing/policies/" + cancelled + "/termination"), "support",
+                        "{\"reason\":\"CANCELLATION\",\"note\":\"Written request\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/servicing/policies/" + cancelled + "/termination"), "admin",
+                        "{\"reason\":\"CANCELLATION\",\"note\":\"Written request from the policyholder\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contractStatus").value("Cancelled"))
+                .andExpect(jsonPath("$.terminationReason").value("CANCELLATION"))
+                .andExpect(jsonPath("$.nextPremiumDue").doesNotExist());
+        assertThat(events("PolicyCancelled", cancelled)).isEqualTo(1);
+        assertThat(events("PolicyTerminated", cancelled)).isEqualTo(1);
+
+        String expired = activePolicy("Kagiso Expiry", "Term Life", "Bronze", "");
+        mockMvc.perform(json(post("/servicing/policies/" + expired + "/termination"), "admin",
+                        "{\"reason\":\"expiry\",\"note\":\"Contract term ended\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contractStatus").value("Terminated"))
+                .andExpect(jsonPath("$.terminationReason").value("EXPIRY"))
+                .andExpect(jsonPath("$.coverStatus").value("Ended"));
+        mockMvc.perform(json(post("/servicing/policies/" + expired + "/termination"), "admin", "{\"reason\":\"OTHER\"}"))
+                .andExpect(status().isUnprocessableEntity());
     }
 
     private String activePolicy(String name, String product, String tier, String extra) throws Exception {

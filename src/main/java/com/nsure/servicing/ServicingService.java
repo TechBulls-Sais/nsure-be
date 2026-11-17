@@ -89,6 +89,8 @@ public class ServicingService {
             "SEMI_ANNUAL", 6, "ANNUAL", 12);
     private static final Set<String> IN_FORCE = Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.ACTIVE_NO_COVER,
             PolicyWorkflow.REINSTATEMENT_PENDING);
+    /** Causes a reasoned termination may give (IL03 records and workspace). */
+    static final List<String> TERMINATION_CAUSES = List.of("DEATH", "CANCELLATION", "EXPIRY", "MATURITY", "OTHER");
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
     private static final int REVIEW_LEAD_DAYS = 90;
 
@@ -959,14 +961,20 @@ public class ServicingService {
     public ServicingViews.PolicyView terminate(String policyRef, JsonNode body) {
         AppUser user = user("APPROVE_ENDORSEMENT");
         String cause = required(body, "reason", 30).toUpperCase(Locale.ROOT);
-        if (!Set.of("DEATH", "MATURITY", "OTHER").contains(cause)) {
-            throw new IllegalArgumentException("reason must be DEATH, MATURITY or OTHER. Cancellation, lapse, expiry and"
-                    + " surrender have their own processes.");
+        // IL03: the cause distinguishes death, cancellation, expiry and other approved causes. Lapse and surrender
+        // keep their own processes (the premium sweep and the product's surrender benefit).
+        if (!TERMINATION_CAUSES.contains(cause)) {
+            throw new IllegalArgumentException("Choose the cause: death, cancellation, expiry, maturity or other. Lapse"
+                    + " and surrender have their own processes.");
         }
         String note = required(body, "note", 400);
         LocalDate on = optional(body, "effectiveDate") == null ? LocalDate.now()
                 : LocalDate.parse(optional(body, "effectiveDate"));
-        InsurancePolicy policy = workflow.terminate(policyRef, cause, note, on, user.getUsername());
+        // A cancellation goes through the cancellation process: cooling-off is flagged, PolicyCancelled is published,
+        // and cover runs to the end of today.
+        InsurancePolicy policy = "CANCELLATION".equals(cause)
+                ? workflow.cancel(policyRef, note, user.getUsername())
+                : workflow.terminate(policyRef, cause, note, on, user.getUsername());
         audit.record(user.getUsername(), "Policy terminated", "Policy", policyRef, cause + ": " + note);
         return policyView(policy);
     }
@@ -1222,10 +1230,13 @@ public class ServicingService {
             payment = "Overdue";
         }
         BigDecimal[] paid = premiumsPaid(p.getRef());
+        // A contract that has ended has no premium due and no grace period (test C-37).
+        boolean billed = IN_FORCE.contains(status) || PolicyWorkflow.PENDING_PAYMENT.equals(status);
         return new ServicingViews.PolicyView(p.getRef(), p.getCustomerRef(), p.getCustomerName(), p.getProduct(),
                 p.getTier(), p.getAmount(), p.getPremium(), p.getPremiumFrequency(),
                 modal(p.getPremium(), p.getPremiumFrequency()), status, cover, payment, p.getCoverStartDate(),
-                p.getNextPremiumDue(), p.getGracePeriodEnd(), p.getTerminationReason(), p.getTerminatedOn(),
+                billed ? p.getNextPremiumDue() : null, billed ? p.getGracePeriodEnd() : null,
+                p.getTerminationReason(), p.getTerminatedOn(),
                 p.getPayerName(), p.getPayerRelationship(), p.getUwTerms(), paid[0].longValue(), paid[1]);
     }
 
@@ -1282,10 +1293,22 @@ public class ServicingService {
         return value == null ? null : new BigDecimal(value).setScale(2, RoundingMode.HALF_UP);
     }
 
+    /** Plain-language names for request fields, so a refusal never shows an API field name (test C-42). */
+    private static final Map<String, String> FIELD_LABELS = Map.ofEntries(Map.entry("amount", "the amount"),
+            Map.entry("benefitType", "the benefit type"), Map.entry("dateOfBirth", "the date of birth"),
+            Map.entry("description", "a description"), Map.entry("frequency", "the premium frequency"),
+            Map.entry("fullName", "the person's full name"), Map.entry("newCustomerRef", "the new owner"),
+            Map.entry("note", "a note"), Map.entry("outcome", "the outcome"),
+            Map.entry("payerName", "the payer's name"),
+            Map.entry("payerRelationship", "the payer's relationship to the policyholder"),
+            Map.entry("paymentReference", "the payment reference"), Map.entry("product", "the product"),
+            Map.entry("reason", "a reason"), Map.entry("relationship", "the relationship"),
+            Map.entry("type", "the type of change"));
+
     private static String required(JsonNode body, String field, int max) {
         String value = optional(body, field);
         if (value == null) {
-            throw new IllegalArgumentException(field + " is required.");
+            throw new IllegalArgumentException("Enter " + FIELD_LABELS.getOrDefault(field, field) + ".");
         }
         return clip(value, max);
     }
