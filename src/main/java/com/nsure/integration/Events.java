@@ -25,6 +25,11 @@ public final class Events {
     public static final String COMMISSION_REVERSED = "CommissionReversed";
     /** statementRef, intermediaryRef, amount. */
     public static final String COMMISSION_PAID = "CommissionPaid";
+    /**
+     * commissionRef, intermediaryRef, policyRef, product, amount, statementRef. An accrued commission line released
+     * for payment on an intermediary statement (SH06); CommissionPaid follows when the statement is paid.
+     */
+    public static final String COMMISSION_RELEASED = "CommissionReleased";
     /** cessionRef, treatyRef, policyRef, product, cededPremium. */
     public static final String RISK_CEDED = "RiskCeded";
     /** recoveryRef, treatyRef, claimRef, policyRef, amount. */

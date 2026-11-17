@@ -306,7 +306,19 @@ public class DistributionService {
         em.persist(statement);
         em.flush();
         statement.numbered();
-        lines.forEach(line -> line.statemented(statement));
+        lines.forEach(line -> {
+            line.statemented(statement);
+            // SH06: the accrued line is released for payment on this statement.
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("commissionRef", line.getRef());
+            data.put("intermediaryRef", intermediary.getRef());
+            data.put("policyRef", line.getPolicyRef() == null ? "" : line.getPolicyRef());
+            data.put("product", line.getProduct() == null ? "" : line.getProduct());
+            data.put("kind", line.getKind());
+            data.put("amount", line.getAmount().toPlainString());
+            data.put("statementRef", statement.getRef());
+            outbox.publish(Events.COMMISSION_RELEASED, line.getRef(), data, user.getUsername());
+        });
         return view(statement, lines.stream().map(DistributionService::view).toList());
     }
 
