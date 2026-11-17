@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # SH09A document records (work package d2).
+  - changeSet:
+      id: 102-policy-document-generated-from
+      author: nsure
+      comment: >-
+        NS-SH09A-003: what each policy schedule was generated from: the approved wording clause versions bound at issue,
+        the policy's data (row) version, and the frozen data snapshot (JSON beside the PDF) with its hash. Schedules
+        issued earlier keep empty values: what they were made from was not recorded.
+      changes:
+        - addColumn:
+            tableName: ins_policy_document
+            columns:
+              - column: {name: wording_versions, type: varchar(500)}
+              - column: {name: data_version, type: bigint}
+              - column: {name: snapshot_path, type: varchar(255)}
+              - column: {name: snapshot_sha256, type: varchar(64)}

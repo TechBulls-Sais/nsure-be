@@ -63,6 +63,21 @@ public class PolicyDocument {
     @Column(name = "superseded_at")
     private LocalDateTime supersededAt;
 
+    // NS-SH09A-003: what the schedule was generated from. The approved wording clause versions bound at issue
+    // ("WRD-0001 v1, WRD-0002 v1"), the policy's row version, and the frozen data snapshot (JSON, stored beside the
+    // PDF) with its hash. A later wording revision changes none of these, nor the issued bytes (AT-SH09A-01).
+    @Column(name = "wording_versions", length = 500)
+    private String wordingVersions;
+
+    @Column(name = "data_version")
+    private Long dataVersion;
+
+    @Column(name = "snapshot_path", length = 255)
+    private String snapshotPath;
+
+    @Column(name = "snapshot_sha256", length = 64)
+    private String snapshotSha256;
+
     protected PolicyDocument() {
     }
 
@@ -117,6 +132,30 @@ public class PolicyDocument {
 
     public int getLayoutVersion() {
         return layoutVersion;
+    }
+
+    /** Records what the document was generated from (NS-SH09A-003). */
+    void generatedFrom(String wordingVersions, Long dataVersion, String snapshotPath, String snapshotSha256) {
+        this.wordingVersions = wordingVersions;
+        this.dataVersion = dataVersion;
+        this.snapshotPath = snapshotPath;
+        this.snapshotSha256 = snapshotSha256;
+    }
+
+    public String getWordingVersions() {
+        return wordingVersions;
+    }
+
+    public Long getDataVersion() {
+        return dataVersion;
+    }
+
+    public String getSnapshotPath() {
+        return snapshotPath;
+    }
+
+    public String getSnapshotSha256() {
+        return snapshotSha256;
     }
 
     /** Records the content hash of the stored file. */

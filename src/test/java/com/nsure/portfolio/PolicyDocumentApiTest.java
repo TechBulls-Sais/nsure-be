@@ -231,6 +231,76 @@ class PolicyDocumentApiTest {
                 .andExpect(status().isForbidden());
     }
 
+    /**
+     * NS-SH09A-003 and AT-SH09A-01: a schedule records the wording versions, policy data version and frozen data
+     * snapshot it was made from. Revising a wording it used changes neither its bytes nor its metadata; only a
+     * reissue, with a reason, binds the revised wording.
+     */
+    @Test
+    void aWordingRevisionLeavesAnIssuedScheduleUntouched() throws Exception {
+        String policy = customerPolicy("Kefilwe Moatlhodi", "kefilwe");
+        String issued = mockMvc.perform(post("/portfolio/policies/" + policy + "/documents/schedule")
+                        .with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Integer id = JsonPath.read(issued, "$[0].id");
+        String sha = JsonPath.read(issued, "$[0].sha256");
+        String note = JsonPath.read(issued, "$[0].note");
+        String uploadedAt = JsonPath.read(issued, "$[0].uploadedAt");
+        assertThat(note).contains("Layout v3", "WRD-0001 v1", "WRD-0002 v1", "policy data version", "data snapshot SHA-256");
+        java.util.Map<String, Object> row = jdbc.queryForMap("select wording_versions, data_version, snapshot_path,"
+                + " snapshot_sha256 from ins_policy_document where id = ?", id);
+        assertThat(row.get("WORDING_VERSIONS")).isEqualTo("WRD-0001 v1, WRD-0002 v1");
+        assertThat(row.get("DATA_VERSION")).isNotNull();
+        assertThat((String) row.get("SNAPSHOT_SHA256")).matches("[0-9a-f]{64}");
+        assertThat((String) row.get("SNAPSHOT_PATH")).startsWith(policy + "/").endsWith(".json");
+        byte[] before = download(policy, id);
+        try (PDDocument doc = Loader.loadPDF(before)) {
+            assertThat(new PDFTextStripper().getText(doc)).contains("Policy wording", "WRD-0001 version 1",
+                    "The sum assured is payable on the death of the life insured");
+        }
+
+        // A second person approves a revision of the death benefit clause.
+        mockMvc.perform(post("/platform/wordings").with(signedIn("configurator", "password"))
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"ref\":\"WRD-0001\",\"product\":\"Term Life\",\"clauseType\":\"BENEFIT\","
+                                + "\"title\":\"Death benefit\",\"body\":\"Revised clause: the sum assured is paid on death.\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(2));
+        mockMvc.perform(post("/platform/wordings/WRD-0001/versions/2/approval").with(signedIn("admin", "password")))
+                .andExpect(status().isOk());
+
+        // The issued schedule: same bytes, same hash, same metadata, still current.
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/documents").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].status").value("CURRENT"))
+                .andExpect(jsonPath("$[0].sha256").value(sha))
+                .andExpect(jsonPath("$[0].note").value(note))
+                .andExpect(jsonPath("$[0].uploadedAt").value(uploadedAt));
+        assertThat(download(policy, id)).isEqualTo(before);
+        assertThat(jdbc.queryForObject("select wording_versions from ins_policy_document where id = ?", String.class, id))
+                .isEqualTo("WRD-0001 v1, WRD-0002 v1");
+
+        // Only a controlled reissue, with a reason, binds the revised clause; the original is kept.
+        String reissued = mockMvc.perform(json(post("/portfolio/policies/" + policy + "/documents/" + id + "/reissue"),
+                        "admin", "{\"reason\":\"Revised death benefit wording applied\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("SUPERSEDED"))
+                .andExpect(jsonPath("$[0].sha256").value(sha))
+                .andExpect(jsonPath("$[1].note").value(Matchers.containsString("WRD-0001 v2")))
+                .andReturn().getResponse().getContentAsString();
+        try (PDDocument doc = Loader.loadPDF(download(policy, JsonPath.read(reissued, "$[1].id")))) {
+            assertThat(new PDFTextStripper().getText(doc)).contains("Revised clause", "WRD-0001 version 2");
+        }
+        assertThat(download(policy, id)).isEqualTo(before);
+    }
+
+    private byte[] download(String policy, Integer id) throws Exception {
+        return mockMvc.perform(get("/portfolio/policies/" + policy + "/documents/" + id).with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsByteArray();
+    }
+
     /** A verified customer with a login and an Active policy with one beneficiary, issued by admin. */
     private String customerPolicy(String name, String username) throws Exception {
         String customer = mockMvc.perform(json(post("/portfolio/customers"), "admin",

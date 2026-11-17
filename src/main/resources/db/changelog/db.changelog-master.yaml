@@ -239,3 +239,6 @@ databaseChangeLog:
   - include:
       file: changes/101-document-quarantine.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/102-document-records.yaml
+      relativeToChangelogFile: true
