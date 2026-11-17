@@ -105,8 +105,33 @@ public class PortfolioService {
         this.policyAttributes = policyAttributes;
     }
 
+    /**
+     * Party search (SH01 workspace): customers whose name, reference, identity number, email or phone contains the
+     * term (case and spacing ignored); all customers without one. At most 200 matches for a search.
+     */
     @Transactional(readOnly = true)
-    public List<PortfolioViews.CustomerView> customers() {
+    public List<PortfolioViews.CustomerView> customers(String search) {
+        String term = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
+        List<CustomerAccount> rows;
+        if (term.isEmpty()) {
+            rows = list(CustomerAccount.class);
+        } else {
+            String digits = term.replaceAll("\\D", "");
+            boolean phone = digits.length() >= 3;
+            jakarta.persistence.TypedQuery<CustomerAccount> query = em.createQuery(
+                            "select c from CustomerAccount c where lower(c.name) like :term"
+                            + " or lower(c.ref) like :term or lower(c.email) like :term"
+                            + " or lower(replace(c.poiNumber, ' ', '')) like :compact"
+                            + (phone ? " or replace(replace(c.phone, ' ', ''), '+', '') like :digits" : "")
+                            + " order by c.displayOrder asc, c.id desc", CustomerAccount.class)
+                    .setParameter("term", "%" + term + "%")
+                    .setParameter("compact", "%" + term.replace(" ", "") + "%")
+                    .setMaxResults(200);
+            if (phone) {
+                query.setParameter("digits", "%" + digits + "%");
+            }
+            rows = query.getResultList();
+        }
         // Linked by customer reference, never by name: two customers may share a name (AT-SH11-01).
         Map<String, List<PortfolioViews.CustomerTierView>> tiers = new HashMap<>();
         for (InsurancePolicy policy : em.createQuery(
@@ -114,7 +139,7 @@ public class PortfolioService {
                 InsurancePolicy.class).getResultList()) {
             tiers.computeIfAbsent(policy.getCustomerRef(), ref -> new ArrayList<>()).add(customerTier(policy));
         }
-        return list(CustomerAccount.class).stream()
+        return rows.stream()
                 .map(row -> customer(row, tiers.getOrDefault(row.getRef(), List.of())))
                 .toList();
     }

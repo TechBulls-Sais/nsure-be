@@ -152,6 +152,22 @@ class PartyIdentityApiTest {
         assertThat(events("PartyMerged", keep)).isEqualTo(1);
     }
 
+    @Test
+    void partiesAreSearchedOnTheServer() throws Exception {
+        String ref = JsonPath.read(create("Searchable Masego", "Omang", "918 123 456", null).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(), "$.id");
+        for (String term : new String[] {"searchable", ref.toLowerCase(), "918123456", "918 123", "party@example"}) {
+            mockMvc.perform(get("/portfolio/customers").param("search", term).with(signedIn("onboarding", "password")))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[*].id").value(hasItem(ref)));
+        }
+        mockMvc.perform(get("/portfolio/customers").param("search", "Amara").with(signedIn("onboarding", "password")))
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value("CUS-1001"));
+        mockMvc.perform(get("/portfolio/customers").param("search", "71 234 501").with(signedIn("onboarding", "password")))
+                .andExpect(jsonPath("$[*].id").value(hasItem("CUS-1001")));
+    }
+
     private String verified(String name, String omang) throws Exception {
         String ref = JsonPath.read(create(name, "Omang", omang, null).andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(), "$.id");

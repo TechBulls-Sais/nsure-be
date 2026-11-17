@@ -55,8 +55,9 @@ public class PortfolioController {
     }
 
     @GetMapping("/customers")
-    public List<PortfolioViews.CustomerView> customers() {
-        return portfolio.customers();
+    public List<PortfolioViews.CustomerView> customers(
+            @org.springframework.web.bind.annotation.RequestParam(required = false) String search) {
+        return portfolio.customers(search);
     }
 
     @PostMapping("/customers")
