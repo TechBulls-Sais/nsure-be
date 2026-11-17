@@ -74,9 +74,63 @@ class CareCashApiTest {
         org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
                 "select next_premium_due from ins_policy where record_ref = ?", String.class, policy))
                 .isEqualTo(LocalDate.parse(due.substring(0, 10)).plusMonths(3).toString());
-        mockMvc.perform(json(post("/care-cash/events/" + ref + "/payment"), "assessor", "{\"paymentReference\":\"EFT-CC-1\"}"))
+        // NS-SH05-007 (B-16): the payment is an instruction in flight until the provider confirms it settled.
+        String sent = mockMvc.perform(json(post("/care-cash/events/" + ref + "/payment"), "assessor",
+                        "{\"payoutMethod\":\"Bank Account\",\"accountRef\":\"62001234\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("PAID"));
+                .andExpect(jsonPath("$.status").value("PAYMENT_SENT"))
+                .andExpect(jsonPath("$.paymentReference").value(org.hamcrest.Matchers.startsWith("CCP-")))
+                .andExpect(jsonPath("$.payment.payeeName").value("Dineo Hospital"))
+                .andExpect(jsonPath("$.payment.sentBy").value("assessor"))
+                .andExpect(jsonPath("$.payment.settledAt").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+        String instruction = JsonPath.read(sent, "$.paymentReference");
+        org.assertj.core.api.Assertions.assertThat(benefitPaidEvents(ref)).isZero();
+        mockMvc.perform(json(post("/care-cash/events/" + ref + "/payment"), "assessor",
+                        "{\"payoutMethod\":\"Bank Account\",\"accountRef\":\"62001234\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(containsString("already in flight")));
+        // AT-SH05-03: the bank returns it; it goes again only with corrected details, under a new instruction.
+        mockMvc.perform(json(post("/care-cash/events/" + ref + "/payment/failed"), "assessor",
+                        "{\"reason\":\"Returned: account closed\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PAYMENT_FAILED"))
+                .andExpect(jsonPath("$.payment.failureReason").value("Returned: account closed"));
+        mockMvc.perform(json(post("/care-cash/events/" + ref + "/payment"), "assessor",
+                        "{\"payoutMethod\":\"Bank Account\",\"accountRef\":\"62001234\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("Correct the payout details")));
+        String resent = mockMvc.perform(json(post("/care-cash/events/" + ref + "/payment"), "assessor",
+                        "{\"payeeName\":\"Dineo Hospital\",\"payoutMethod\":\"Mobile Wallet\",\"accountRef\":\"71960001\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PAYMENT_SENT"))
+                .andExpect(jsonPath("$.payment.failureReason").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+        String second = JsonPath.read(resent, "$.paymentReference");
+        org.assertj.core.api.Assertions.assertThat(second).isNotEqualTo(instruction);
+        mockMvc.perform(json(post("/care-cash/events/" + ref + "/payment/confirm"), "assessor",
+                        "{\"providerReference\":\"" + instruction + "\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/care-cash/events/" + ref + "/payment/confirm"), "assessor",
+                        "{\"providerReference\":\"" + second + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PAID"))
+                .andExpect(jsonPath("$.payment.settledAt").isNotEmpty());
+        org.assertj.core.api.Assertions.assertThat(benefitPaidEvents(ref)).isEqualTo(1);
+        // B-28: paying it again is refused as already paid, not as "must be approved".
+        mockMvc.perform(json(post("/care-cash/events/" + ref + "/payment"), "assessor",
+                        "{\"payoutMethod\":\"Bank Account\",\"accountRef\":\"62009999\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(ref + " is already paid (" + second + "); it cannot be paid again."));
+        mockMvc.perform(json(post("/care-cash/events/" + ref + "/payment/confirm"), "assessor", "{}"))
+                .andExpect(status().isConflict());
+        mockMvc.perform(json(post("/care-cash/events/" + ref + "/payment/failed"), "onboarding", "{\"reason\":\"x\"}"))
+                .andExpect(status().isForbidden());
+    }
+
+    private int benefitPaidEvents(String ref) {
+        return jdbc.queryForObject("select count(*) from int_outbox_event where event_type = 'ContractualBenefitPaid'"
+                + " and aggregate_ref = ?", Integer.class, ref);
     }
 
     @Test

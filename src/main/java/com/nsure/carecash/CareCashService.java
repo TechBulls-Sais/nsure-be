@@ -60,8 +60,24 @@ public class CareCashService {
             String cause, LocalDate admitDate, LocalDate dischargeDate, int icuDays, boolean surgery,
             BigDecimal dailyBenefit, int stayDays, int paidDays, BigDecimal amount, int waiverMonths, List<String> trace,
             String status, String createdBy, LocalDateTime createdAt, String decidedBy, String decisionNote,
-            String paymentReference) {
+            String paymentReference, Payment payment) {
     }
+
+    /**
+     * The payment instruction (NS-SH05-007): who it pays and how, when it was sent, when the provider confirmed it
+     * settled, and why it failed. Null fields are steps not reached.
+     */
+    public record Payment(String payeeName, String payoutMethod, String accountRef, String sentBy,
+            LocalDateTime sentAt, LocalDateTime settledAt, String failureReason) {
+    }
+
+    /** The Care Cash event states. A payment is in flight between SENT and PAID; FAILED waits to be sent again. */
+    static final String ASSESSED = "ASSESSED";
+    static final String APPROVED = "APPROVED";
+    static final String DECLINED = "DECLINED";
+    static final String PAYMENT_SENT = "PAYMENT_SENT";
+    static final String PAYMENT_FAILED = "PAYMENT_FAILED";
+    static final String PAID = "PAID";
 
     public record Counters(String lifeName, int usedThisYear, int usedLifetime, int maternityClaims) {
     }
@@ -169,8 +185,8 @@ public class CareCashService {
     public EventView decide(String ref, JsonNode body) {
         AppUser user = user("APPROVE_CLAIM");
         CareCashEvent e = event(ref);
-        if (!"ASSESSED".equals(e.status)) {
-            throw new ConflictException(ref + " is already " + e.status.toLowerCase(Locale.ROOT) + ".");
+        if (!ASSESSED.equals(e.status)) {
+            throw new ConflictException(ref + " is already " + e.status.toLowerCase(Locale.ROOT).replace('_', ' ') + ".");
         }
         if (user.getUsername().equalsIgnoreCase(e.createdBy)) {
             throw new NoAuthorizationException("You recorded " + ref + ", so someone else must approve it.");
@@ -202,20 +218,79 @@ public class CareCashService {
         return view(e);
     }
 
-    /** {paymentReference} */
+    /**
+     * {payeeName?, payoutMethod, accountRef}: sends the payment instruction for an approved event, or sends a failed one
+     * again with corrected details. It gets a unique reference and stays in flight (PAYMENT_SENT): nothing is paid or
+     * posted until the provider confirms it settled (as for claim payouts, NS-SH05-007 and AT-SH05-03).
+     */
     @Transactional
     public EventView pay(String ref, JsonNode body) {
         AppUser user = user("SETTLE_CLAIM");
         CareCashEvent e = event(ref);
-        if (!"APPROVED".equals(e.status)) {
-            throw new ConflictException(ref + " must be approved before it is paid.");
+        if (PAID.equals(e.status)) {
+            throw new ConflictException(ref + " is already paid (" + e.paymentReference + "); it cannot be paid again.");
         }
-        String reference = text(body, "paymentReference");
-        if (reference == null) {
-            throw new IllegalArgumentException("paymentReference is required.");
+        if (PAYMENT_SENT.equals(e.status)) {
+            throw new ConflictException("A payment for " + ref + " is already in flight (" + e.paymentReference
+                    + "). Confirm its settlement or record that it failed before sending another.");
         }
-        e.status = "PAID";
-        e.paymentReference = reference;
+        if (!APPROVED.equals(e.status) && !PAYMENT_FAILED.equals(e.status)) {
+            throw new ConflictException(ref + " is " + e.status.toLowerCase(Locale.ROOT).replace('_', ' ')
+                    + "; only an approved event is paid.");
+        }
+        if (e.amount == null || e.amount.signum() <= 0) {
+            throw new IllegalArgumentException(ref + " has no benefit to pay.");
+        }
+        String payee = text(body, "payeeName") == null ? e.customerName : text(body, "payeeName");
+        String method = text(body, "payoutMethod");
+        String account = text(body, "accountRef");
+        if (payee == null || method == null || account == null) {
+            throw new IllegalArgumentException("Give the payee, the payout method and the account or wallet number.");
+        }
+        if (payee.length() > 150 || method.length() > 40 || account.length() > 60) {
+            throw new IllegalArgumentException("The payee details are too long.");
+        }
+        if (PAYMENT_FAILED.equals(e.status) && method.equals(e.payoutMethod) && account.equals(e.payoutAccount)) {
+            throw new IllegalArgumentException("The last payment to " + e.payoutMethod + " " + mask(e.payoutAccount)
+                    + " failed. Correct the payout details before sending it again.");
+        }
+        String previous = e.paymentReference;
+        e.payeeName = payee;
+        e.payoutMethod = method;
+        e.payoutAccount = account;
+        e.paymentReference = numbers.next("CCP-", 6, () -> 0);
+        e.paymentSentBy = user.getUsername();
+        e.paymentSentAt = LocalDateTime.now();
+        e.paymentFailure = null;
+        e.paidAt = null;
+        e.status = PAYMENT_SENT;
+        audit.record(user.getUsername(), "Care Cash payment sent", "Policy", e.policyRef, ref + " BWP "
+                + Money.text(e.amount) + " to " + payee + " by " + method + " " + mask(account) + " · "
+                + e.paymentReference + (previous == null ? "" : " (replaces failed " + previous + ")")
+                + " · awaiting the provider's confirmation");
+        return view(e);
+    }
+
+    /**
+     * {providerReference?}: the provider confirms the payment settled; only now is the event PAID and the benefit
+     * posted. A confirmation naming another instruction is refused, so an old one cannot settle a resent payment.
+     */
+    @Transactional
+    public EventView confirmPayment(String ref, JsonNode body) {
+        AppUser user = user("SETTLE_CLAIM");
+        CareCashEvent e = event(ref);
+        if (PAID.equals(e.status)) {
+            throw new ConflictException(ref + " is already paid (" + e.paymentReference + ").");
+        }
+        if (!PAYMENT_SENT.equals(e.status)) {
+            throw new ConflictException(ref + " has no payment in flight to confirm.");
+        }
+        String confirmed = text(body, "providerReference");
+        if (confirmed != null && !confirmed.equals(e.paymentReference)) {
+            throw new IllegalArgumentException("This confirmation is for " + confirmed + ", but the payment in flight"
+                    + " on " + ref + " is " + e.paymentReference + ".");
+        }
+        e.status = PAID;
         e.paidAt = LocalDateTime.now();
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("policyRef", e.policyRef);
@@ -224,9 +299,38 @@ public class CareCashService {
         data.put("benefitRef", e.ref);
         data.put("benefitType", "CARE_CASH_" + e.eventType);
         data.put("amount", e.amount.toPlainString());
-        data.put("paymentReference", reference);
+        data.put("paymentReference", e.paymentReference);
         outbox.publish(Events.BENEFIT_PAID, e.ref, data, user.getUsername());
+        audit.record(user.getUsername(), "Care Cash payment settled", "Policy", e.policyRef, ref + " BWP "
+                + Money.text(e.amount) + " · " + e.paymentReference + " · settlement confirmed");
         return view(e);
+    }
+
+    /** {reason}: the provider or bank failed or returned the payment; it is sent again with corrected details. */
+    @Transactional
+    public EventView paymentFailed(String ref, JsonNode body) {
+        AppUser user = user("SETTLE_CLAIM");
+        CareCashEvent e = event(ref);
+        if (!PAYMENT_SENT.equals(e.status)) {
+            throw new ConflictException(ref + " has no payment in flight" + (PAID.equals(e.status)
+                    ? "; it is already paid." : "."));
+        }
+        String reason = text(body, "reason");
+        if (reason == null) {
+            throw new IllegalArgumentException("Give the reason the provider gave for the failed or returned payment.");
+        }
+        if (reason.length() > 500) {
+            throw new IllegalArgumentException("The reason is too long.");
+        }
+        e.status = PAYMENT_FAILED;
+        e.paymentFailure = reason;
+        audit.record(user.getUsername(), "Care Cash payment failed", "Policy", e.policyRef, ref + " · "
+                + e.paymentReference + " · " + reason);
+        return view(e);
+    }
+
+    private static String mask(String account) {
+        return account == null || account.length() <= 4 ? account : "•••" + account.substring(account.length() - 4);
     }
 
     // ── the calculation ───────────────────────────────────────────────────────────────────────────
@@ -445,7 +549,9 @@ public class CareCashService {
         return new EventView(e.ref, e.policyRef, e.customerName, e.lifeName, e.eventType, e.cause, e.admitDate,
                 e.dischargeDate, e.icuDays, e.surgery, e.dailyBenefit, e.stayDays, e.paidDays, e.amount, e.waiverMonths,
                 List.of(e.trace.split("\n")), e.status, e.createdBy, e.createdAt, e.decidedBy, e.decisionNote,
-                e.paymentReference);
+                e.paymentReference, e.paymentSentAt == null && e.paidAt == null ? null
+                        : new Payment(e.payeeName, e.payoutMethod, e.payoutAccount, e.paymentSentBy, e.paymentSentAt,
+                                PAID.equals(e.status) ? e.paidAt : null, e.paymentFailure));
     }
 
     private AppUser user(String permission) {

@@ -292,6 +292,8 @@ public final class ApiAccessRules {
             rule(POST, "/care-cash/policies/*/events", anyOf("CREATE_CLAIM")),
             rule(POST, "/care-cash/events/*/decision", anyOf("APPROVE_CLAIM")),
             rule(POST, "/care-cash/events/*/payment", anyOf("SETTLE_CLAIM")),
+            rule(POST, "/care-cash/events/*/payment/confirm", anyOf("SETTLE_CLAIM")),
+            rule(POST, "/care-cash/events/*/payment/failed", anyOf("SETTLE_CLAIM")),
 
             // ── group lifecycle GL01/GL02/GL05/GL06 ────────────────────────────────────────────────────
             rule(GET, "/group-life/**", anyOf("READ_SCHEME")),
