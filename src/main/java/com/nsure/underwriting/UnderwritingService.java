@@ -1419,6 +1419,20 @@ public class UnderwritingService {
         return new Mandate(sumUnlimited ? null : sum, loadingUnlimited ? null : loading, typesUnlimited ? null : types);
     }
 
+    /**
+     * NS-IL02-004, NS-IL03-003: an endorsement's risk increase is decided within the same underwriting authority as
+     * new business, measured on the customer's total cover after the change.
+     */
+    public void requireAuthority(AppUser user, String customerRef, BigDecimal addedCover) {
+        Mandate mandate = mandateOf(user);
+        BigDecimal exposure = exposureOf(customerRef).add(addedCover == null ? BigDecimal.ZERO : addedCover.max(BigDecimal.ZERO));
+        if (!mandate.covers(exposure)) {
+            throw new NoAuthorizationException("The customer's total cover of " + Money.text(exposure)
+                    + " is above your underwriting authority of " + Money.text(mandate.maxSumAssured())
+                    + ". A senior underwriter must decide this change.");
+        }
+    }
+
     /** Comma-separated codes, trimmed and upper-cased, blanks dropped. */
     private static List<String> codes(String value) {
         if (value == null || value.isBlank()) {

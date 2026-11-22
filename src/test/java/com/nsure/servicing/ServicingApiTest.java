@@ -326,6 +326,32 @@ class ServicingApiTest {
     }
 
     @Test
+    void aRiskIncreaseIsDecidedWithinUnderwritingAuthorityAndAnEndedPolicyKeepsItsBeneficiaries() throws Exception {
+        String policy = activePolicy("Mpho Increase", "Term Life", "Bronze", "");
+        String base = "/servicing/policies/" + policy;
+        String increase = JsonPath.read(mockMvc.perform(json(post(base + "/endorsements"), "admin",
+                        "{\"type\":\"SUM_ASSURED\",\"tier\":\"Silver\",\"reason\":\"More cover for a new home loan\"}"))
+                .andExpect(jsonPath("$.status").value("REFERRED_UNDERWRITING"))
+                .andReturn().getResponse().getContentAsString(), "$.ref");
+        // NS-IL03-003: the junior underwriter's BWP 250,000 authority does not cover the BWP 500,000 total after it.
+        mockMvc.perform(json(post("/servicing/endorsements/" + increase + "/decision"), "underwriter2",
+                        "{\"approve\":true,\"note\":\"Income evidence seen\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("underwriting authority")));
+        mockMvc.perform(json(post("/servicing/endorsements/" + increase + "/decision"), "underwriter",
+                        "{\"approve\":true,\"note\":\"Income evidence seen\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPLIED"));
+        // NS-IL03-002: once the contract has ended, its beneficiaries no longer change.
+        mockMvc.perform(json(post(base + "/termination"), "admin", "{\"reason\":\"DEATH\",\"note\":\"Death certificate received\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/policies/" + policy + "/beneficiaries"), "admin",
+                        "{\"fullName\":\"Late Addition\",\"relationship\":\"Spouse\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("can no longer be changed")));
+    }
+
+    @Test
     void productRulesSetContinuityRemovalApprovalLapseAndCoolingOff() throws Exception {
         Integer rule = ((List<Integer>) JsonPath.read(mockMvc.perform(get("/servicing/rules").with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString(), "$[?(@.product == 'Family Funeral')].id")).get(0);

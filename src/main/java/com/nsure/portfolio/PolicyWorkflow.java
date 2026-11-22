@@ -510,7 +510,8 @@ public class PolicyWorkflow {
     @Transactional
     public PolicyBeneficiary addBeneficiary(String ref, BeneficiaryInput input, String actor) {
         InsurancePolicy policy = policy(ref);
-        if (Set.of(CANCELLED, EXPIRED, LAPSED).contains(policy.getStatus())) {
+        // NS-IL03-002: an ended contract (cancelled, expired, lapsed, terminated or claimed) keeps its beneficiaries.
+        if (Set.of(CANCELLED, EXPIRED, LAPSED, TERMINATED, CLAIMED).contains(policy.getStatus())) {
             throw new IllegalArgumentException("Policy " + ref + " is " + policy.getStatus()
                     + "; its beneficiaries can no longer be changed.");
         }
@@ -552,6 +553,10 @@ public class PolicyWorkflow {
     @Transactional
     public void removeBeneficiary(String ref, Long beneficiaryId, String actor) {
         InsurancePolicy policy = policy(ref);
+        if (Set.of(CANCELLED, EXPIRED, LAPSED, TERMINATED, CLAIMED).contains(policy.getStatus())) {
+            throw new IllegalArgumentException("Policy " + ref + " is " + policy.getStatus()
+                    + "; its beneficiaries can no longer be changed.");
+        }
         PolicyBeneficiary row = beneficiaries(policy).stream()
                 .filter(item -> item.getId().equals(beneficiaryId))
                 .findFirst()

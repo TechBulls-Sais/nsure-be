@@ -105,11 +105,14 @@ public class ServicingService {
     /** Endorsement premium adjustments are billed on the next instalment (NS-IL04-003). */
     private final com.nsure.collections.BillingService billing;
     private final com.nsure.portfolio.LifeConsents consents;
+    private final org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting;
 
     public ServicingService(EntityManager em, PlatformSecurityContext security, Outbox outbox,
             ReferenceNumbers numbers, EvidenceChain audit, WorkflowHistory history, PolicyWorkflow workflow,
             RateTableService rates, ObjectMapper mapper, com.nsure.collections.BillingService billing,
-            com.nsure.portfolio.LifeConsents consents) {
+            com.nsure.portfolio.LifeConsents consents,
+            org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting) {
+        this.underwriting = underwriting;
         this.billing = billing;
         this.consents = consents;
         this.em = em;
@@ -463,6 +466,12 @@ public class ServicingService {
         }
         InsurancePolicy policy = workflow.policy(e.policyRef);
         em.lock(policy, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        if (REFERRED_UNDERWRITING.equals(e.status) && body.path("approve").asBoolean(false)) {
+            // NS-IL03-003: a risk increase is approved only within the underwriter's authority (total cover after it).
+            BigDecimal added = e.newSumAssured != null && e.oldSumAssured != null
+                    ? e.newSumAssured.subtract(e.oldSumAssured) : BigDecimal.ZERO;
+            underwriting.getObject().requireAuthority(user, policy.getCustomerRef(), added);
+        }
         e.decidedBy = user.getUsername();
         e.decidedAt = LocalDateTime.now();
         e.decisionNote = note;
