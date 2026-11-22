@@ -94,6 +94,10 @@ public class GroupRecords {
 
     /** Refuses a membership change unless the scheme is active (NS-GL01-006): suspended and closed schemes take none. */
     static void requireActive(GroupScheme scheme, String what) {
+        if ("SETUP".equals(scheme.getStatus())) {
+            throw new IllegalArgumentException("Scheme " + scheme.getRef() + " is in set-up; " + what + " is not"
+                    + " accepted until its master policy is activated from accepted terms.");
+        }
         if (!"ACTIVE".equals(scheme.getStatus())) {
             throw new IllegalArgumentException("Scheme " + scheme.getRef() + " is "
                     + scheme.getStatus().toLowerCase(java.util.Locale.ROOT) + "; " + what + " is not accepted until it"
@@ -250,7 +254,13 @@ public class GroupRecords {
                 scheme.getColor(), scheme.getStatus(), scheme.getInceptionDate(), scheme.getRenewalDate(),
                 scheme.getRenewal(), scheme.getBillingFrequency(), activeMembers, pending,
                 premium.setScale(2, RoundingMode.HALF_UP), outstanding.setScale(2, RoundingMode.HALF_UP), categories,
-                scheme.getQuoteRef(), scheme.getPolicyYear(), scheme.getRowVersion());
+                scheme.getQuoteRef(), scheme.getPolicyYear(), scheme.getRowVersion(), setupView(scheme));
+    }
+
+    static GroupViews.SetupView setupView(GroupScheme s) {
+        return new GroupViews.SetupView(s.getSponsorRef(), s.getPayerName(), s.getBrokerRef(), s.getBillingMethod(),
+                s.getBillingDueDay(), s.getAawRule(), s.isPartialCoverAllowed(), s.getWordingRef(),
+                s.getWordingVersion(), s.getInceptionConditions(), s.getActivatedBy(), s.getActivatedAt());
     }
 
     static GroupViews.CategoryView categoryView(BenefitCategory c, int activeMembers) {

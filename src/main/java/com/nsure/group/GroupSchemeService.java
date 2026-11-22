@@ -87,17 +87,13 @@ public class GroupSchemeService {
         return detail(records.scheme(ref));
     }
 
-    @Transactional
-    public GroupViews.SchemeDetailView createScheme(JsonNode body) {
-        return createScheme(body, null);
-    }
-
     /**
-     * Creates the scheme's master record, directly or from an accepted quote, and publishes SchemeActivated once for
-     * either path (GL01).
+     * Creates the scheme's master record in SETUP (NS-GL01-004): its categories can be prepared, but it takes no census,
+     * underwriting or cover until it is activated from an accepted quotation with the approved wording and inception
+     * conditions ({@code com.nsure.grouplife.SchemeSetup}), which publishes SchemeActivated.
      */
     @Transactional
-    public GroupViews.SchemeDetailView createScheme(JsonNode body, String quoteRef) {
+    public GroupViews.SchemeDetailView createScheme(JsonNode body) {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("MANAGE_SCHEME");
         String name = GroupRecords.requiredText(body, "name", "Scheme name", 100);
@@ -124,17 +120,35 @@ public class GroupSchemeService {
         GroupScheme scheme = new GroupScheme(records.nextRef(GroupScheme.class, "SCH-", 3), name, sector,
                 initials(name), COLORS[(order - 1) % COLORS.length], order, inception, renewal,
                 renewal.format(DISPLAY), frequency);
-        if (quoteRef != null) {
-            scheme.setQuoteRef(quoteRef);
-        }
         em.persist(scheme);
+        audit.record(user.getUsername(), "Scheme set up", "Scheme", scheme.getRef(), "In set-up until activated");
+        return detail(scheme);
+    }
+
+    /**
+     * Publishes SchemeActivated for a scheme just put in force from accepted terms (GL01), with the quotation, wording
+     * version and sponsor it was activated on.
+     */
+    public void activated(GroupScheme scheme, String actor) {
+        records.refreshTotals(scheme);
         Map<String, Object> data = new java.util.LinkedHashMap<>();
         data.put("schemeRef", scheme.getRef());
-        data.put("quoteRef", quoteRef);
-        data.put("sponsor", name);
-        data.put("inceptionDate", inception.toString());
-        records.publish(com.nsure.integration.Events.SCHEME_ACTIVATED, scheme.getRef(), data, user.getUsername());
-        return detail(scheme);
+        data.put("quoteRef", scheme.getQuoteRef());
+        data.put("sponsor", scheme.getName());
+        data.put("sponsorRef", scheme.getSponsorRef());
+        data.put("inceptionDate", scheme.getInceptionDate().toString());
+        data.put("wording", scheme.getWordingRef() + " v" + scheme.getWordingVersion());
+        records.publish(com.nsure.integration.Events.SCHEME_ACTIVATED, scheme.getRef(), data, actor);
+    }
+
+    /** The scheme row locked for update, for the activation that changes it. */
+    public GroupScheme lockScheme(String ref) {
+        return records.lockedScheme(ref);
+    }
+
+    /** The scheme's categories, in code order. */
+    public List<BenefitCategory> categoriesOf(GroupScheme scheme) {
+        return records.categories(scheme);
     }
 
     /**

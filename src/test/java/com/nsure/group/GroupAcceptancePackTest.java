@@ -266,6 +266,7 @@ class GroupAcceptancePackTest {
     }
 
     private String upload(String scheme, String externalId, String header, String rows) throws Exception {
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme);
         return JsonPath.read(mockMvc.perform(json(post("/group/schemes/" + scheme + "/census-batches"), "admin",
                         body(Map.of("externalBatchId", externalId, "mode", "PARTIAL", "csv", header + "\n" + rows))))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.ref");

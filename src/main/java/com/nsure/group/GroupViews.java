@@ -32,7 +32,25 @@ public final class GroupViews {
             String quoteRef,
             Integer policyYear,
             // Send back in If-Match when changing the scheme (NS-TXN-001).
-            long version) {
+            long version,
+            // The master policy's set-up terms and what it was activated on (NS-GL01-003/004).
+            SetupView setup) {
+    }
+
+    /** Legal sponsor, payer, broker, billing arrangement, member rules and the activation record of a scheme. */
+    public record SetupView(
+            String sponsorRef,
+            String payerName,
+            String brokerRef,
+            String billingMethod,
+            Integer billingDueDay,
+            String aawRule,
+            boolean partialCoverAllowed,
+            String wordingRef,
+            Integer wordingVersion,
+            String inceptionConditions,
+            String activatedBy,
+            LocalDateTime activatedAt) {
     }
 
     public record SchemeDetailView(

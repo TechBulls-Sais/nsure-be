@@ -174,6 +174,7 @@ class GroupLifecycleEndToEndTest {
     }
 
     private String upload(String scheme, String externalId, String rows) throws Exception {
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme);
         return JsonPath.read(mockMvc.perform(json(post("/group/schemes/" + scheme + "/census-batches"), "admin",
                         body(Map.of("externalBatchId", externalId, "mode", "PARTIAL", "csv", HEADER + "\n" + rows))))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.ref");

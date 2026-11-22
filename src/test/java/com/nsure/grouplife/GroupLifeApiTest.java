@@ -51,7 +51,7 @@ class GroupLifeApiTest {
                 .andExpect(jsonPath("$.status").value("ACCEPTED"));
 
         // AT-GL01-01: no activation without the wording and a free-cover limit.
-        String activate = "{\"inceptionDate\":\"" + LocalDate.now() + "\",\"wordingConfirmed\":true}";
+        String activate = "{\"inceptionDate\":\"" + LocalDate.now() + "\",\"wordingRef\":\"WRD-G001\",\"conditions\":[\"SIGNED_PROPOSAL\",\"SIGNED_CENSUS\",\"FIRST_PREMIUM_OR_DEFERRAL\"]}";
         mockMvc.perform(json(post("/group-life/quotes/" + ref + "/activation"), "admin", activate))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(containsString("free-cover limit")));
@@ -60,8 +60,18 @@ class GroupLifeApiTest {
         mockMvc.perform(json(post("/group-life/quotes/" + ref + "/progress"), "admin", "{\"action\":\"SUBMIT\"}")).andExpect(status().isOk());
         mockMvc.perform(json(post("/group-life/quotes/" + ref + "/progress"), "secadmin", "{\"action\":\"APPROVE\"}")).andExpect(status().isOk());
         mockMvc.perform(json(post("/group-life/quotes/" + ref + "/progress"), "admin", "{\"action\":\"ACCEPT\"}")).andExpect(status().isOk());
-        mockMvc.perform(json(post("/group-life/quotes/" + ref + "/activation"), "admin", activate.replace("true", "false")))
-                .andExpect(status().isUnprocessableEntity());
+        // AT-GL01-01: no approved group wording, or inception conditions not confirmed: no master policy.
+        mockMvc.perform(json(post("/group-life/quotes/" + ref + "/activation"), "admin", activate.replace("WRD-G001", "WRD-0001")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("not a group scheme wording")));
+        mockMvc.perform(json(post("/group-life/quotes/" + ref + "/activation"), "admin",
+                        "{\"inceptionDate\":\"" + LocalDate.now() + "\",\"wordingConfirmed\":true}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("approved scheme wording")))
+                .andExpect(jsonPath("$.message").value(containsString("Signed proposal")));
+        mockMvc.perform(json(post("/group-life/quotes/" + ref + "/activation"), "admin", activate.replace(",\"SIGNED_CENSUS\"", "")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("Signed census")));
         String scheme = JsonPath.read(mockMvc.perform(json(post("/group-life/quotes/" + ref + "/activation"), "admin", activate))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACTIVATED"))

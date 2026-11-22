@@ -88,6 +88,7 @@ class GroupAdministrationApiTest {
                     .append(category).append(',').append(salary).append(",JOIN,2026-01-01\n");
         }
         String upload = body(Map.of("externalBatchId", "HR-2026-01", "mode", "PARTIAL", "csv", csv.toString()));
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme);
         String batchBody = mockMvc.perform(json(post("/group/schemes/" + scheme + "/census-batches"), "grpadmin", upload))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("VALIDATED"))
@@ -368,6 +369,7 @@ class GroupAdministrationApiTest {
     }
 
     private String upload(String scheme, String externalId, String mode, String rows) throws Exception {
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme);
         String response = mockMvc.perform(json(post("/group/schemes/" + scheme + "/census-batches"), "grpadmin",
                         body(Map.of("externalBatchId", externalId, "mode", mode, "csv", HEADER + "\n" + rows))))
                 .andExpect(status().isOk())

@@ -183,52 +183,20 @@ public class GroupLifeService {
         return quoteView(q);
     }
 
+    /** Contract set-up and activation (NS-GL01-003/004, AT-GL01-01): see {@link SchemeSetup}. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private SchemeSetup setup;
+
     /**
-     * {inceptionDate, wordingConfirmed}: activates the master policy from the accepted quote. Refused without the
-     * approved wording and a free-cover limit (AT-GL01-01).
+     * {inceptionDate, wordingRef, wordingVersion?, conditions [..], categories [..]?, sponsorRef?, payerName?,
+     * brokerRef?, billingMethod?, billingDueDay?, aawRule?, partialCoverAllowed?}: activates the master policy from the
+     * accepted quote. Refused without an approved group wording, the inception conditions or free-cover rules.
      */
     @Transactional
     public Map<String, Object> activate(String ref, JsonNode body) {
         AppUser user = user("MANAGE_SCHEME");
         Quote q = latest(ref);
-        expect(q, "ACCEPTED");
-        if (!body.path("wordingConfirmed").asBoolean(false)) {
-            throw new IllegalArgumentException("Confirm the approved scheme wording before activating the master policy.");
-        }
-        if (q.freeCoverLimit == null) {
-            throw new IllegalArgumentException(ref + " has no free-cover limit. Revise the quote to set it before"
-                    + " activation.");
-        }
-        LocalDate inception = LocalDate.parse(required(body, "inceptionDate"));
-        ObjectNode scheme = mapper.createObjectNode();
-        scheme.put("name", q.sponsorName).put("sector", q.sector).put("inceptionDate", inception.toString())
-                .put("renewalDate", inception.plusYears(1).toString());
-        // SchemeActivated is published by the scheme's creation, with the quote it came from.
-        String schemeRef = schemes.createScheme(scheme, ref).scheme().ref();
-        q.status = "ACTIVATED";
-        q.schemeRef = schemeRef;
-        for (String type : q.benefits.split(",")) {
-            Benefit b = new Benefit();
-            b.schemeRef = schemeRef;
-            b.benefitType = type.trim();
-            b.basis = "GLA".equals(b.benefitType) || "LUMP_SUM_DISABILITY".equals(b.benefitType) ? "SALARY_MULTIPLE"
-                    : "INCOME_PROTECTION".equals(b.benefitType) ? "MONTHLY_INCOME_PERCENT" : "FIXED";
-            b.multiple = "SALARY_MULTIPLE".equals(b.basis) ? q.salaryMultiple
-                    : "MONTHLY_INCOME_PERCENT".equals(b.basis) ? new BigDecimal("75.00") : null;
-            b.fixedAmount = "FIXED".equals(b.basis) ? PRODUCT_MAXIMUM.get(b.benefitType) : null;
-            b.terms = defaultTerms(b.benefitType);
-            b.updatedBy = user.getUsername();
-            b.updatedAt = LocalDateTime.now();
-            // The plan comes from the quote the underwriter approved.
-            b.approvalStatus = "APPROVED";
-            b.approvedBy = q.decidedBy;
-            b.approvedAt = LocalDateTime.now();
-            em.persist(b);
-        }
-        outbox.publish(Events.SCHEME_PLAN_APPROVED, schemeRef, Map.of("schemeRef", schemeRef, "benefits",
-                List.of(q.benefits.split(",")), "approvedBy", q.decidedBy == null ? "" : q.decidedBy,
-                "source", ref + " v" + q.versionNo), user.getUsername());
-        audit.record(user.getUsername(), "Scheme activated", "Scheme", schemeRef, "From " + ref + " v" + q.versionNo);
+        setup.activateQuote(q, body, user);
         return quoteView(q);
     }
 
@@ -354,7 +322,7 @@ public class GroupLifeService {
         return benefits(schemeRef);
     }
 
-    private static String defaultTerms(String type) {
+    static String defaultTerms(String type) {
         return switch (type) {
             case "GLA" -> "Death benefit as a multiple of annual salary. Actively-at-work and free-cover rules apply.";
             case "LUMP_SUM_DISABILITY" -> "Own-occupation disability after a 6-month assessment period; 50% partial"
