@@ -28,8 +28,10 @@ class GroupLifeApiTest {
 
     @Test
     void aSchemeGoesFromQuotationThroughApprovalToActivationRenewalAndClosure() throws Exception {
+        // A negotiated rate on the sum-assured basis, rated on a validated census of three lives (14.4m salary roll).
         String quote = "{\"sponsorName\":\"Kgalagadi Mining\",\"sector\":\"Mining\",\"lives\":120,\"salaryRoll\":14400000,"
-                + "\"benefits\":[\"GLA\",\"FAMILY\",\"CREDIT\"],\"ratingBasis\":\"SALARY\",\"salaryMultiple\":2,\"ratePerMille\":3.2}";
+                + "\"benefits\":[\"GLA\",\"FAMILY\",\"CREDIT\"],\"ratingBasis\":\"SUM_ASSURED\",\"salaryMultiple\":2,\"ratePerMille\":3.2,"
+                + "\"census\":\"memberKey,dateOfBirth,salary\\nK1,1980-01-01,4800000\\nK2,1985-01-01,4800000\\nK3,1990-01-01,4800000\"}";
         String ref = JsonPath.read(mockMvc.perform(json(post("/group-life/quotes"), "admin", quote))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.version").value(1))

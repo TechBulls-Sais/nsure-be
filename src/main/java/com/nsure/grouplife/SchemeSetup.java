@@ -9,6 +9,8 @@ import com.nsure.common.Money;
 import com.nsure.common.exception.ConflictException;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.group.BenefitCategory;
+import com.nsure.group.GroupRating;
+import com.nsure.group.RatingRecords.QuoteCensus;
 import com.nsure.group.GroupSchemeService;
 import com.nsure.group.GroupSponsor;
 import com.nsure.group.GroupViews;
@@ -57,13 +59,24 @@ public class SchemeSetup {
     private final EvidenceChain audit;
     private final GroupSchemeService schemes;
     private final ObjectMapper mapper;
+    private final GroupRating rating;
     /** Demo default (D06/D11 open): the inception conditions every activation must confirm. */
     private final List<String> requiredConditions;
+    /** Demo defaults (D01/D02 open): days a quotation stays open for acceptance, and its default loadings. */
+    @Value("${nsure.group.quote.validity-days:30}")
+    private int defaultValidityDays;
+    @Value("${nsure.group.quote.expense-loading-percent:10}")
+    private BigDecimal defaultExpensePercent;
+    @Value("${nsure.group.quote.commission-percent:5}")
+    private BigDecimal defaultCommissionPercent;
+    @Value("${nsure.group.quote.profit-margin-percent:5}")
+    private BigDecimal defaultProfitPercent;
 
     public SchemeSetup(EntityManager em, PlatformSecurityContext security, Outbox outbox, ReferenceNumbers numbers,
-            EvidenceChain audit, GroupSchemeService schemes, ObjectMapper mapper,
+            EvidenceChain audit, GroupSchemeService schemes, ObjectMapper mapper, GroupRating rating,
             @Value("${nsure.group.activation.inception-conditions:SIGNED_PROPOSAL,SIGNED_CENSUS,FIRST_PREMIUM_OR_DEFERRAL}")
             List<String> requiredConditions) {
+        this.rating = rating;
         this.em = em;
         this.security = security;
         this.outbox = outbox;
@@ -167,7 +180,18 @@ public class SchemeSetup {
                 billingMethod(body), dueDay(body), aawRule(body), partialCover(body));
         if (schemes.categoriesOf(s).isEmpty()) {
             for (JsonNode c : categoryDefinitions(q, body)) {
-                schemes.addCategory(s.getRef(), c);
+                ObjectNode def = c.deepCopy();
+                // A category without its own rate bills on the quotation's priced rate; entry ages default to 18-64.
+                if (!def.hasNonNull("ratePerMille") || def.get("ratePerMille").asText().isBlank()) {
+                    def.put("ratePerMille", monthlyRate(q).toPlainString());
+                }
+                if (!def.hasNonNull("minEntryAge")) {
+                    def.put("minEntryAge", 18);
+                }
+                if (!def.hasNonNull("maxEntryAge")) {
+                    def.put("maxEntryAge", 64);
+                }
+                schemes.addCategory(s.getRef(), def);
             }
         }
         Object[] wording = wording(text(body, "wordingRef"), integer(body, "wordingVersion"));
@@ -266,6 +290,31 @@ public class SchemeSetup {
             given.forEach(out::add);
             return out;
         }
+        QuoteTerms terms = terms(q);
+        JsonNode design = terms == null ? null : json(terms.design);
+        if (design != null && design.isArray() && !design.isEmpty()) {
+            Map<String, BigDecimal> rates = new LinkedHashMap<>();
+            JsonNode priced = json(terms.pricingDetail);
+            if (priced != null) {
+                priced.path("categories").forEach(c -> {
+                    if (c.hasNonNull("monthlyRatePerMille")) {
+                        rates.put(c.path("category").asText(), new BigDecimal(c.get("monthlyRatePerMille").asText()));
+                    }
+                });
+            }
+            for (JsonNode d : design) {
+                ObjectNode c = d.deepCopy();
+                if (!c.hasNonNull("freeCoverLimit") && q.freeCoverLimit != null) {
+                    c.put("freeCoverLimit", q.freeCoverLimit.toPlainString());
+                }
+                BigDecimal rate = rates.get(c.path("code").asText());
+                if (rate != null && rate.signum() > 0 && !c.hasNonNull("ratePerMille")) {
+                    c.put("ratePerMille", rate.toPlainString());
+                }
+                out.add(c);
+            }
+            return out;
+        }
         ObjectNode c = mapper.createObjectNode();
         c.put("code", "ALL").put("name", "All eligible employees").put("benefitBasis", "SALARY_MULTIPLE")
                 .put("salaryMultiple", q.salaryMultiple.toPlainString())
@@ -318,6 +367,323 @@ public class SchemeSetup {
             seeded.add(type);
         }
         return seeded;
+    }
+
+    // ── quotation terms and pricing (NS-GL01-001/002) ─────────────────────────────────────────────
+
+    /**
+     * The rating basis, salary multiple, free-cover limit and the census aggregates entered (used only for an
+     * indicative price); the premium itself is set by {@link #price} once the version exists.
+     */
+    void basis(Quote q, JsonNode body) {
+        String basis = text(body, "ratingBasis");
+        q.ratingBasis = basis == null ? "SALARY" : basis.toUpperCase(Locale.ROOT);
+        if (!GroupRating.BASES.contains(q.ratingBasis)) {
+            throw new IllegalArgumentException("ratingBasis must be SALARY, SUM_ASSURED, PER_MEMBER or LOAN_BALANCE.");
+        }
+        q.salaryMultiple = decimal(body, "salaryMultiple", BigDecimal.ONE).setScale(2, RoundingMode.HALF_UP);
+        if (q.salaryMultiple.signum() <= 0 || q.salaryMultiple.compareTo(BigDecimal.valueOf(50)) > 0) {
+            throw new IllegalArgumentException("salaryMultiple must be above 0 and at most 50.");
+        }
+        Integer lives = integer(body, "lives");
+        q.lives = lives == null ? 0 : lives;
+        q.salaryRoll = Money.of(decimal(body, "salaryRoll", BigDecimal.ZERO));
+        if (q.lives < 0 || q.salaryRoll.signum() < 0) {
+            throw new IllegalArgumentException("Lives and salary roll cannot be negative.");
+        }
+        BigDecimal rate = decimal(body, "ratePerMille", BigDecimal.ZERO);
+        if (rate.signum() < 0) {
+            throw new IllegalArgumentException("ratePerMille cannot be negative.");
+        }
+        q.ratePerMille = rate.setScale(4, RoundingMode.HALF_UP);
+        q.annualPremium = BigDecimal.ZERO.setScale(2);
+        String free = text(body, "freeCoverLimit");
+        q.freeCoverLimit = free == null ? null : Money.of(new BigDecimal(free));
+        q.validUntil = LocalDate.now().plusDays(defaultValidityDays);
+    }
+
+    /**
+     * Prices a new quotation version and keeps its terms: the census (a new numbered version when one is given,
+     * otherwise the previous version's), the rate source, loadings, validity and design. {@code changes} is what the
+     * user sent; {@code previous} the version it revises, whose terms carry over unless changed.
+     */
+    void price(Quote q, JsonNode changes, Quote previous, AppUser user) {
+        QuoteTerms base = previous == null ? null : terms(previous);
+        QuoteTerms t = new QuoteTerms();
+        t.quoteId = q.id;
+        apply(q, t, changes, base, previous, user.getUsername());
+        em.persist(t);
+        audit.record(user.getUsername(), previous == null ? "Scheme quote prepared" : "Scheme quote revised", "SchemeQuote",
+                q.ref, "v" + q.versionNo + ": " + Money.display(q.annualPremium) + " a year, " + t.pricingStatus.toLowerCase(Locale.ROOT)
+                        + (t.rateTables == null ? " on a negotiated rate" : " on " + t.rateTables));
+    }
+
+    /** {csv}: a new census version for the draft version of the quotation, which is priced again on it. */
+    @Transactional
+    public Map<String, Object> uploadCensus(String ref, JsonNode body) {
+        AppUser user = user("MANAGE_SCHEME");
+        Quote q = latest(ref);
+        if (!"DRAFT".equals(q.status)) {
+            throw new ConflictException(ref + " v" + q.versionNo + " is " + q.status.toLowerCase(Locale.ROOT)
+                    + "; revise the quotation to rate a new census on a new version.");
+        }
+        if (text(body, "csv") == null) {
+            throw new IllegalArgumentException("csv is required: the census with a header row.");
+        }
+        QuoteTerms t = terms(q);
+        if (t == null) {
+            t = new QuoteTerms();
+            t.quoteId = q.id;
+            em.persist(t);
+        }
+        ObjectNode changes = mapper.createObjectNode();
+        changes.put("census", text(body, "csv"));
+        apply(q, t, changes, t, q, user.getUsername());
+        audit.record(user.getUsername(), "Scheme quote census", "SchemeQuote", ref, "v" + q.versionNo + " rated on census"
+                + " v" + rating.census(t.censusId).getVersion());
+        Map<String, Object> out = new LinkedHashMap<>(termsView(q));
+        out.put("annualPremium", q.annualPremium);
+        return out;
+    }
+
+    /** The census version with every row and its outcome (the census validation summary). */
+    @Transactional(readOnly = true)
+    public Map<String, Object> census(String ref, int version) {
+        user("READ_SCHEME");
+        Long id = em.createQuery("select c.id from QuoteCensus c where c.quoteRef = :r and c.version = :v", Long.class)
+                .setParameter("r", ref).setParameter("v", version).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Census v" + version + " of " + ref + " not found"));
+        return rating.censusView(id, true);
+    }
+
+    private void apply(Quote q, QuoteTerms t, JsonNode changes, QuoteTerms base, Quote previous, String actor) {
+        String sponsorRef = text(changes, "sponsorRef");
+        if (sponsorRef != null) {
+            sponsor(sponsorRef);
+        }
+        t.sponsorRef = sponsorRef != null ? sponsorRef : base == null ? null : base.sponsorRef;
+        JsonNode categories = changes == null ? null : changes.get("categories");
+        String designJson = categories != null && categories.isArray() ? designOf(categories)
+                : base == null ? null : base.design;
+        t.design = designJson;
+        Map<String, GroupRating.DesignCategory> design = designMap(json(designJson));
+        String csv = text(changes, "census");
+        if (csv != null) {
+            t.censusId = rating.recordCensus(q.ref, csv, q.ratingBasis, design, LocalDate.now(), actor).getId();
+        } else if (base != null) {
+            t.censusId = base.censusId;
+        }
+        String source = text(changes, "rateSource");
+        if (source == null) {
+            String given = text(changes, "ratePerMille");
+            boolean negotiatedRate = given != null && new BigDecimal(given).signum() > 0;
+            source = negotiatedRate ? QuoteTerms.NEGOTIATED : base != null && base.rateSource != null ? base.rateSource
+                    : base != null && q.ratePerMille.signum() > 0 ? QuoteTerms.NEGOTIATED : QuoteTerms.TABLE;
+        }
+        source = source.toUpperCase(Locale.ROOT);
+        if (!Set.of(QuoteTerms.TABLE, QuoteTerms.NEGOTIATED).contains(source)) {
+            throw new IllegalArgumentException("rateSource must be TABLE (approved rate tables) or NEGOTIATED.");
+        }
+        t.rateSource = source;
+        JsonNode assumptions = changes == null ? null : changes.get("assumptions");
+        t.expensePercent = percent(assumptions, "expensePercent", or(base == null ? null : base.expensePercent,
+                defaultExpensePercent), 0, 50);
+        t.commissionPercent = percent(assumptions, "commissionPercent", or(base == null ? null : base.commissionPercent,
+                defaultCommissionPercent), 0, 50);
+        t.profitPercent = percent(assumptions, "profitPercent", or(base == null ? null : base.profitPercent,
+                defaultProfitPercent), 0, 50);
+        t.adjustmentPercent = percent(changes, "adjustmentPercent", or(base == null ? null : base.adjustmentPercent,
+                BigDecimal.ZERO), -50, 100);
+        Integer validity = integer(changes, "validityDays");
+        t.validityDays = validity != null ? validity : base != null && base.validityDays > 0 ? base.validityDays
+                : defaultValidityDays;
+        if (t.validityDays < 1 || t.validityDays > 180) {
+            throw new IllegalArgumentException("validityDays must be from 1 to 180.");
+        }
+        BigDecimal negotiated = null;
+        if (QuoteTerms.NEGOTIATED.equals(source)) {
+            negotiated = changes != null && changes.hasNonNull("ratePerMille") ? new BigDecimal(text(changes, "ratePerMille"))
+                    : previous != null ? previous.ratePerMille : q.ratePerMille;
+        }
+        QuoteCensus census = rating.census(t.censusId);
+        GroupRating.Pricing p = rating.price(new GroupRating.PricingRequest(List.of(q.benefits.split(",")), q.ratingBasis,
+                QuoteTerms.NEGOTIATED.equals(source), negotiated, q.salaryMultiple, design, census, q.lives, q.salaryRoll,
+                decimal(changes, "loanBalance", BigDecimal.ZERO), LocalDate.now(), t.expensePercent, t.commissionPercent,
+                t.profitPercent, t.adjustmentPercent));
+        t.pricingStatus = p.status();
+        t.technicalPremium = p.technicalPremium();
+        t.rateTables = p.tables().isEmpty() ? null : String.join(", ", p.tables());
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("indicativeReason", p.indicativeReason());
+        detail.put("sumAssured", p.sumAssured());
+        detail.put("benefits", p.benefits());
+        detail.put("categories", p.categories());
+        try {
+            t.pricingDetail = mapper.writeValueAsString(detail);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalStateException(ex);
+        }
+        q.annualPremium = p.annualPremium();
+        q.ratePerMille = p.officeRate();
+        if (QuoteTerms.RATED.equals(p.status())) {
+            q.lives = p.lives();
+            q.salaryRoll = p.salaryRoll();
+        }
+        q.validUntil = LocalDate.now().plusDays(t.validityDays);
+    }
+
+    /** SUBMIT needs the version rated on a census that passed validation (NS-GL01-002). */
+    void requireRated(Quote q) {
+        QuoteTerms t = terms(q);
+        if (t != null && !QuoteTerms.RATED.equals(t.pricingStatus)) {
+            JsonNode detail = json(t.pricingDetail);
+            String reason = detail == null ? "" : detail.path("indicativeReason").asText("");
+            throw new IllegalArgumentException(q.ref + " v" + q.versionNo + " is priced indicatively. " + reason
+                    + " Rate it on a validated census before submitting it for approval.");
+        }
+    }
+
+    /** The version's terms for the quote view: census summary, sponsor, pricing, loadings, design and history. */
+    Map<String, Object> termsView(Quote q) {
+        Map<String, Object> v = new LinkedHashMap<>();
+        QuoteTerms t = terms(q);
+        v.put("rateUnit", GroupRating.unit(q.ratingBasis));
+        if (t == null) {
+            v.put("pricingStatus", "RATED");
+            return v;
+        }
+        v.put("sponsorRef", t.sponsorRef);
+        v.put("rateSource", t.rateSource);
+        v.put("pricingStatus", t.pricingStatus);
+        v.put("technicalPremium", t.technicalPremium);
+        v.put("adjustmentPercent", t.adjustmentPercent);
+        Map<String, Object> assumptions = new LinkedHashMap<>();
+        assumptions.put("expensePercent", t.expensePercent);
+        assumptions.put("commissionPercent", t.commissionPercent);
+        assumptions.put("profitPercent", t.profitPercent);
+        v.put("assumptions", assumptions);
+        v.put("validityDays", t.validityDays);
+        v.put("rateTables", t.rateTables);
+        v.put("pricing", json(t.pricingDetail));
+        v.put("design", json(t.design));
+        v.put("census", rating.censusView(t.censusId, false));
+        return v;
+    }
+
+    /** The quotation's approval history (every version and decision from the evidence chain), oldest first. */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> history(String ref) {
+        user("READ_SCHEME");
+        latest(ref);
+        List<Map<String, Object>> out = new ArrayList<>();
+        audit.search("SchemeQuote", ref, null, 200).forEach(e -> {
+            Map<String, Object> v = new LinkedHashMap<>();
+            v.put("at", e.getOccurredAt());
+            v.put("actor", e.getActor());
+            v.put("action", e.getAction());
+            v.put("detail", e.getReason());
+            out.add(v);
+        });
+        out.sort(java.util.Comparator.comparing(m -> (LocalDateTime) m.get("at")));
+        return out;
+    }
+
+    QuoteTerms terms(Quote q) {
+        if (q.id == null) {
+            return null;
+        }
+        return em.createQuery("select t from SchemeQuoteTerms t where t.quoteId = :id", QuoteTerms.class)
+                .setParameter("id", q.id).getResultStream().findFirst().orElse(null);
+    }
+
+    private String designOf(JsonNode categories) {
+        com.fasterxml.jackson.databind.node.ArrayNode out = mapper.createArrayNode();
+        Set<String> codes = new LinkedHashSet<>();
+        for (JsonNode c : categories) {
+            String code = text(c, "code");
+            if (code == null || !code.toUpperCase(Locale.ROOT).matches("[A-Z0-9_-]{1,20}") || !codes.add(code.toUpperCase(Locale.ROOT))) {
+                throw new IllegalArgumentException("Each design category needs a unique code of letters, digits, - or _.");
+            }
+            String basis = text(c, "benefitBasis") == null ? BenefitCategory.SALARY_MULTIPLE
+                    : text(c, "benefitBasis").toUpperCase(Locale.ROOT);
+            ObjectNode d = mapper.createObjectNode();
+            d.put("code", code.toUpperCase(Locale.ROOT));
+            d.put("name", text(c, "name") == null ? code : text(c, "name"));
+            d.put("benefitBasis", basis);
+            if (BenefitCategory.SALARY_MULTIPLE.equals(basis)) {
+                BigDecimal m = decimal(c, "salaryMultiple", null);
+                if (m == null || m.signum() <= 0 || m.compareTo(BigDecimal.valueOf(50)) > 0) {
+                    throw new IllegalArgumentException("Category " + code + " needs a salary multiple above 0 and at most 50.");
+                }
+                d.put("salaryMultiple", m.toPlainString());
+            } else if (BenefitCategory.FIXED.equals(basis)) {
+                BigDecimal f = decimal(c, "fixedCover", null);
+                if (f == null || f.signum() <= 0) {
+                    throw new IllegalArgumentException("Category " + code + " needs a fixed cover above 0.");
+                }
+                d.put("fixedCover", f.toPlainString());
+            } else {
+                throw new IllegalArgumentException("Category " + code + ": benefitBasis must be SALARY_MULTIPLE or FIXED.");
+            }
+            for (String f : new String[] {"freeCoverLimit", "minEntryAge", "maxEntryAge"}) {
+                if (text(c, f) != null) {
+                    d.put(f, text(c, f));
+                }
+            }
+            out.add(d);
+        }
+        return out.isEmpty() ? null : out.toString();
+    }
+
+    private static Map<String, GroupRating.DesignCategory> designMap(JsonNode design) {
+        Map<String, GroupRating.DesignCategory> out = new LinkedHashMap<>();
+        if (design != null && design.isArray()) {
+            for (JsonNode d : design) {
+                out.put(d.path("code").asText(), new GroupRating.DesignCategory(d.path("code").asText(),
+                        d.path("name").asText(), d.path("benefitBasis").asText(),
+                        d.hasNonNull("salaryMultiple") ? new BigDecimal(d.get("salaryMultiple").asText()) : null,
+                        d.hasNonNull("fixedCover") ? new BigDecimal(d.get("fixedCover").asText()) : null));
+            }
+        }
+        return out;
+    }
+
+    private JsonNode json(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            return mapper.readTree(text);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            return null;
+        }
+    }
+
+    private static BigDecimal or(BigDecimal value, BigDecimal fallback) {
+        return value == null ? fallback : value;
+    }
+
+    private static BigDecimal percent(JsonNode body, String field, BigDecimal fallback, int min, int max) {
+        BigDecimal v = decimal(body, field, fallback);
+        if (v == null) {
+            return null;
+        }
+        if (v.compareTo(BigDecimal.valueOf(min)) < 0 || v.compareTo(BigDecimal.valueOf(max)) > 0) {
+            throw new IllegalArgumentException(field + " must be from " + min + " to " + max + " percent.");
+        }
+        return v.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private static BigDecimal decimal(JsonNode body, String field, BigDecimal fallback) {
+        String v = text(body, field);
+        if (v == null) {
+            return fallback;
+        }
+        try {
+            return new BigDecimal(v);
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException(field + " must be a number.");
+        }
     }
 
     // ── wording, sponsors ──────────────────────────────────────────────────────────────────────────

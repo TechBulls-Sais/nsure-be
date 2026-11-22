@@ -45,7 +45,7 @@ class GroupEventsApiTest {
         String quote = JsonPath.read(mockMvc.perform(json(post("/group-life/quotes"), "admin",
                         "{\"sponsorName\":\"Events Quarry " + System.nanoTime() + "\",\"sector\":\"Mining\",\"lives\":10,"
                                 + "\"salaryRoll\":1000000,\"benefits\":[\"GLA\",\"FAMILY\"],\"ratePerMille\":3,"
-                                + "\"freeCoverLimit\":500000}"))
+                                + "\"freeCoverLimit\":500000,\"census\":\"" + com.nsure.testsupport.GroupSchemeSetup.QUOTE_CENSUS + "\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.ref");
         progress(quote, "admin", "SUBMIT");
         assertThat(events(Events.SCHEME_QUOTED, quote)).isEmpty();

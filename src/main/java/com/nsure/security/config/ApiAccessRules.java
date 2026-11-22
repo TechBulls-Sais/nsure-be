@@ -263,6 +263,8 @@ public final class ApiAccessRules {
             // ── group set-up GL01-GL03 (WP b) ──────────────────────────────────────────────────────────
             rule(POST, "/group/schemes/*/activation", anyOf("MANAGE_SCHEME")),
             rule(POST, "/group-life/sponsors", anyOf("MANAGE_SCHEME")),
+            rule(POST, "/group-life/rate-tables", anyOf("CREATE_RATE_TABLE")),
+            rule(POST, "/group-life/rate-tables/*/versions/*/approval", anyOf("PUBLISH_RATE_TABLE")),
 
             // ── insurance subledger SH08 (Finance Controller) ──────────────────────────────────────────
             rule(GET, "/finance/**", anyOf("READ_FINANCE")),

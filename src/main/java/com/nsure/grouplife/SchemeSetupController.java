@@ -19,10 +19,46 @@ public class SchemeSetupController {
 
     private final SchemeSetup setup;
     private final ObjectMapper mapper;
+    private final com.nsure.group.GroupRating rating;
 
-    public SchemeSetupController(SchemeSetup setup, ObjectMapper mapper) {
+    public SchemeSetupController(SchemeSetup setup, ObjectMapper mapper, com.nsure.group.GroupRating rating) {
         this.setup = setup;
         this.mapper = mapper;
+        this.rating = rating;
+    }
+
+    // ── quotation census, history and rate tables (NS-GL01-001/002) ─────────────────────────────
+
+    /** {csv}: a new census version for the draft quotation, which is priced again on it. */
+    @PostMapping("/group-life/quotes/{ref}/census")
+    public Map<String, Object> uploadCensus(@PathVariable String ref, @RequestBody JsonNode body) {
+        return setup.uploadCensus(ref, body);
+    }
+
+    @GetMapping("/group-life/quotes/{ref}/census/{version}")
+    public Map<String, Object> census(@PathVariable String ref, @PathVariable int version) {
+        return setup.census(ref, version);
+    }
+
+    @GetMapping("/group-life/quotes/{ref}/history")
+    public List<Map<String, Object>> history(@PathVariable String ref) {
+        return setup.history(ref);
+    }
+
+    @GetMapping("/group-life/rate-tables")
+    public List<Map<String, Object>> rateTables() {
+        return rating.rateTables();
+    }
+
+    /** {tableCode, label, benefitType, ratingBasis, bands [{ageFrom, ageTo, rate}], note?}: a new draft version. */
+    @PostMapping("/group-life/rate-tables")
+    public Map<String, Object> draftRateTable(@RequestBody JsonNode body) {
+        return rating.draftRateTable(body);
+    }
+
+    @PostMapping("/group-life/rate-tables/{code}/versions/{version}/approval")
+    public Map<String, Object> approveRateTable(@PathVariable String code, @PathVariable int version) {
+        return rating.approveRateTable(code, version);
     }
 
     @GetMapping("/group-life/sponsors")

@@ -40,7 +40,7 @@ class GroupWorkspaceApiTest {
         String quote = JsonPath.read(mockMvc.perform(json(post("/group-life/quotes"), "admin",
                         "{\"sponsorName\":\"Timeline Mills " + System.nanoTime() + "\",\"sector\":\"Milling\",\"lives\":5,"
                                 + "\"salaryRoll\":500000,\"benefits\":[\"GLA\",\"FAMILY\"],\"ratePerMille\":2,"
-                                + "\"freeCoverLimit\":500000}"))
+                                + "\"freeCoverLimit\":500000,\"census\":\"" + com.nsure.testsupport.GroupSchemeSetup.QUOTE_CENSUS + "\"}"))
                 .andReturn().getResponse().getContentAsString(), "$.ref");
         for (String[] step : new String[][] {{"admin", "SUBMIT"}, {"secadmin", "APPROVE"}, {"admin", "ACCEPT"}}) {
             mockMvc.perform(json(post("/group-life/quotes/" + quote + "/progress"), step[0], "{\"action\":\"" + step[1] + "\"}"))

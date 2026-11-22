@@ -107,6 +107,8 @@ public class GroupLifeService {
         q.createdBy = user.getUsername();
         q.createdAt = LocalDateTime.now();
         em.persist(q);
+        // NS-GL01-001/002: census version, rate source, pricing and terms of this version (SchemeSetup).
+        setup.price(q, body, null, user);
         return quoteView(q);
     }
 
@@ -137,6 +139,7 @@ public class GroupLifeService {
         q.createdBy = user.getUsername();
         q.createdAt = LocalDateTime.now();
         em.persist(q);
+        setup.price(q, body, latest, user);
         return quoteView(q);
     }
 
@@ -150,6 +153,7 @@ public class GroupLifeService {
             case "SUBMIT" -> {
                 user.validateHasPermissionTo("MANAGE_SCHEME");
                 expect(q, "DRAFT");
+                setup.requireRated(q);
                 q.status = "SUBMITTED";
             }
             case "APPROVE", "DECLINE" -> {
@@ -203,8 +207,6 @@ public class GroupLifeService {
     private Quote fill(Quote q, JsonNode body) {
         q.sponsorName = required(body, "sponsorName");
         q.sector = required(body, "sector");
-        q.lives = body.path("lives").asInt(0);
-        q.salaryRoll = Money.of(new BigDecimal(required(body, "salaryRoll")));
         List<String> benefits = new ArrayList<>();
         JsonNode list = body.get("benefits");
         if (list != null && list.isArray()) {
@@ -219,24 +221,9 @@ public class GroupLifeService {
                     .toList() + ".");
         }
         q.benefits = String.join(",", benefits);
-        // NS-GL01-002: the rating basis is stated, never assumed.
-        q.ratingBasis = optional(body, "ratingBasis") == null ? "SALARY" : optional(body, "ratingBasis")
-                .toUpperCase(Locale.ROOT);
-        if (!Set.of("SALARY", "SUM_ASSURED", "PER_MEMBER", "LOAN_BALANCE").contains(q.ratingBasis)) {
-            throw new IllegalArgumentException("ratingBasis must be SALARY, SUM_ASSURED, PER_MEMBER or LOAN_BALANCE.");
-        }
-        q.salaryMultiple = new BigDecimal(optional(body, "salaryMultiple") == null ? "1" : optional(body,
-                "salaryMultiple")).setScale(2, RoundingMode.HALF_UP);
-        q.ratePerMille = new BigDecimal(required(body, "ratePerMille")).setScale(4, RoundingMode.HALF_UP);
-        if (q.lives < 1 || q.salaryRoll.signum() <= 0 || q.ratePerMille.signum() <= 0 || q.salaryMultiple.signum() <= 0) {
-            throw new IllegalArgumentException("The census needs at least one life, a salary roll, a multiple and a"
-                    + " rate above zero.");
-        }
-        BigDecimal sumAssured = q.salaryRoll.multiply(q.salaryMultiple);
-        q.annualPremium = sumAssured.multiply(q.ratePerMille).divide(THOUSAND, 2, RoundingMode.HALF_UP);
-        q.freeCoverLimit = optional(body, "freeCoverLimit") == null ? null
-                : Money.of(new BigDecimal(optional(body, "freeCoverLimit")));
-        q.validUntil = LocalDate.now().plusDays(30);
+        // NS-GL01-002: the rating basis is stated, never assumed; the premium is set from the census and the
+        // approved rate tables or a negotiated rate once the version exists (SchemeSetup.price).
+        setup.basis(q, body);
         q.notes = optional(body, "notes");
         return q;
     }
@@ -1021,6 +1008,7 @@ public class GroupLifeService {
         v.put("createdAt", q.createdAt);
         v.put("decidedBy", q.decidedBy);
         v.put("decisionNote", q.decisionNote);
+        v.putAll(setup.termsView(q));
         return v;
     }
 
