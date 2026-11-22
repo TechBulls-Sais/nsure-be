@@ -37,9 +37,11 @@ public class PaymentNotifications {
     private final PolicyWorkflow policies;
     private final Outbox outbox;
     private final ProviderStatusClient providerStatus;
+    private final com.nsure.collections.ReceiptMatcher matcher;
 
     public PaymentNotifications(EntityManager em, PlatformSecurityContext security, PolicyWorkflow policies,
-            Outbox outbox, ProviderStatusClient providerStatus) {
+            Outbox outbox, ProviderStatusClient providerStatus, com.nsure.collections.ReceiptMatcher matcher) {
+        this.matcher = matcher;
         this.em = em;
         this.security = security;
         this.policies = policies;
@@ -80,9 +82,22 @@ public class PaymentNotifications {
             return IntegrationService.inbound(earlier.get());
         }
 
+        // NS-SH04-003: an instalment reference or the payer's mandate account can identify the policy.
+        com.nsure.collections.ReceiptMatcher.Resolved resolved = matcher.resolve(policyRef,
+                text(body, "payerAccount", null));
+        String quoted = policyRef;
+        policyRef = resolved.policyRef();
         InboundMessage message = new InboundMessage(provider, providerRef, TYPE, hash, policyRef, amount,
                 user.getUsername());
         String problem = problem(policyRef, amount, currency);
+        int periods = 0;
+        BigDecimal premium = null;
+        if (problem == null) {
+            InsurancePolicy target = em.createQuery("select p from InsurancePolicy p where p.ref = :ref",
+                    InsurancePolicy.class).setParameter("ref", policyRef).getSingleResult();
+            premium = target.getPremium().setScale(2, java.math.RoundingMode.HALF_UP);
+            periods = matcher.periods(target, amount);
+        }
         if (problem == null) {
             problem = unconfirmed(provider, providerRef, amount, currency);
         }
@@ -98,12 +113,38 @@ public class PaymentNotifications {
             confirmed.put("method", method);
             confirmed.put("source", "NOTIFICATION");
             outbox.publish(Events.RECEIPT_CONFIRMED, providerRef, confirmed, user.getUsername());
-            try {
-                policies.pay(policyRef, method, "integration:" + provider);
-                message.outcome(InboundMessage.APPLIED, policyRef, "Premium collected by " + method
-                        + "; confirmed by " + provider);
-            } catch (IllegalArgumentException ex) {
-                problem = ex.getMessage();
+            // Whole premiums oldest-first; an overpayment's remainder stays in suspense as an unapplied balance.
+            int paid = 0;
+            String stopped = null;
+            for (int k = 0; k < periods; k++) {
+                try {
+                    policies.pay(policyRef, method, "integration:" + provider);
+                    paid++;
+                } catch (IllegalArgumentException ex) {
+                    stopped = ex.getMessage();
+                    break;
+                }
+            }
+            String found = quoted.equals(policyRef) ? "" : " (matched by " + resolved.how() + ")";
+            BigDecimal applied = premium.multiply(BigDecimal.valueOf(paid));
+            BigDecimal left = amount.subtract(applied);
+            if (paid == 0) {
+                problem = stopped;
+            } else if (left.signum() == 0) {
+                message.outcome(InboundMessage.APPLIED, policyRef, "Premium collected by " + method + found
+                        + (paid > 1 ? " for " + paid + " periods, oldest first" : "") + "; confirmed by " + provider);
+            } else {
+                String why = "Paid " + paid + " premium(s) of BWP " + premium.toPlainString() + found + "; BWP "
+                        + left.toPlainString() + " left over is held in suspense" + (stopped == null ? "" : ": " + stopped);
+                message.outcome(InboundMessage.SUSPENSE, policyRef, why);
+                message.partlyApplied(applied, why);
+                Map<String, Object> rest = new LinkedHashMap<>();
+                rest.put("provider", provider);
+                rest.put("providerRef", providerRef);
+                rest.put("policyRef", policyRef);
+                rest.put("amount", left.toPlainString());
+                rest.put("reason", why.length() <= 300 ? why : why.substring(0, 300));
+                outbox.publish(Events.UNMATCHED_RECEIPT, providerRef, rest, user.getUsername());
             }
         }
         if (problem != null) {
@@ -152,8 +193,8 @@ public class PaymentNotifications {
         if (policy == null) {
             return "No policy " + policyRef;
         }
-        if (policy.getPremium() == null || policy.getPremium().compareTo(amount) != 0) {
-            return "Amount BWP " + amount.toPlainString() + " does not match the premium BWP "
+        if (policy.getPremium() == null || policy.getPremium().compareTo(amount) > 0) {
+            return "Amount BWP " + amount.toPlainString() + " does not cover the premium BWP "
                     + (policy.getPremium() == null ? "?" : policy.getPremium().toPlainString());
         }
         return null;

@@ -28,6 +28,11 @@ public class ReconItem {
     public static final String CURRENCY_MISMATCH = "CURRENCY_MISMATCH";
     /** The same reference twice on the statement. */
     public static final String DUPLICATE = "DUPLICATE";
+    /**
+     * NS-SH04-006: the provider settled money for an attempt this system closed as failed or expired, or has not
+     * confirmed yet (a late settlement); it needs someone to apply or refund it.
+     */
+    public static final String LATE_SETTLEMENT = "LATE_SETTLEMENT";
     /** A receipt here that the statement does not show yet: late settlement, or money that never arrived. */
     public static final String NOT_ON_STATEMENT = "NOT_ON_STATEMENT";
 

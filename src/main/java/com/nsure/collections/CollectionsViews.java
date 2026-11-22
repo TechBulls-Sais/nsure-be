@@ -14,7 +14,12 @@ public final class CollectionsViews {
     public record AccountView(String policyRef, String status, LocalDate paidTo, LocalDate nextDue,
             BigDecimal arrears, int overdueInstalments, List<String> unresolvedPayments,
             List<InstalmentView> instalments, List<ReceiptView> receipts, MandateView mandate,
-            List<InstructionView> instructions) {
+            List<InstructionView> instructions, List<ScheduleView> schedule) {
+    }
+
+    /** NS-SH04-001: the full due schedule ahead, by calendar rules; projected, not yet issued. */
+    public record ScheduleView(LocalDate periodStart, LocalDate periodEnd, LocalDate dueDate, BigDecimal amount,
+            String currency) {
     }
 
     /** A payment mandate (NS-SH04-002); the account or wallet number is only ever shown masked. */
@@ -66,7 +71,16 @@ public final class CollectionsViews {
     }
 
     public record StatementView(String ref, String provider, LocalDate periodFrom, LocalDate periodTo,
-            String uploadedBy, LocalDateTime uploadedAt, long lines, long matched, long openExceptions) {
+            String uploadedBy, LocalDateTime uploadedAt, long lines, long matched, long openExceptions,
+            ControlTotals totals) {
+    }
+
+    /**
+     * NS-SH04-006 control totals for the statement period: what the statement shows, what matched, the receipts this
+     * provider settled here, premium allocated to instalments, and the net cash the subledger posted (account 1000).
+     */
+    public record ControlTotals(BigDecimal statementTotal, BigDecimal matchedTotal, BigDecimal receiptsTotal,
+            BigDecimal allocationsTotal, BigDecimal ledgerCash, BigDecimal statementLessReceipts) {
     }
 
     public record ReconItemView(Long id, String statementRef, String side, Integer lineNo, String providerRef,

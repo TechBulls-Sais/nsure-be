@@ -38,8 +38,6 @@ public class CollectionsService {
 
     private static final Set<String> KINDS = Set.of(ReceiptReversal.RETURNED, ReceiptReversal.REVERSED,
             ReceiptReversal.CHARGEBACK);
-    /** How far ahead of its due date an instalment is issued. */
-    static final int BILLING_LEAD_DAYS = 14;
 
     private final EntityManager em;
     private final PlatformSecurityContext security;
@@ -50,10 +48,15 @@ public class CollectionsService {
     private final StaffAlertService alerts;
 
     private final com.nsure.integration.Operations operations;
+    /** How far ahead of its period an instalment is issued (NS-SH04-001; demo default 14 days, D10). */
+    private final int billingLeadDays;
 
     public CollectionsService(EntityManager em, PlatformSecurityContext security, BillingService billing,
             PolicyWorkflow policies, Outbox outbox, ReferenceNumbers references, StaffAlertService alerts,
-            com.nsure.integration.Operations operations) {
+            com.nsure.integration.Operations operations,
+            @org.springframework.beans.factory.annotation.Value("${nsure.collections.billing-lead-days:14}")
+            int billingLeadDays) {
+        this.billingLeadDays = billingLeadDays;
         this.operations = operations;
         this.em = em;
         this.security = security;
@@ -70,7 +73,8 @@ public class CollectionsService {
         if (!user.hasPermissionTo("READ_POLICY") && !user.hasPermissionTo("READ_FINANCE")) {
             user.validateHasPermissionTo("READ_POLICY");
         }
-        return billing.account(policies.policy(policyRef));
+        InsurancePolicy policy = policies.policy(policyRef);
+        return billing.account(policy, policies.months(policy));
     }
 
     /**
@@ -254,7 +258,7 @@ public class CollectionsService {
      */
     @Transactional
     public CollectionsViews.BillingRunView billingRun(LocalDate asOf, String actor) {
-        LocalDate horizon = asOf.plusDays(BILLING_LEAD_DAYS);
+        LocalDate horizon = asOf.plusDays(billingLeadDays);
         List<String> issued = new ArrayList<>();
         for (InsurancePolicy policy : em.createQuery("select p from InsurancePolicy p where p.status in :statuses"
                         + " and p.nextPremiumDue is not null and p.nextPremiumDue <= :horizon", InsurancePolicy.class)
