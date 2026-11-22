@@ -21,7 +21,8 @@ public final class FinanceViews {
     public record RuleView(Long id, String eventType, String debitAccount, String creditAccount, String amountField,
             String domain, String description, String status, int version, LocalDate effectiveFrom,
             LocalDate effectiveTo, String approvalStatus, boolean inForce, String changeReason, String updatedBy,
-            LocalDateTime updatedAt, String approvedBy, LocalDateTime approvedAt, String rejectionReason) {
+            LocalDateTime updatedAt, String approvedBy, LocalDateTime approvedAt, String rejectionReason,
+            String product, String costCentre, String failureMode) {
     }
 
     public record LineView(int lineNo, String accountCode, String accountName, BigDecimal debit, BigDecimal credit) {
@@ -30,11 +31,28 @@ public final class FinanceViews {
     public record JournalView(String ref, String eventType, String sourceRef, String domain, LocalDate eventDate,
             LocalDate accountingDate, String periodCode, String currency, BigDecimal amount, String description,
             Integer ruleVersion, Long postingRuleId, String status, String reversesRef, String reversedByRef,
-            String glBatchRef, String createdBy, LocalDateTime createdAt, List<LineView> lines, long version) {
+            String glBatchRef, String createdBy, LocalDateTime createdAt, List<LineView> lines, long version,
+            String policyRef, String product, String intermediaryRef, String treatyRef, String schemeRef,
+            String costCentre) {
     }
 
     public record PeriodView(String code, String status, String note, String updatedBy, LocalDateTime updatedAt,
-            long journalCount, long unexportedCount) {
+            long journalCount, long unexportedCount, String reopenRequestedBy, LocalDateTime reopenRequestedAt,
+            String reopenReason) {
+    }
+
+    /** One category of open items that stands in the way of closing a period (AT-SH08-03). */
+    public record CloseItem(String code, String label, long count, List<String> examples) {
+    }
+
+    /** NS-SH08-004: one open receivable or payable with its age bucket. */
+    public record AgedItem(String kind, String ref, String party, LocalDate dueDate, BigDecimal amount, long ageDays,
+            String bucket) {
+    }
+
+    public record AgeingView(LocalDate asOf, List<String> buckets, List<AgedItem> receivables,
+            java.util.Map<String, BigDecimal> receivableTotals, List<AgedItem> payables,
+            java.util.Map<String, BigDecimal> payableTotals) {
     }
 
     public record ExceptionView(Long id, String eventKey, String eventType, String sourceRef, BigDecimal amount,
@@ -45,7 +63,8 @@ public final class FinanceViews {
     public record GlBatchView(String ref, String status, int journalCount, int lineCount, BigDecimal debitTotal,
             BigDecimal creditTotal, String createdBy, LocalDateTime createdAt, String glReference,
             String acknowledgedBy, LocalDateTime acknowledgedAt, String note, String submittedBy,
-            LocalDateTime submittedAt, String reconciledBy, LocalDateTime reconciledAt) {
+            LocalDateTime submittedAt, String reconciledBy, LocalDateTime reconciledAt, String periodCodes,
+            String deliveryNote) {
     }
 
     /** A manual journal: proposed by one person, posted only once someone else approves it (Blueprint §7). */

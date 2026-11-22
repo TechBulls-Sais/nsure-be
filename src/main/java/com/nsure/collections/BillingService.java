@@ -35,11 +35,16 @@ public class BillingService {
     private final EntityManager em;
     private final Outbox outbox;
     private final ReferenceNumbers references;
+    private final DueDateCalendar calendar;
+    private final String currency;
 
-    public BillingService(EntityManager em, Outbox outbox, ReferenceNumbers references) {
+    public BillingService(EntityManager em, Outbox outbox, ReferenceNumbers references, DueDateCalendar calendar,
+            @org.springframework.beans.factory.annotation.Value("${nsure.insurer.currency:BWP}") String currency) {
         this.em = em;
         this.outbox = outbox;
         this.references = references;
+        this.calendar = calendar;
+        this.currency = currency == null || currency.isBlank() ? "BWP" : currency.trim();
     }
 
     // ── schedule ─────────────────────────────────────────────────────────────────────────────────
@@ -55,7 +60,8 @@ public class BillingService {
         BigDecimal billed = policy.getPremium() == null ? BigDecimal.ZERO
                 : policy.getPremium().setScale(2, RoundingMode.HALF_UP);
         Instalment instalment = new Instalment(references.next("BIL-", 6, () -> 0L), policy.getRef(),
-                policy.getCustomerRef(), start, end, billed, purpose, actor == null ? "system" : actor);
+                policy.getCustomerRef(), start, end, billed, purpose, actor == null ? "system" : actor)
+                .dueOn(calendar.dueDate(policy.getRef(), start), currency);
         em.persist(instalment);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("instalmentRef", instalment.getRef());
@@ -182,6 +188,12 @@ public class BillingService {
                 .getResultStream()
                 .forEach(m -> found.add("Receipt " + m.getProviderRef() + " (BWP " + m.getAmount().toPlainString()
                         + ") is in suspense"));
+        em.createQuery("select c from CollectionInstruction c where c.policyRef = :ref and c.status in :waiting",
+                        CollectionInstruction.class)
+                .setParameter("ref", policyRef).setParameter("waiting", CollectionInstruction.AWAITING_BANK)
+                .getResultStream()
+                .forEach(c -> found.add("Collection " + c.getRef() + " (BWP " + c.getAmount().toPlainString()
+                        + ") is " + c.getStatus().toLowerCase() + " at the bank"));
         return found;
     }
 
@@ -189,6 +201,12 @@ public class BillingService {
 
     @Transactional(readOnly = true)
     public CollectionsViews.AccountView account(InsurancePolicy policy) {
+        return account(policy, 1);
+    }
+
+    /** The account with the next twelve periods projected at {@code months} per premium (NS-SH04-001). */
+    @Transactional(readOnly = true)
+    public CollectionsViews.AccountView account(InsurancePolicy policy, int months) {
         List<Instalment> instalments = em.createQuery("select i from Instalment i where i.policyRef = :ref"
                 + " order by i.periodStart", Instalment.class).setParameter("ref", policy.getRef()).getResultList();
         LocalDate today = LocalDate.now();
@@ -232,8 +250,35 @@ public class BillingService {
                             r == null ? null : r.getReason());
                 })
                 .toList();
+        CollectionsViews.MandateView mandate = em.createQuery("select m from CollectionMandate m"
+                        + " where m.activePolicyRef = :ref", CollectionMandate.class)
+                .setParameter("ref", policy.getRef()).getResultStream().findFirst().map(CollectionRuns::view)
+                .orElse(null);
+        List<CollectionsViews.InstructionView> instructions = em.createQuery("select c from CollectionInstruction c"
+                        + " join fetch c.batch where c.policyRef = :ref order by c.id desc", CollectionInstruction.class)
+                .setParameter("ref", policy.getRef()).setMaxResults(50).getResultStream().map(CollectionRuns::view)
+                .toList();
+        List<CollectionsViews.ScheduleView> schedule = new ArrayList<>();
+        if (policy.getPremium() != null && policy.getPremium().signum() > 0 && policy.getNextPremiumDue() != null
+                && ("Active".equals(policy.getStatus()) || "Active - No Cover".equals(policy.getStatus()))) {
+            // From the next premium due, after any instalment already issued for it or later.
+            LocalDate start = policy.getNextPremiumDue();
+            for (Instalment issued : instalments) {
+                if (!issued.getPeriodStart().isBefore(start)) {
+                    start = issued.getPeriodEnd().plusDays(1);
+                }
+            }
+            int step = Math.max(1, months);
+            for (int k = 0; k < 12; k++) {
+                LocalDate end = start.plusMonths(step).minusDays(1);
+                schedule.add(new CollectionsViews.ScheduleView(start, end, calendar.dueDate(policy.getRef(), start),
+                        policy.getPremium().setScale(2, RoundingMode.HALF_UP), currency));
+                start = end.plusDays(1);
+            }
+        }
         return new CollectionsViews.AccountView(policy.getRef(), policy.getStatus(), paidTo,
-                policy.getNextPremiumDue(), arrears, overdue, unresolvedPayments(policy.getRef()), views, receipts);
+                policy.getNextPremiumDue(), arrears, overdue, unresolvedPayments(policy.getRef()), views, receipts,
+                mandate, instructions, schedule);
     }
 
     ReceiptReversal reversal(String receiptRef) {
@@ -273,6 +318,11 @@ public class BillingService {
         }
         instalment.status(outstanding.signum() <= 0 ? Instalment.PAID
                 : allocated.signum() > 0 ? Instalment.PART_PAID : Instalment.DUE);
+    }
+
+    /** What is still owed on an instalment: billed plus adjustments less live allocations. */
+    BigDecimal outstandingOf(Instalment instalment) {
+        return outstanding(instalment);
     }
 
     private BigDecimal outstanding(Instalment instalment) {

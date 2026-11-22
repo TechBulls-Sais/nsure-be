@@ -38,8 +38,6 @@ public class CollectionsService {
 
     private static final Set<String> KINDS = Set.of(ReceiptReversal.RETURNED, ReceiptReversal.REVERSED,
             ReceiptReversal.CHARGEBACK);
-    /** How far ahead of its due date an instalment is issued. */
-    static final int BILLING_LEAD_DAYS = 14;
 
     private final EntityManager em;
     private final PlatformSecurityContext security;
@@ -50,10 +48,15 @@ public class CollectionsService {
     private final StaffAlertService alerts;
 
     private final com.nsure.integration.Operations operations;
+    /** How far ahead of its period an instalment is issued (NS-SH04-001; demo default 14 days, D10). */
+    private final int billingLeadDays;
 
     public CollectionsService(EntityManager em, PlatformSecurityContext security, BillingService billing,
             PolicyWorkflow policies, Outbox outbox, ReferenceNumbers references, StaffAlertService alerts,
-            com.nsure.integration.Operations operations) {
+            com.nsure.integration.Operations operations,
+            @org.springframework.beans.factory.annotation.Value("${nsure.collections.billing-lead-days:14}")
+            int billingLeadDays) {
+        this.billingLeadDays = billingLeadDays;
         this.operations = operations;
         this.em = em;
         this.security = security;
@@ -70,16 +73,17 @@ public class CollectionsService {
         if (!user.hasPermissionTo("READ_POLICY") && !user.hasPermissionTo("READ_FINANCE")) {
             user.validateHasPermissionTo("READ_POLICY");
         }
-        return billing.account(policies.policy(policyRef));
+        InsurancePolicy policy = policies.policy(policyRef);
+        return billing.account(policy, policies.months(policy));
     }
 
     /**
-     * The bank returned, reversed or charged back a premium receipt (NS-SH04-005, AT-SH04-02). The receipt and its
-     * allocations are kept and marked reversed; the period reopens so it can be paid again; the policy is paid only
-     * up to its first unsettled period, with a cover review; PaymentReturned reverses the premium in the subledger.
+     * Asks for a premium receipt to be reversed because the bank returned, reversed or charged it back (NS-SH04-005,
+     * AT-SH04-02): nothing changes until a different person approves the request. The original receipt is named and
+     * kept; a receipt can have one open request at a time.
      */
     @Transactional
-    public CollectionsViews.ReversalView reverse(String receiptRef, JsonNode body) {
+    public CollectionsViews.ReversalRequestView reverse(String receiptRef, JsonNode body) {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("MANAGE_FINANCE");
         String kind = required(body, "kind", 6, 20).toUpperCase(Locale.ROOT);
@@ -94,10 +98,98 @@ public class CollectionsService {
         if (!"SUCCESSFUL".equals(payment.getStatus())) {
             throw new ConflictException("Receipt " + receiptRef + " is already " + payment.getStatus().toLowerCase(Locale.ROOT) + ".");
         }
+        if (!em.createQuery("select r.id from ReversalRequest r where r.receiptRef = :ref and r.status = :pending",
+                        Long.class)
+                .setParameter("ref", receiptRef).setParameter("pending", ReversalRequest.PENDING)
+                .setMaxResults(1).getResultList().isEmpty()) {
+            throw new ConflictException("A reversal of receipt " + receiptRef + " is already waiting for approval.");
+        }
+        ReversalRequest request = new ReversalRequest(references.next("RVQ-", 6, () -> 0L), receiptRef,
+                payment.getPolicyRef(), kind, payment.getAmount(), reason, user.getUsername());
+        em.persist(request);
+        return view(request, null);
+    }
+
+    @Transactional(readOnly = true)
+    public List<CollectionsViews.ReversalRequestView> reversalRequests() {
+        security.authenticatedUser().validateHasPermissionTo("READ_FINANCE");
+        return em.createQuery("select r from ReversalRequest r order by r.id desc", ReversalRequest.class)
+                .setMaxResults(200).getResultStream().map(r -> view(r, null)).toList();
+    }
+
+    /** The finance checker approves a reversal someone else asked for: it is carried out now. */
+    @Transactional
+    public CollectionsViews.ReversalRequestView approveReversal(String ref, JsonNode body) {
+        AppUser checker = security.authenticatedUser();
+        checker.validateHasPermissionTo("APPROVE_JOURNAL");
+        ReversalRequest request = pendingReversal(ref);
+        if (checker.getUsername().equalsIgnoreCase(request.getRequestedBy())) {
+            throw new com.nsure.security.exception.NoAuthorizationException("You asked for reversal " + ref
+                    + "; someone else must approve it.");
+        }
+        CollectionsViews.ReversalView done = reverseConfirmed(request.getReceiptRef(), request.getKind(),
+                request.getReason() + " (requested by " + request.getRequestedBy() + ")", checker.getUsername());
+        request.decide(ReversalRequest.APPROVED, checker.getUsername(), optional(body, "note"), done.ref());
+        return view(request, done);
+    }
+
+    @Transactional
+    public CollectionsViews.ReversalRequestView rejectReversal(String ref, JsonNode body) {
+        AppUser checker = security.authenticatedUser();
+        checker.validateHasPermissionTo("APPROVE_JOURNAL");
+        ReversalRequest request = pendingReversal(ref);
+        if (checker.getUsername().equalsIgnoreCase(request.getRequestedBy())) {
+            throw new com.nsure.security.exception.NoAuthorizationException("You asked for reversal " + ref
+                    + "; someone else must decide it.");
+        }
+        request.decide(ReversalRequest.REJECTED, checker.getUsername(), required(body, "note", 5, 500), null);
+        return view(request, null);
+    }
+
+    private ReversalRequest pendingReversal(String ref) {
+        ReversalRequest request = em.createQuery("select r from ReversalRequest r where r.ref = :ref",
+                        ReversalRequest.class)
+                .setParameter("ref", ref).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Reversal request " + ref + " not found"));
+        if (!ReversalRequest.PENDING.equals(request.getStatus())) {
+            throw new ConflictException("Reversal request " + ref + " is already "
+                    + request.getStatus().toLowerCase(Locale.ROOT) + ".");
+        }
+        return request;
+    }
+
+    private static CollectionsViews.ReversalRequestView view(ReversalRequest r, CollectionsViews.ReversalView done) {
+        return new CollectionsViews.ReversalRequestView(r.getRef(), r.getReceiptRef(), r.getPolicyRef(), r.getKind(),
+                r.getAmount(), r.getReason(), r.getStatus(), r.getRequestedBy(), r.getRequestedAt(), r.getDecidedBy(),
+                r.getDecidedAt(), r.getDecisionNote(), r.getReversalRef(),
+                done == null ? null : done.paidTo(), done == null ? null : done.policyStatus());
+    }
+
+    private static String optional(JsonNode body, String field) {
+        if (body == null || !body.hasNonNull(field) || body.get(field).asText().isBlank()) {
+            return null;
+        }
+        String value = body.get(field).asText().trim();
+        return value.length() <= 500 ? value : value.substring(0, 500);
+    }
+
+    /**
+     * Carries out a reversal already authorised: a bank return read from the rail, or a staff reversal a second person
+     * approved. The caller has checked who may do it.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public CollectionsViews.ReversalView reverseConfirmed(String receiptRef, String kind, String reason, String actor) {
+        PremiumPayment payment = em.createQuery("select p from PremiumPayment p where p.receiptRef = :ref",
+                        PremiumPayment.class)
+                .setParameter("ref", receiptRef).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("No premium receipt " + receiptRef + "."));
+        if (!"SUCCESSFUL".equals(payment.getStatus())) {
+            throw new ConflictException("Receipt " + receiptRef + " is already " + payment.getStatus().toLowerCase(Locale.ROOT) + ".");
+        }
         InsurancePolicy policy = policies.policy(payment.getPolicyRef());
         em.lock(policy, LockModeType.PESSIMISTIC_WRITE);
         String reversalRef = references.next("REV-", 6, () -> 0L);
-        billing.reverseAllocations(receiptRef, reversalRef, user.getUsername());
+        billing.reverseAllocations(receiptRef, reversalRef, actor);
         payment.reverse();
         em.createQuery("select r from PremiumReceipt r where r.ref = :ref", PremiumReceipt.class)
                 .setParameter("ref", receiptRef).getResultStream().findFirst()
@@ -105,23 +197,28 @@ public class CollectionsService {
         if (payment.getTransactionId() != null) {
             PaymentTransaction transaction = em.find(PaymentTransaction.class, payment.getTransactionId());
             if (transaction != null && PaymentTransaction.SETTLED.equals(transaction.getStatus())) {
-                transaction.returned(kind + ": " + reason);
+                // NS-SH04-002: an unpaid return and a reversal or chargeback are distinct transaction states.
+                if (ReceiptReversal.RETURNED.equals(kind)) {
+                    transaction.returned(kind + ": " + reason);
+                } else {
+                    transaction.reversed(kind + ": " + reason);
+                }
             }
         }
         ReceiptReversal reversal = new ReceiptReversal(reversalRef, receiptRef, policy.getRef(), kind,
-                payment.getAmount(), reason, payment.getTransactionId(), user.getUsername());
+                payment.getAmount(), reason, payment.getTransactionId(), clip(actor, 100));
         em.persist(reversal);
 
         LocalDate unpaidFrom = billing.firstUnsettledStart(policy.getRef());
         if (unpaidFrom != null) {
             policies.reviewCoverAfterReversal(policy, unpaidFrom, "Receipt " + receiptRef + " "
-                    + kind.toLowerCase(Locale.ROOT) + ": " + reason, user.getUsername());
+                    + kind.toLowerCase(Locale.ROOT) + ": " + reason, clip(actor, 100));
         }
         alerts.raise("COVER_REVIEW", "UPDATE_POLICY", "Cover review: premium reversed on " + policy.getRef(),
                 "Receipt " + receiptRef + " (BWP " + payment.getAmount().toPlainString() + ") was "
                         + kind.toLowerCase(Locale.ROOT) + ". " + reason + " The policy is now " + policy.getStatus()
                         + (unpaidFrom == null ? "." : ", paid to " + unpaidFrom.minusDays(1) + "."),
-                "COVER_REVIEW:" + reversalRef, user.getUsername());
+                "COVER_REVIEW:" + reversalRef, clip(actor, 100));
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("policyRef", policy.getRef());
@@ -129,9 +226,9 @@ public class CollectionsService {
         data.put("reversalRef", reversalRef);
         data.put("kind", kind);
         data.put("amount", payment.getAmount().toPlainString());
-        outbox.publish(Events.PAYMENT_RETURNED, policy.getRef(), data, user.getUsername());
+        outbox.publish(Events.PAYMENT_RETURNED, policy.getRef(), data, clip(actor, 100));
         return new CollectionsViews.ReversalView(reversalRef, receiptRef, policy.getRef(), kind, payment.getAmount(),
-                reason, user.getUsername(), reversal.getReversedAt(),
+                reason, reversal.getReversedBy(), reversal.getReversedAt(),
                 unpaidFrom == null ? null : unpaidFrom.minusDays(1), policy.getStatus());
     }
 
@@ -161,7 +258,7 @@ public class CollectionsService {
      */
     @Transactional
     public CollectionsViews.BillingRunView billingRun(LocalDate asOf, String actor) {
-        LocalDate horizon = asOf.plusDays(BILLING_LEAD_DAYS);
+        LocalDate horizon = asOf.plusDays(billingLeadDays);
         List<String> issued = new ArrayList<>();
         for (InsurancePolicy policy : em.createQuery("select p from InsurancePolicy p where p.status in :statuses"
                         + " and p.nextPremiumDue is not null and p.nextPremiumDue <= :horizon", InsurancePolicy.class)
@@ -204,6 +301,10 @@ public class CollectionsService {
             CollectionsViews.BillingRunView run = billingRun(asOf, actor);
             return new com.nsure.integration.Operations.Outcome("BILLING-RUN-" + asOf, run);
         });
+    }
+
+    private static String clip(String value, int max) {
+        return value == null || value.length() <= max ? value : value.substring(0, max);
     }
 
     private static String required(JsonNode body, String field, int min, int max) {

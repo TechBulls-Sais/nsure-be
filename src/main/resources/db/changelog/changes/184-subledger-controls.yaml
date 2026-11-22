@@ -1,0 +1,79 @@
+databaseChangeLog:
+  # SH08: journal dimensions and product-specific posting rules with a cost centre and an approved failure mode; a
+  # simulated corporate GL keyed by batch id; period reopening by a second person; recognition-basis rules that are
+  # deliberately not posted until Finance switches basis.
+  - changeSet:
+      id: 184-subledger-controls
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: fin_posting_rule
+            columns:
+              - column: {name: product, type: varchar(100)}
+              - column: {name: cost_centre, type: varchar(20)}
+              - column: {name: failure_mode, type: varchar(20), defaultValue: CONTINUE, constraints: {nullable: false}}
+        - addColumn:
+            tableName: fin_journal
+            columns:
+              - column: {name: policy_ref, type: varchar(40)}
+              - column: {name: product, type: varchar(100)}
+              - column: {name: intermediary_ref, type: varchar(20)}
+              - column: {name: treaty_ref, type: varchar(20)}
+              - column: {name: scheme_ref, type: varchar(20)}
+              - column: {name: cost_centre, type: varchar(20)}
+        - addColumn:
+            tableName: fin_gl_batch
+            columns:
+              - column: {name: period_codes, type: varchar(200)}
+              - column: {name: delivery_note, type: varchar(500)}
+        - addColumn:
+            tableName: fin_period
+            columns:
+              - column: {name: reopen_requested_by, type: varchar(100)}
+              - column: {name: reopen_requested_at, type: datetime}
+              - column: {name: reopen_reason, type: varchar(500)}
+        - createTable:
+            tableName: fin_gl_simulator
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_fin_gl_simulator}}
+              - column: {name: batch_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_fin_gl_simulator_batch}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: gl_reference, type: varchar(60)}
+              - column: {name: debit_total, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: credit_total, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: line_count, type: int, constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500)}
+              - column: {name: deliveries, type: int, constraints: {nullable: false}}
+              - column: {name: received_at, type: datetime, constraints: {nullable: false}}
+        - sql:
+            sql: >-
+              UPDATE fin_posting_rule SET cost_centre = CASE business_domain WHEN 'INDIVIDUAL' THEN 'CC-IND'
+              WHEN 'GROUP' THEN 'CC-GRP' ELSE 'CC-HO' END WHERE cost_centre IS NULL
+  - changeSet:
+      id: 184-recognition-basis-rules
+      author: nsure
+      comment: >-
+        Demo default (D07): premium is recognised on cash receipt and claims on payment. The billed-basis and
+        liability-basis entries are seeded as NOT_POSTED versions: Finance switches basis by approving new versions
+        (maker-checker), never by changing code.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO fin_account (code, name, account_type, display_order)
+              SELECT '1150', 'Premium receivable - individual', 'ASSET', 14
+              WHERE NOT EXISTS (SELECT 1 FROM fin_account WHERE code = '1150');
+              INSERT INTO fin_account (code, name, account_type, display_order)
+              SELECT '2300', 'Claims payable', 'LIABILITY', 15
+              WHERE NOT EXISTS (SELECT 1 FROM fin_account WHERE code = '2300');
+              INSERT INTO fin_posting_rule (event_type, debit_account, credit_account, amount_field, business_domain,
+                description, status, version, updated_by, updated_at, effective_from, approval_status, approved_by,
+                approved_at, cost_centre, failure_mode, change_reason)
+              SELECT seed.e, seed.dr, seed.cr, 'amount', seed.dom, seed.d, 'NOT_POSTED', 1, 'system', CURRENT_TIMESTAMP,
+                     DATE '2000-01-01', 'APPROVED', 'system', CURRENT_TIMESTAMP, seed.cc, 'CONTINUE',
+                     'Demo default: cash basis, so this entry is not posted'
+              FROM (
+                SELECT 'InvoiceIssued' e, '1150' dr, '4000' cr, 'INDIVIDUAL' dom, 'Instalment billed (billed basis)' d, 'CC-IND' cc UNION ALL
+                SELECT 'ReceiptAllocated', '1000', '1150', 'INDIVIDUAL', 'Receipt allocated to an instalment (billed basis)', 'CC-IND' UNION ALL
+                SELECT 'ClaimApproved', '5000', '2300', 'INDIVIDUAL', 'Claim liability approved (liability basis)', 'CC-IND'
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM fin_posting_rule x WHERE x.event_type = seed.e);

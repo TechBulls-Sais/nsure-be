@@ -55,6 +55,7 @@ public class Outbox {
         em.persist(event);
         for (DomainEventHandler handler : handlers.orderedStream().toList()) {
             if (handler.eventTypes().contains(eventType)) {
+                handler.beforePublish(eventType, aggregateRef, data);
                 em.persist(new EventDelivery(event, handler.name()));
             }
         }

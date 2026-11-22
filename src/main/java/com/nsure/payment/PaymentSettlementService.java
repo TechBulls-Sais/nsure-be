@@ -170,6 +170,44 @@ public class PaymentSettlementService {
     }
 
     /**
+     * A debit-order or mobile-money collection that the rail's response confirmed (NS-SH04-002). The bank's response
+     * is the provider's verdict, so the transaction is recorded verified and applied through the same path as any
+     * other settlement (ReceiptConfirmed, then the premium through the policy workflow). The provider reference is the
+     * token, so the same confirmation can never settle twice.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY,
+            noRollbackFor = IllegalArgumentException.class)
+    public PaymentTransaction settleCollected(String policyRef, String provider, String method,
+            String providerReference, BigDecimal amount, String currency, java.time.LocalDate periodStart,
+            java.time.LocalDate periodEnd, String purpose, String bankResult, String actor) {
+        java.util.Optional<PaymentTransaction> earlier = transactions.findByProviderReference(providerReference);
+        if (earlier.isPresent()) {
+            return earlier.get();
+        }
+        InsurancePolicy policy = policies.policy(policyRef);
+        PaymentTransaction tx = new PaymentTransaction(policyRef, policy.getCustomerRef(), provider, method,
+                providerReference, collectionKey(providerReference), amount, currency, purpose, periodStart, periodEnd,
+                LocalDateTime.now().plusHours(1), actor);
+        transactions.save(tx);
+        tx.inline(providerReference);
+        transactions.flush();
+        log(tx, provider, "bankResponse", bankResult);
+        tx.verified("000", bankResult);
+        receiptConfirmed(tx, "BANK_RESPONSE");
+        applySuccess(tx, "BANK_RESPONSE");
+        return tx;
+    }
+
+    private static String collectionKey(String providerReference) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(("collection:" + providerReference).getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    /**
      * The premium to charge: the one agreed when the offer was made (first premium, valid for the payment window) or
      * when cover was issued (renewals). It always comes from the server, never from the client (spec 01 BR-9), and it
      * is never silently re-priced to a later rate version or attained age (Nsure Life NS-IL01-004, NS-SH02-004,

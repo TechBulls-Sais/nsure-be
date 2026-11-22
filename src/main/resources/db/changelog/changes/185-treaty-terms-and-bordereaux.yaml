@@ -1,0 +1,65 @@
+databaseChangeLog:
+  # NS-SH07-001/004/006: treaty versions, participants with shares, commission and reporting terms, a distinct
+  # excess-of-loss model, claims bordereaux with a submission / acknowledgement / correction / settlement lifecycle.
+  - changeSet:
+      id: 185-treaty-terms
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ri_treaty
+            columns:
+              - column: {name: version, type: int, defaultValueNumeric: 1, constraints: {nullable: false}}
+              - column: {name: amends_id, type: bigint, constraints: {foreignKeyName: fk_ri_treaty_amends, references: ri_treaty(id)}}
+              - column: {name: commission_percent, type: 'decimal(5,2)'}
+              - column: {name: premium_basis, type: varchar(20)}
+              - column: {name: reporting_frequency, type: varchar(20)}
+              - column: {name: bordereau_format, type: varchar(20)}
+              - column: {name: xl_priority, type: 'decimal(15,2)'}
+              - column: {name: xl_limit, type: 'decimal(15,2)'}
+              - column: {name: amendment_reason, type: varchar(500)}
+        - createTable:
+            tableName: ri_treaty_participant
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ri_treaty_participant}}
+              - column: {name: treaty_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_ri_participant_treaty, references: ri_treaty(id)}}
+              - column: {name: reinsurer, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: share_percent, type: 'decimal(5,2)', constraints: {nullable: false}}
+              - column: {name: lead_flag, type: varchar(5), constraints: {nullable: false}}
+        - addColumn:
+            tableName: ri_bordereau
+            columns:
+              - column: {name: kind, type: varchar(20), defaultValue: PREMIUM, constraints: {nullable: false}}
+              - column: {name: correction_count, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: ack_reference, type: varchar(60)}
+              - column: {name: acknowledged_by, type: varchar(100)}
+              - column: {name: acknowledged_at, type: datetime}
+              - column: {name: correction_note, type: varchar(500)}
+              - column: {name: settlement_reference, type: varchar(60)}
+              - column: {name: settled_amount, type: 'decimal(15,2)'}
+              - column: {name: settled_by, type: varchar(100)}
+              - column: {name: settled_at, type: datetime}
+              - column: {name: total_recovery, type: 'decimal(15,2)'}
+        - addColumn:
+            tableName: ri_recovery
+            columns:
+              - column: {name: bordereau_id, type: bigint, constraints: {foreignKeyName: fk_ri_recovery_bordereau, references: ri_bordereau(id)}}
+        # A premium and a claims bordereau may share a treaty and month: the new key (made first, so the treaty
+        # foreign key always has an index on MySQL) replaces the old one.
+        - addUniqueConstraint:
+            tableName: ri_bordereau
+            columnNames: treaty_id, bordereau_period, kind
+            constraintName: uk_ri_bordereau_treaty_period_kind
+        - dropUniqueConstraint:
+            tableName: ri_bordereau
+            constraintName: uk_ri_bordereau_treaty_period
+  - changeSet:
+      id: 185-demo-treaty-terms
+      author: nsure
+      context: demo
+      comment: Demo terms (D09) on the seeded treaties - reinsurance commission, premium basis and monthly CSV bordereaux.
+      changes:
+        - sql:
+            sql: >-
+              UPDATE ri_treaty SET commission_percent = 20.00, premium_basis = 'ORIGINAL_TERMS',
+              reporting_frequency = 'MONTHLY', bordereau_format = 'CSV' WHERE record_ref IN ('TRT-00001', 'TRT-00002')
+              AND commission_percent IS NULL

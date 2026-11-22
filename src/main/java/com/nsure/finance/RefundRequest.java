@@ -11,7 +11,8 @@ import java.time.LocalDateTime;
 
 /**
  * A controlled refund (AT-SH10-01): raised by one person with a reason, paid only when someone else approves it.
- * PENDING_APPROVAL → SETTLED (approved and paid) or REJECTED.
+ * PENDING_APPROVAL → PAYOUT_SENT (approved; payout instruction sent) → SETTLED (the payout rail confirmed it), or
+ * REJECTED. The destination is verified at approval (NS-SH04-005).
  */
 @Entity
 @Table(name = "fin_refund")
@@ -20,6 +21,10 @@ public class RefundRequest {
     public static final String PENDING = "PENDING_APPROVAL";
     public static final String SETTLED = "SETTLED";
     public static final String REJECTED = "REJECTED";
+    /** Approved; the payout instruction is with the rail and not yet confirmed (submission is not settlement). */
+    public static final String PAYOUT_SENT = "PAYOUT_SENT";
+    /** A refund the system raised before anyone knew where to pay it: Finance records the destination first. */
+    public static final String TO_CONFIRM = "TO CONFIRM";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -70,6 +75,25 @@ public class RefundRequest {
     @Column(name = "decision_note", length = 500)
     private String decisionNote;
 
+    // NS-SH04-005: how the destination was verified, who recorded it, and the payout instruction that paid it.
+    @Column(name = "destination_check", length = 300)
+    private String destinationCheck;
+
+    @Column(name = "destination_set_by", length = 100)
+    private String destinationSetBy;
+
+    @Column(name = "payout_ref", length = 20)
+    private String payoutRef;
+
+    @Column(name = "payout_provider", length = 40)
+    private String payoutProvider;
+
+    @Column(name = "payout_reference", length = 60)
+    private String payoutReference;
+
+    @Column(name = "settled_at")
+    private LocalDateTime settledAt;
+
     protected RefundRequest() {
     }
 
@@ -87,6 +111,26 @@ public class RefundRequest {
         this.status = PENDING;
         this.requestedBy = requestedBy;
         this.requestedAt = LocalDateTime.now();
+    }
+
+    void destination(String payee, String method, String account, String actor) {
+        this.payeeName = payee;
+        this.payoutMethod = method;
+        this.payoutAccount = account;
+        this.destinationSetBy = actor;
+    }
+
+    void payoutSent(String check, String payoutRef, String provider, String providerReference) {
+        this.destinationCheck = check;
+        this.payoutRef = payoutRef;
+        this.payoutProvider = provider;
+        this.payoutReference = providerReference;
+        this.status = PAYOUT_SENT;
+    }
+
+    void settled() {
+        this.status = SETTLED;
+        this.settledAt = LocalDateTime.now();
     }
 
     void decide(String status, String by, String note) {
@@ -154,5 +198,29 @@ public class RefundRequest {
 
     public String getDecisionNote() {
         return decisionNote;
+    }
+
+    public String getDestinationCheck() {
+        return destinationCheck;
+    }
+
+    public String getDestinationSetBy() {
+        return destinationSetBy;
+    }
+
+    public String getPayoutRef() {
+        return payoutRef;
+    }
+
+    public String getPayoutProvider() {
+        return payoutProvider;
+    }
+
+    public String getPayoutReference() {
+        return payoutReference;
+    }
+
+    public LocalDateTime getSettledAt() {
+        return settledAt;
     }
 }

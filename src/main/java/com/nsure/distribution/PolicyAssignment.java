@@ -47,7 +47,59 @@ public class PolicyAssignment {
     @Column(name = "assigned_at", nullable = false)
     private LocalDateTime assignedAt;
 
+    /** A transfer waits for a second person before it ends the current assignment (AT-SH06-03). */
+    public static final String PENDING = "PENDING";
+    public static final String APPLIED = "APPLIED";
+    public static final String REJECTED = "REJECTED";
+
+    @Column(nullable = false, length = 20)
+    private String status = APPLIED;
+
+    @Column(name = "approved_by", length = 100)
+    private String approvedBy;
+
+    @Column(name = "approved_at")
+    private LocalDateTime approvedAt;
+
+    @Column(name = "transfer_reason", length = 500)
+    private String transferReason;
+
     protected PolicyAssignment() {
+    }
+
+    /** A requested transfer: not open and not in force until approved. */
+    static PolicyAssignment pendingTransfer(String policyRef, Intermediary to, LocalDate from, String reason,
+            String actor) {
+        PolicyAssignment row = new PolicyAssignment(policyRef, to, from, actor);
+        row.openPolicyRef = null;
+        row.status = PENDING;
+        row.transferReason = reason;
+        return row;
+    }
+
+    void approve(String actor) {
+        this.status = APPLIED;
+        this.openPolicyRef = policyRef;
+        this.approvedBy = actor;
+        this.approvedAt = LocalDateTime.now();
+    }
+
+    void reject(String actor) {
+        this.status = REJECTED;
+        this.approvedBy = actor;
+        this.approvedAt = LocalDateTime.now();
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public String getApprovedBy() {
+        return approvedBy;
+    }
+
+    public String getTransferReason() {
+        return transferReason;
     }
 
     PolicyAssignment(String policyRef, Intermediary intermediary, LocalDate effectiveFrom, String actor) {
@@ -66,7 +118,7 @@ public class PolicyAssignment {
 
     /** In force on {@code day}: started on or before it and not ended by it. */
     boolean inForceOn(LocalDate day) {
-        return !effectiveFrom.isAfter(day) && (endedOn == null || endedOn.isAfter(day));
+        return APPLIED.equals(status) && !effectiveFrom.isAfter(day) && (endedOn == null || endedOn.isAfter(day));
     }
 
     public Long getId() {

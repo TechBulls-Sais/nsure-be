@@ -31,6 +31,45 @@ public class ReinsuranceController {
         return reinsurance.draft(body);
     }
 
+    /** {reason, effectiveFrom, ...terms}: the next version of an approved treaty, approved by someone else. */
+    @PostMapping("/treaties/{ref}/amend")
+    public ReinsuranceViews.TreatyView amend(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.amend(ref, body);
+    }
+
+    @GetMapping("/reconciliation")
+    public ReinsuranceViews.ReconciliationView reconciliation(@RequestParam(required = false) String period) {
+        return reinsurance.reconciliation(period);
+    }
+
+    @GetMapping("/bordereaux/{ref}/lines")
+    public List<ReinsuranceViews.BordereauLine> bordereauLines(@PathVariable String ref) {
+        return reinsurance.bordereauLines(ref);
+    }
+
+    /** {reference} */
+    @PostMapping("/bordereaux/{ref}/acknowledge")
+    public ReinsuranceViews.BordereauView acknowledgeBordereau(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.acknowledgeBordereau(ref, body);
+    }
+
+    /** {note} */
+    @PostMapping("/bordereaux/{ref}/correction")
+    public ReinsuranceViews.BordereauView requestCorrection(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.requestCorrection(ref, body);
+    }
+
+    @PostMapping("/bordereaux/{ref}/correct")
+    public ReinsuranceViews.BordereauView correctBordereau(@PathVariable String ref) {
+        return reinsurance.correctBordereau(ref);
+    }
+
+    /** {reference, amount} */
+    @PostMapping("/bordereaux/{ref}/settle")
+    public ReinsuranceViews.BordereauView settleBordereau(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.settleBordereau(ref, body);
+    }
+
     @PostMapping("/treaties/{ref}/approve")
     public ReinsuranceViews.TreatyView approve(@PathVariable String ref) {
         return reinsurance.approve(ref);
@@ -51,6 +90,57 @@ public class ReinsuranceController {
     @PostMapping("/recoveries/{ref}/receipt")
     public ReinsuranceViews.RecoveryView receiveRecovery(@PathVariable String ref, @RequestBody JsonNode body) {
         return reinsurance.receiveRecovery(ref, body);
+    }
+
+    @GetMapping("/exposures")
+    public List<ReinsuranceViews.ExposureView> exposures(@RequestParam(required = false) String policyRef,
+            @RequestParam(required = false) String status) {
+        return reinsurance.exposures(policyRef, status);
+    }
+
+    @GetMapping("/facultative")
+    public List<ReinsuranceViews.FacultativeView> facultative() {
+        return reinsurance.facultative();
+    }
+
+    /** {reinsurer, offeredSum} */
+    @PostMapping("/facultative/{ref}/offer")
+    public ReinsuranceViews.FacultativeView offer(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.offer(ref, body);
+    }
+
+    /** {outcome ACCEPTED|DECLINED, acceptedSum?, acceptanceRef?, note} */
+    @PostMapping("/facultative/{ref}/decision")
+    public ReinsuranceViews.FacultativeView decide(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.decide(ref, body);
+    }
+
+    /** {reason} */
+    @PostMapping("/recoveries/{ref}/dispute")
+    public ReinsuranceViews.RecoveryView dispute(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.dispute(ref, body);
+    }
+
+    /** {note, agreedAmount?} */
+    @PostMapping("/recoveries/{ref}/resolve-dispute")
+    public ReinsuranceViews.RecoveryView resolveDispute(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.resolveDispute(ref, body);
+    }
+
+    /** {amount?, reason} */
+    @PostMapping("/recoveries/{ref}/write-off")
+    public ReinsuranceViews.RecoveryView requestWriteOff(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.requestWriteOff(ref, body);
+    }
+
+    @PostMapping("/recoveries/{ref}/write-off/approve")
+    public ReinsuranceViews.RecoveryView approveWriteOff(@PathVariable String ref) {
+        return reinsurance.decideWriteOff(ref, true);
+    }
+
+    @PostMapping("/recoveries/{ref}/write-off/reject")
+    public ReinsuranceViews.RecoveryView rejectWriteOff(@PathVariable String ref) {
+        return reinsurance.decideWriteOff(ref, false);
     }
 
     @GetMapping("/bordereaux")

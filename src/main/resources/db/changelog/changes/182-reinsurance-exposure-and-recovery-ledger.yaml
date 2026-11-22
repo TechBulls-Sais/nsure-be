@@ -1,0 +1,128 @@
+databaseChangeLog:
+  # NS-SH07-002/003/005: the exposure ceded per policy (at issue and on every benefit change, per life, under the treaty
+  # in force on the event date), facultative referrals over treaty capacity, cession adjustments linked to what they
+  # adjust, and a recovery ledger with disputes and approved write-offs.
+  - changeSet:
+      id: 182-reinsurance-exposure
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ri_treaty
+            columns:
+              # The most the treaty takes on one life (ceded sum); null = no limit. Above it, the excess is referred.
+              - column: {name: capacity, type: 'decimal(15,2)'}
+              # A facultative arrangement covers one policy only.
+              - column: {name: policy_ref, type: varchar(20)}
+        - createTable:
+            tableName: ri_facultative
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ri_facultative}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_ri_facultative_ref}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: customer_ref, type: varchar(20)}
+              - column: {name: product, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: sum_assured, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: aggregate_sum, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: excess_sum, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: treaty_id, type: bigint, constraints: {foreignKeyName: fk_ri_facultative_treaty, references: ri_treaty(id)}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: referred_reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: referred_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: reinsurer, type: varchar(150)}
+              - column: {name: offered_sum, type: 'decimal(15,2)'}
+              - column: {name: offered_by, type: varchar(100)}
+              - column: {name: offered_at, type: datetime}
+              - column: {name: accepted_sum, type: 'decimal(15,2)'}
+              - column: {name: acceptance_ref, type: varchar(60)}
+              - column: {name: decision_note, type: varchar(500)}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: datetime}
+              - column: {name: fac_treaty_id, type: bigint, constraints: {foreignKeyName: fk_ri_facultative_fac_treaty, references: ri_treaty(id)}}
+        - createTable:
+            tableName: ri_exposure
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ri_exposure}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_ri_exposure_ref}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: customer_ref, type: varchar(20)}
+              - column: {name: product, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: version, type: int, constraints: {nullable: false}}
+              - column: {name: sum_assured, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: aggregate_sum, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: retained_sum, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: ceded_sum, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: ceded_share, type: 'decimal(9,6)', constraints: {nullable: false}}
+              - column: {name: treaty_id, type: bigint, constraints: {foreignKeyName: fk_ri_exposure_treaty, references: ri_treaty(id)}}
+              - column: {name: facultative_id, type: bigint, constraints: {foreignKeyName: fk_ri_exposure_facultative, references: ri_facultative(id)}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: effective_from, type: date, constraints: {nullable: false}}
+              - column: {name: ended_on, type: date}
+              - column: {name: source_event_id, type: varchar(36), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_ri_exposure_source}}
+              - column: {name: source_event_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: supersedes_id, type: bigint, constraints: {foreignKeyName: fk_ri_exposure_supersedes, references: ri_exposure(id)}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - createIndex:
+            tableName: ri_exposure
+            indexName: ix_ri_exposure_policy
+            columns:
+              - column: {name: policy_ref}
+        - createIndex:
+            tableName: ri_exposure
+            indexName: ix_ri_exposure_customer
+            columns:
+              - column: {name: customer_ref}
+        - addColumn:
+            tableName: ri_cession
+            columns:
+              - column: {name: receipt_ref, type: varchar(20)}
+              - column: {name: adjusts_id, type: bigint, constraints: {foreignKeyName: fk_ri_cession_adjusts, references: ri_cession(id)}}
+              - column: {name: exposure_id, type: bigint, constraints: {foreignKeyName: fk_ri_cession_exposure, references: ri_exposure(id)}}
+              - column: {name: event_date, type: date}
+              - column: {name: reason, type: varchar(60)}
+        - addColumn:
+            tableName: ri_recovery
+            columns:
+              - column: {name: stage, type: varchar(20), defaultValue: NONE, constraints: {nullable: false}}
+              - column: {name: event_date, type: date}
+              - column: {name: claim_paid_amount, type: 'decimal(15,2)'}
+              - column: {name: original_amount, type: 'decimal(15,2)'}
+              - column: {name: dispute_reason, type: varchar(500)}
+              - column: {name: disputed_by, type: varchar(100)}
+              - column: {name: disputed_at, type: datetime}
+              - column: {name: write_off_amount, type: 'decimal(15,2)'}
+              - column: {name: write_off_reason, type: varchar(500)}
+              - column: {name: write_off_requested_by, type: varchar(100)}
+              - column: {name: write_off_requested_at, type: datetime}
+              - column: {name: write_off_decided_by, type: varchar(100)}
+              - column: {name: write_off_decided_at, type: datetime}
+  - changeSet:
+      id: 182-recovery-postings
+      author: nsure
+      comment: >-
+        Demo defaults (D07/D09): cash received from a reinsurer settles the recoverable (Dr 1000, Cr 1200); an approved
+        write-off of a recovery is an expense (Dr 5300, Cr 1200).
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO fin_account (code, name, account_type, display_order)
+              SELECT '5300', 'Reinsurance recoveries written off', 'EXPENSE', 13
+              WHERE NOT EXISTS (SELECT 1 FROM fin_account WHERE code = '5300');
+              INSERT INTO fin_posting_rule (event_type, debit_account, credit_account, amount_field, business_domain,
+                description, status, version, updated_by, updated_at, effective_from, approval_status, approved_by, approved_at)
+              SELECT seed.e, seed.dr, seed.cr, 'amount', 'SHARED', seed.d, 'ACTIVE', 1, 'system', CURRENT_TIMESTAMP,
+                     DATE '2000-01-01', 'APPROVED', 'system', CURRENT_TIMESTAMP FROM (
+                SELECT 'RecoveryReceived' e, '1000' dr, '1200' cr, 'Recovery paid by the reinsurer' d UNION ALL
+                SELECT 'RecoveryWrittenOff', '5300', '1200', 'Recovery written off with approval'
+              ) seed
+              WHERE NOT EXISTS (SELECT 1 FROM fin_posting_rule x WHERE x.event_type = seed.e);
+  - changeSet:
+      id: 182-demo-treaty-capacity
+      author: nsure
+      context: demo
+      comment: >-
+        Demo default (D09): the Whole of Life quota share takes at most BWP 300,000 ceded per life, so a Gold policy
+        (BWP 1.5m, 25% = 375,000) refers BWP 75,000 for facultative placement.
+      changes:
+        - sql:
+            sql: UPDATE ri_treaty SET capacity = 300000.00 WHERE record_ref = 'TRT-00001' AND capacity IS NULL

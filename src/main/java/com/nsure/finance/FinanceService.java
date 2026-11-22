@@ -34,10 +34,12 @@ public class FinanceService {
     private final IntegrationService integration;
     private final com.nsure.audit.evidence.EvidenceChain evidence;
     private final com.nsure.integration.Outbox outbox;
+    private final CorporateGl gl;
 
     public FinanceService(EntityManager em, PlatformSecurityContext security, Subledger subledger,
             IntegrationService integration, com.nsure.audit.evidence.EvidenceChain evidence,
-            com.nsure.integration.Outbox outbox) {
+            com.nsure.integration.Outbox outbox, CorporateGl gl) {
+        this.gl = gl;
         this.outbox = outbox;
         this.em = em;
         this.security = security;
@@ -190,8 +192,21 @@ public class FinanceService {
             throw new IllegalArgumentException("Domain must be INDIVIDUAL, GROUP or SHARED.");
         }
         String status = text(body, "status", PostingRule.ACTIVE).toUpperCase(Locale.ROOT);
-        if (!Set.of(PostingRule.ACTIVE, PostingRule.INACTIVE).contains(status)) {
-            throw new IllegalArgumentException("Status must be ACTIVE or INACTIVE.");
+        if (!Set.of(PostingRule.ACTIVE, PostingRule.INACTIVE, PostingRule.NOT_POSTED).contains(status)) {
+            throw new IllegalArgumentException("Status must be ACTIVE, INACTIVE or NOT_POSTED.");
+        }
+        String failureMode = text(body, "failureMode", PostingRule.CONTINUE).toUpperCase(Locale.ROOT);
+        if (!Set.of(PostingRule.CONTINUE, PostingRule.BLOCK).contains(failureMode)) {
+            throw new IllegalArgumentException("failureMode must be CONTINUE or BLOCK.");
+        }
+        String product = text(body, "product", null);
+        if (product != null && em.createQuery("select count(p) from InsuranceProduct p where p.name = :name", Long.class)
+                .setParameter("name", product).getSingleResult() == 0) {
+            throw new IllegalArgumentException("Unknown product " + product + ".");
+        }
+        String costCentre = text(body, "costCentre", null);
+        if (costCentre != null && costCentre.length() > 20) {
+            throw new IllegalArgumentException("costCentre is at most 20 characters.");
         }
         String reason = required(body, "reason");
         if (reason.length() > 500) {
@@ -209,9 +224,11 @@ public class FinanceService {
                     + body.get("baseVersion").asInt() + ". Reload to see the current rule.");
         }
         requireValidStart(eventType, effective, null);
-        PostingRule current = subledger.ruleInForce(eventType, effective).orElse(null);
+        PostingRule current = subledger.ruleInForce(eventType, product, effective).orElse(null);
         PostingRule next = new PostingRule(eventType, latest + 1, debit, credit, text(body, "amountField", "amount"),
-                domain, text(body, "description", eventType), status, effective, reason, user.getUsername());
+                domain, text(body, "description", eventType), status, effective, reason, user.getUsername())
+                .scoped(product, costCentre == null && current != null ? current.getCostCentre() : costCentre,
+                        failureMode);
         em.persist(next);
         evidence.record(user.getUsername(), "Proposed posting rule", "PostingRule", eventType + " v" + next.getVersion(),
                 (current == null ? "(none)" : "v" + current.getVersion() + " " + current.summary()) + " → "
@@ -344,48 +361,113 @@ public class FinanceService {
                         user.getUsername());
             }
             case "reopen" -> {
+                // NS-SH08-005: reopening is asked for here and authorised by someone else (approve-reopen).
                 if (AccountingPeriod.OPEN.equals(status)) {
                     throw new IllegalArgumentException("Period " + code + " is already open.");
                 }
                 if (note == null || note.isBlank()) {
                     throw new IllegalArgumentException("Give a reason for reopening the period.");
                 }
-                period.moveTo(AccountingPeriod.OPEN, note, user.getUsername());
+                if (period.getReopenRequestedBy() != null) {
+                    throw new ConflictException("Reopening " + code + " is already waiting for authorisation.");
+                }
+                period.requestReopen(note.length() <= 500 ? note : note.substring(0, 500), user.getUsername());
             }
             default -> throw new IllegalArgumentException("Unknown period action " + action);
         }
         return period(period);
     }
 
+    /**
+     * NS-SH08-005: Finance authority (APPROVE_JOURNAL) reopens a period someone else asked to reopen; or declines.
+     * Late events then post into it with their own date again.
+     */
+    @Transactional
+    public FinanceViews.PeriodView decideReopen(String code, boolean approve) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("APPROVE_JOURNAL");
+        AccountingPeriod period = subledger.period(code, user.getUsername());
+        if (period.getReopenRequestedBy() == null) {
+            throw new ConflictException("Nobody has asked to reopen " + code + ".");
+        }
+        if (user.getUsername().equalsIgnoreCase(period.getReopenRequestedBy())) {
+            throw new com.nsure.security.exception.NoAuthorizationException("You asked to reopen " + code
+                    + "; someone else must authorise it.");
+        }
+        String reason = period.getReopenReason();
+        String asker = period.getReopenRequestedBy();
+        period.clearReopen();
+        if (approve) {
+            period.moveTo(AccountingPeriod.OPEN, "Reopened: " + reason + " (asked by " + asker + ", authorised by "
+                    + user.getUsername() + ")", user.getUsername());
+            evidence.record(user.getUsername(), "Reopened accounting period", "AccountingPeriod", code, reason);
+        }
+        return period(period);
+    }
+
+    /** AT-SH08-03: every open item that stands in the way of closing a period, by category. */
+    @Transactional(readOnly = true)
+    public List<FinanceViews.CloseItem> closeReport(String code) {
+        reader();
+        return closeItems(code);
+    }
+
     /** Unposted events, journals not yet exported, and exported batches the GL has not acknowledged (AT-SH08-03). */
     List<String> closeBlockers(String code) {
-        List<String> open = new ArrayList<>();
-        long exceptions = count("select count(e) from UnpostedEvent e where e.status = 'OPEN'");
-        if (exceptions > 0) {
-            open.add(exceptions + " unposted event(s)");
-        }
-        long unexported = em.createQuery("select count(j) from Journal j where j.periodCode = :p and j.glBatchRef is null",
-                Long.class).setParameter("p", code).getSingleResult();
-        if (unexported > 0) {
-            open.add(unexported + " journal(s) not exported to the GL");
-        }
-        long pending = em.createQuery("select count(distinct b.id) from GlBatch b, Journal j where j.glBatchRef = b.ref"
-                        + " and j.periodCode = :p and b.status in ('PREPARED', 'SUBMITTED')", Long.class)
-                .setParameter("p", code).getSingleResult();
-        if (pending > 0) {
-            open.add(pending + " GL batch(es) awaiting acknowledgement");
-        }
-        long unreconciled = em.createQuery("select count(distinct b.id) from GlBatch b, Journal j where j.glBatchRef = b.ref"
-                        + " and j.periodCode = :p and b.status = 'ACCEPTED'", Long.class)
-                .setParameter("p", code).getSingleResult();
-        if (unreconciled > 0) {
-            open.add(unreconciled + " accepted GL batch(es) not yet reconciled");
-        }
+        return closeItems(code).stream().filter(i -> i.count() > 0).map(i -> i.count() + " " + i.label()).toList();
+    }
+
+    private List<FinanceViews.CloseItem> closeItems(String code) {
+        YearMonth month = YearMonth.parse(code);
+        LocalDateTime from = month.atDay(1).atStartOfDay();
+        LocalDateTime to = month.plusMonths(1).atDay(1).atStartOfDay();
+        List<FinanceViews.CloseItem> items = new ArrayList<>();
+        // Unposted events of business dated in this period (not every open exception everywhere).
+        List<String> unposted = em.createQuery("select e.eventType || ' ' || e.sourceRef from UnpostedEvent e,"
+                        + " OutboxEvent o where o.eventId = e.eventKey and e.status = 'OPEN' and o.occurredAt >= :from"
+                        + " and o.occurredAt < :to", String.class)
+                .setParameter("from", from).setParameter("to", to).setMaxResults(20).getResultList();
+        long unpostedCount = em.createQuery("select count(e) from UnpostedEvent e, OutboxEvent o where o.eventId ="
+                        + " e.eventKey and e.status = 'OPEN' and o.occurredAt >= :from and o.occurredAt < :to", Long.class)
+                .setParameter("from", from).setParameter("to", to).getSingleResult();
+        items.add(new FinanceViews.CloseItem("UNPOSTED", "unposted event(s)", unpostedCount, unposted));
+        List<String> unexported = em.createQuery("select j.ref from Journal j where j.periodCode = :p"
+                + " and j.glBatchRef is null order by j.id", String.class).setParameter("p", code).setMaxResults(20)
+                .getResultList();
+        long unexportedCount = em.createQuery("select count(j) from Journal j where j.periodCode = :p"
+                + " and j.glBatchRef is null", Long.class).setParameter("p", code).getSingleResult();
+        items.add(new FinanceViews.CloseItem("UNEXPORTED", "journal(s) not exported to the GL", unexportedCount,
+                unexported));
+        List<String> pending = em.createQuery("select distinct b.ref from GlBatch b, Journal j where j.glBatchRef ="
+                        + " b.ref and j.periodCode = :p and b.status in ('PREPARED', 'SUBMITTED')", String.class)
+                .setParameter("p", code).getResultList();
+        items.add(new FinanceViews.CloseItem("GL_PENDING", "GL batch(es) awaiting acknowledgement", pending.size(),
+                pending));
+        List<String> rejected = em.createQuery("select b.ref from GlBatch b where b.status = 'REJECTED'"
+                        + " and b.periodCodes like :p", String.class)
+                .setParameter("p", "%" + code + "%").getResultList().stream()
+                .filter(r -> unexportedCount > 0).toList();
+        items.add(new FinanceViews.CloseItem("GL_REJECTED", "GL batch(es) rejected by the GL, journals not yet re-sent",
+                rejected.size(), rejected));
+        List<String> unreconciled = em.createQuery("select distinct b.ref from GlBatch b, Journal j where j.glBatchRef ="
+                        + " b.ref and j.periodCode = :p and b.status = 'ACCEPTED'", String.class)
+                .setParameter("p", code).getResultList();
+        items.add(new FinanceViews.CloseItem("GL_UNRECONCILED", "accepted GL batch(es) not yet reconciled",
+                unreconciled.size(), unreconciled));
+        // Unreconciled cash: open bank-statement exceptions and receipts still in suspense from this period.
+        List<String> recon = em.createQuery("select concat(i.status, ' ', i.providerRef) from ReconItem i where"
+                        + " i.status <> 'MATCHED' and i.resolvedAt is null and i.valueDate >= :d1 and i.valueDate < :d2",
+                        String.class)
+                .setParameter("d1", month.atDay(1)).setParameter("d2", month.plusMonths(1).atDay(1)).setMaxResults(20)
+                .getResultList();
+        items.add(new FinanceViews.CloseItem("CASH_RECON", "open bank reconciliation item(s)", recon.size(), recon));
+        List<String> suspense = em.createQuery("select m.providerRef from InboundMessage m where m.status = 'SUSPENSE'"
+                        + " and m.receivedAt >= :from and m.receivedAt < :to", String.class)
+                .setParameter("from", from).setParameter("to", to).setMaxResults(20).getResultList();
+        items.add(new FinanceViews.CloseItem("SUSPENSE", "receipt(s) still in suspense", suspense.size(), suspense));
         long manual = count("select count(m) from ManualJournal m where m.status = 'PENDING'");
-        if (manual > 0) {
-            open.add(manual + " manual journal(s) awaiting approval");
-        }
-        return open;
+        items.add(new FinanceViews.CloseItem("MANUAL", "manual journal(s) awaiting approval", manual, List.of()));
+        return items;
     }
 
     @Transactional
@@ -412,6 +494,7 @@ public class FinanceService {
         }
         GlBatch batch = new GlBatch(subledger.nextRef("GLB-", GlBatch.class), journals.size(), lines, debit, credit,
                 user.getUsername());
+        batch.periods(String.join(",", journals.stream().map(Journal::getPeriodCode).distinct().sorted().toList()));
         em.persist(batch);
         journals.forEach(j -> j.assignGlBatch(batch.getRef()));
         return batch(batch);
@@ -420,17 +503,97 @@ public class FinanceService {
     /** Sends a prepared batch to the corporate GL (Blueprint §7: prepared → submitted). */
     @Transactional
     public FinanceViews.GlBatchView submit(String ref) {
+        return submit(ref, null);
+    }
+
+    /**
+     * Prepared → submitted. With {@code deliver} (body {"simulate": ACCEPT|REJECT|TIMEOUT}) the export file goes to the
+     * corporate GL interface and its answer is applied at once; without one, staff key the GL's answer later. A batch
+     * already submitted whose answer was lost is never sent blind: check its status by batch id (AT-SH08-02).
+     */
+    @Transactional
+    public FinanceViews.GlBatchView submit(String ref, JsonNode body) {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("EXPORT_GL");
         GlBatch batch = glBatch(ref);
+        boolean deliver = body != null && body.has("simulate");
         if (!GlBatch.PREPARED.equals(batch.getStatus())) {
             if (GlBatch.SUBMITTED.equals(batch.getStatus())) {
+                if (deliver) {
+                    throw new ConflictException("GL batch " + ref + " was already sent and no answer was recorded. Check"
+                            + " its status with the GL by batch id before sending anything again.");
+                }
                 return batch(batch);
             }
             throw new ConflictException("GL batch " + ref + " is already " + batch.getStatus() + ".");
         }
         batch.submit(user.getUsername());
+        if (!deliver) {
+            return batch(batch);
+        }
+        CorporateGl.Ack ack = gl.send(exportFile(batch), text(body, "simulate", "ACCEPT"));
+        if (ack == null) {
+            batch.delivery("Sent to " + gl.name() + "; no answer (timeout). Check its status by batch id before"
+                    + " sending it again.");
+            return batch(batch);
+        }
+        applyAck(batch, ack, user.getUsername());
         return batch(batch);
+    }
+
+    /**
+     * AT-SH08-02: asks the GL what it holds under the batch id. Posted → accepted with the GL's reference (nothing is
+     * sent again); rejected → rejected; never received → back to prepared, safe to send again.
+     */
+    @Transactional
+    public FinanceViews.GlBatchView statusCheck(String ref) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("EXPORT_GL");
+        GlBatch batch = glBatch(ref);
+        if (!GlBatch.SUBMITTED.equals(batch.getStatus())) {
+            throw new ConflictException("GL batch " + ref + " is " + batch.getStatus() + "; only a submitted batch"
+                    + " waits for the GL's answer.");
+        }
+        CorporateGl.Ack ack = gl.status(ref);
+        if ("UNKNOWN".equals(ack.status())) {
+            batch.backToPrepared("Checked by batch id: the GL never received " + ref + "; it can be sent again.");
+            return batch(batch);
+        }
+        applyAck(batch, ack, user.getUsername());
+        return batch(batch);
+    }
+
+    /** The batch's export file in the agreed format (batch and line ids, control totals). */
+    @Transactional(readOnly = true)
+    public CorporateGl.ExportFile exportFile(String ref) {
+        reader();
+        return exportFile(glBatch(ref));
+    }
+
+    private CorporateGl.ExportFile exportFile(GlBatch batch) {
+        List<CorporateGl.ExportLine> lines = new ArrayList<>();
+        int n = 0;
+        for (Journal j : em.createQuery("select j from Journal j where j.glBatchRef = :ref order by j.id", Journal.class)
+                .setParameter("ref", batch.getRef()).getResultList()) {
+            for (JournalLine l : j.getLines()) {
+                lines.add(new CorporateGl.ExportLine(batch.getRef() + "-" + String.format("%04d", ++n), j.getRef(),
+                        j.getEventType(), j.getAccountingDate().toString(), j.getPeriodCode(), l.getAccountCode(),
+                        l.getDebit(), l.getCredit(), j.getCurrency(), j.getCostCentre(), j.getPolicyRef(),
+                        j.getProduct(), j.getIntermediaryRef(), j.getTreatyRef(), j.getSchemeRef(), j.getDescription()));
+            }
+        }
+        return new CorporateGl.ExportFile(batch.getRef(), batch.getJournalCount(), batch.getLineCount(),
+                batch.getDebitTotal(), batch.getCreditTotal(), "BWP", lines);
+    }
+
+    private void applyAck(GlBatch batch, CorporateGl.Ack ack, String actor) {
+        batch.delivery(gl.name() + " answered " + ack.status() + " (delivery " + ack.deliveries() + ")"
+                + (ack.reason() == null ? "" : ": " + ack.reason()));
+        if ("POSTED".equals(ack.status())) {
+            acknowledged(batch, GlBatch.ACCEPTED, ack.glReference(), "Acknowledged by " + gl.name(), actor);
+        } else if ("REJECTED".equals(ack.status())) {
+            acknowledged(batch, GlBatch.REJECTED, null, ack.reason() == null ? "Rejected by the GL" : ack.reason(), actor);
+        }
     }
 
     /**
@@ -448,11 +611,21 @@ public class FinanceService {
         }
         BigDecimal glDebit;
         BigDecimal glCredit;
-        try {
-            glDebit = new BigDecimal(required(body, "glDebitTotal")).setScale(2, java.math.RoundingMode.HALF_UP);
-            glCredit = new BigDecimal(required(body, "glCreditTotal")).setScale(2, java.math.RoundingMode.HALF_UP);
-        } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException("GL totals must be numbers.");
+        if (text(body, "glDebitTotal", null) == null && text(body, "glCreditTotal", null) == null) {
+            // NS-SH08-006: the totals the GL itself reports as posted under this batch id.
+            CorporateGl.Ack held = gl.status(ref);
+            if (held.debitTotal() == null) {
+                throw new IllegalArgumentException("The GL reports nothing posted for " + ref + "; enter its totals.");
+            }
+            glDebit = held.debitTotal().setScale(2, java.math.RoundingMode.HALF_UP);
+            glCredit = held.creditTotal().setScale(2, java.math.RoundingMode.HALF_UP);
+        } else {
+            try {
+                glDebit = new BigDecimal(required(body, "glDebitTotal")).setScale(2, java.math.RoundingMode.HALF_UP);
+                glCredit = new BigDecimal(required(body, "glCreditTotal")).setScale(2, java.math.RoundingMode.HALF_UP);
+            } catch (NumberFormatException ex) {
+                throw new IllegalArgumentException("GL totals must be numbers.");
+            }
         }
         if (glDebit.compareTo(batch.getDebitTotal()) != 0 || glCredit.compareTo(batch.getCreditTotal()) != 0) {
             throw new ConflictException("The GL totals (debit " + glDebit.toPlainString() + ", credit "
@@ -495,7 +668,13 @@ public class FinanceService {
         if (GlBatch.REJECTED.equals(status) && (note == null || note.isBlank())) {
             throw new IllegalArgumentException("Record the GL's rejection reason.");
         }
-        batch.acknowledge(status, text(body, "glReference", null), note, user.getUsername());
+        acknowledged(batch, status, text(body, "glReference", null), note, user.getUsername());
+        return batch(batch);
+    }
+
+    private void acknowledged(GlBatch batch, String status, String glReference, String note, String actor) {
+        String ref = batch.getRef();
+        batch.acknowledge(status, glReference, note, actor);
         if (GlBatch.ACCEPTED.equals(status)) {
             Map<String, Object> accepted = new java.util.LinkedHashMap<>();
             accepted.put("batchRef", batch.getRef());
@@ -503,14 +682,12 @@ public class FinanceService {
             accepted.put("journalCount", batch.getJournalCount());
             accepted.put("debitTotal", batch.getDebitTotal().toPlainString());
             accepted.put("creditTotal", batch.getCreditTotal().toPlainString());
-            outbox.publish(com.nsure.integration.Events.GL_BATCH_ACCEPTED, batch.getRef(), accepted,
-                    user.getUsername());
+            outbox.publish(com.nsure.integration.Events.GL_BATCH_ACCEPTED, batch.getRef(), accepted, actor);
         }
         if (GlBatch.REJECTED.equals(status)) {
             em.createQuery("select j from Journal j where j.glBatchRef = :ref", Journal.class)
                     .setParameter("ref", ref).getResultList().forEach(j -> j.assignGlBatch(null));
         }
-        return batch(batch);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────
@@ -543,7 +720,8 @@ public class FinanceService {
                         "select count(j) from Journal j where j.periodCode = :p and j.glBatchRef is null", Long.class)
                 .setParameter("p", p.getCode()).getSingleResult();
         return new FinanceViews.PeriodView(p.getCode(), p.getStatus(), p.getNote(), p.getUpdatedBy(),
-                p.getUpdatedAt(), journals, unexported);
+                p.getUpdatedAt(), journals, unexported, p.getReopenRequestedBy(), p.getReopenRequestedAt(),
+                p.getReopenReason());
     }
 
     private long count(String jpql) {
@@ -581,7 +759,8 @@ public class FinanceService {
             views.add(new FinanceViews.RuleView(r.getId(), r.getEventType(), r.getDebitAccount(), r.getCreditAccount(),
                     r.getAmountField(), r.getDomain(), r.getDescription(), r.getStatus(), r.getVersion(),
                     r.getEffectiveFrom(), to, r.getApprovalStatus(), r.getId().equals(inForce), r.getChangeReason(),
-                    r.getProposedBy(), r.getRecordedAt(), r.getApprovedBy(), r.getApprovedAt(), r.getRejectionReason()));
+                    r.getProposedBy(), r.getRecordedAt(), r.getApprovedBy(), r.getApprovedAt(), r.getRejectionReason(),
+                    r.getProduct(), r.getCostCentre(), r.getFailureMode()));
         }
         return views;
     }
@@ -628,14 +807,15 @@ public class FinanceService {
                 j.getGlBatchRef(), j.getCreatedBy(), j.getCreatedAt(),
                 j.getLines().stream().map(l -> new FinanceViews.LineView(l.getLineNo(), l.getAccountCode(),
                         names.getOrDefault(l.getAccountCode(), l.getAccountCode()), l.getDebit(), l.getCredit()))
-                        .toList(), j.getRowVersion());
+                        .toList(), j.getRowVersion(), j.getPolicyRef(), j.getProduct(), j.getIntermediaryRef(),
+                j.getTreatyRef(), j.getSchemeRef(), j.getCostCentre());
     }
 
     private static FinanceViews.GlBatchView batch(GlBatch b) {
         return new FinanceViews.GlBatchView(b.getRef(), b.getStatus(), b.getJournalCount(), b.getLineCount(),
                 b.getDebitTotal(), b.getCreditTotal(), b.getCreatedBy(), b.getCreatedAt(), b.getGlReference(),
                 b.getAcknowledgedBy(), b.getAcknowledgedAt(), b.getNote(), b.getSubmittedBy(), b.getSubmittedAt(),
-                b.getReconciledBy(), b.getReconciledAt());
+                b.getReconciledBy(), b.getReconciledAt(), b.getPeriodCodes(), b.getDeliveryNote());
     }
 
     private static String required(JsonNode body, String field) {

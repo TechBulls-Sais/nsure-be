@@ -38,6 +38,8 @@ public final class Events {
     public static final String BORDEREAU_SUBMITTED = "ReinsuranceBordereauSubmitted";
     /** recoveryRef, treatyRef, claimRef, policyRef, amount (received), expected, reference (SH07). */
     public static final String RECOVERY_RECEIVED = "RecoveryReceived";
+    /** SH07 (NS-SH07-005): a recovery written off with a second person's approval; posts the write-off. */
+    public static final String RECOVERY_WRITTEN_OFF = "RecoveryWrittenOff";
     /** claimRef, policyRef, customerName, product, amount, reason. Raised when a claim is lodged (spec 05 §9). */
     public static final String CLAIM_RECEIVED = "ClaimReceived";
     /** claimRef, policyRef, customerName, product, amount (the approved payout), reason. */

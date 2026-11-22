@@ -343,8 +343,12 @@ class ReinsuranceApiTest {
         String account = mockMvc.perform(get("/collections/policies/" + policy).with(signedIn("admin", "password")))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         String receipt = JsonPath.read(account, "$.receipts[0].receiptRef");
-        mockMvc.perform(json(post("/collections/receipts/" + receipt + "/reverse"), "admin",
+        String request = mockMvc.perform(json(post("/collections/receipts/" + receipt + "/reverse"), "admin",
                         "{\"kind\":\"RETURNED\",\"reason\":\"Debit returned: insufficient funds\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        // NS-SH04-005: a second person approves the reversal before it happens.
+        mockMvc.perform(json(post("/collections/reversal-requests/" + JsonPath.read(request, "$.ref") + "/approve"),
+                        "secadmin", "{}"))
                 .andExpect(status().isOk());
         dispatcher.dispatch();
         dispatcher.dispatch();

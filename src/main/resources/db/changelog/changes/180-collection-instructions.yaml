@@ -1,0 +1,91 @@
+databaseChangeLog:
+  # NS-SH04-002: payment mandates, approved collection batches and the debit-order / mobile-money instructions sent
+  # through a collection rail. Submitting an instruction is not settlement: only the bank's response confirms money.
+  - changeSet:
+      id: 180-collection-instructions
+      author: nsure
+      changes:
+        - createTable:
+            tableName: col_mandate
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_col_mandate}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_col_mandate_ref}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              # The policy ref while the mandate is active, null once cancelled: at most one active mandate per policy.
+              - column: {name: active_policy_ref, type: varchar(20), constraints: {unique: true, uniqueConstraintName: uk_col_mandate_active}}
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: institution, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: account_number, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: account_holder, type: varchar(150)}
+              - column: {name: debit_day, type: int}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: source, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: cancelled_by, type: varchar(100)}
+              - column: {name: cancelled_at, type: datetime}
+              - column: {name: cancel_reason, type: varchar(500)}
+        - createIndex:
+            tableName: col_mandate
+            indexName: ix_col_mandate_policy
+            columns:
+              - column: {name: policy_ref}
+        - createTable:
+            tableName: col_batch
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_col_batch}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_col_batch_ref}}
+              - column: {name: collection_date, type: date, constraints: {nullable: false}}
+              - column: {name: provider, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: instruction_count, type: int, constraints: {nullable: false}}
+              - column: {name: total_amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: file_ref, type: varchar(60)}
+              - column: {name: prepared_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: prepared_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+              - column: {name: submitted_by, type: varchar(100)}
+              - column: {name: submitted_at, type: datetime}
+              - column: {name: completed_at, type: datetime}
+              - column: {name: note, type: varchar(500)}
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - createTable:
+            tableName: col_instruction
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_col_instruction}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_col_instruction_ref}}
+              - column: {name: batch_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_col_instruction_batch, references: col_batch(id)}}
+              - column: {name: mandate_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_col_instruction_mandate, references: col_mandate(id)}}
+              - column: {name: instalment_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: customer_ref, type: varchar(20)}
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: institution, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: account_masked, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: currency, type: varchar(3), constraints: {nullable: false}}
+              - column: {name: period_start, type: date, constraints: {nullable: false}}
+              - column: {name: period_end, type: date, constraints: {nullable: false}}
+              - column: {name: collection_date, type: date, constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: provider_reference, type: varchar(60), constraints: {unique: true, uniqueConstraintName: uk_col_instruction_provider_ref}}
+              - column: {name: result_code, type: varchar(20)}
+              - column: {name: result_text, type: varchar(500)}
+              - column: {name: receipt_ref, type: varchar(20)}
+              - column: {name: transaction_id, type: bigint}
+              - column: {name: reversal_ref, type: varchar(20)}
+              - column: {name: submitted_at, type: datetime}
+              - column: {name: responded_at, type: datetime}
+              - column: {name: returned_at, type: datetime}
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - createIndex:
+            tableName: col_instruction
+            indexName: ix_col_instruction_instalment
+            columns:
+              - column: {name: instalment_ref}
+        - createIndex:
+            tableName: col_instruction
+            indexName: ix_col_instruction_policy
+            columns:
+              - column: {name: policy_ref}

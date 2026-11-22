@@ -198,7 +198,21 @@ class DistributionApiTest {
         pay(policy);
         dispatcher.dispatch();
 
-        assign(policy, broker).andExpect(status().isOk()).andExpect(jsonPath("$.open").value(true));
+        // AT-SH06-03: the transfer waits for a second person; until then the agent keeps the policy.
+        String pending = mockMvc.perform(json(post("/distribution/assignments"), "distribution",
+                        "{\"policyRef\":\"" + policy + "\",\"intermediaryRef\":\"" + broker + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.open").value(false))
+                .andReturn().getResponse().getContentAsString();
+        Integer transfer = JsonPath.read(pending, "$.id");
+        assign(policy, broker).andExpect(status().isConflict());
+        mockMvc.perform(post("/distribution/assignments/" + transfer + "/approve").with(signedIn("distribution", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/distribution/assignments/" + transfer + "/approve").with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPLIED"))
+                .andExpect(jsonPath("$.open").value(true));
         assign(policy, broker).andExpect(status().isUnprocessableEntity());
         mockMvc.perform(get("/distribution/assignments?policyRef=" + policy).with(signedIn("distribution", "password")))
                 .andExpect(jsonPath("$.length()").value(2))
@@ -249,6 +263,15 @@ class DistributionApiTest {
         mockMvc.perform(json(post("/distribution/statements"), "finance", issue))
                 .andExpect(status().isUnprocessableEntity());
 
+        // NS-SH06-006: paid only once someone other than the issuer approves it.
+        mockMvc.perform(post("/distribution/statements/" + statement + "/pay").with(signedIn("finance", "password")))
+                .andExpect(status().isConflict());
+        mockMvc.perform(post("/distribution/statements/" + statement + "/approve").with(signedIn("finance", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/distribution/statements/" + statement + "/approve").with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.approvedBy").value("admin"));
         mockMvc.perform(post("/distribution/statements/" + statement + "/pay").with(signedIn("finance", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PAID"))

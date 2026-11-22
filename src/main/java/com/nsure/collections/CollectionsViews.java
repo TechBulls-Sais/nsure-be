@@ -13,7 +13,34 @@ public final class CollectionsViews {
     /** A policy's billing account (NS-SH04-004): paid-to and arrears come from allocations, never from a notice. */
     public record AccountView(String policyRef, String status, LocalDate paidTo, LocalDate nextDue,
             BigDecimal arrears, int overdueInstalments, List<String> unresolvedPayments,
-            List<InstalmentView> instalments, List<ReceiptView> receipts) {
+            List<InstalmentView> instalments, List<ReceiptView> receipts, MandateView mandate,
+            List<InstructionView> instructions, List<ScheduleView> schedule) {
+    }
+
+    /** NS-SH04-001: the full due schedule ahead, by calendar rules; projected, not yet issued. */
+    public record ScheduleView(LocalDate periodStart, LocalDate periodEnd, LocalDate dueDate, BigDecimal amount,
+            String currency) {
+    }
+
+    /** A payment mandate (NS-SH04-002); the account or wallet number is only ever shown masked. */
+    public record MandateView(String ref, String policyRef, String channel, String institution, String accountMasked,
+            String accountHolder, Integer debitDay, String status, String source, String createdBy,
+            LocalDateTime createdAt, String cancelledBy, LocalDateTime cancelledAt, String cancelReason) {
+    }
+
+    public record InstructionView(String ref, String batchRef, String instalmentRef, String policyRef, String channel,
+            String institution, String accountMasked, BigDecimal amount, String currency, LocalDate periodStart,
+            LocalDate periodEnd, LocalDate collectionDate, String status, String providerReference, String resultCode,
+            String resultText, String receiptRef, Long transactionId, String reversalRef, LocalDateTime submittedAt,
+            LocalDateTime respondedAt, LocalDateTime returnedAt) {
+    }
+
+    /** A collection batch with its control totals; {@code notes} explains what preparation left out. */
+    public record CollectionBatchView(String ref, LocalDate collectionDate, String provider, String status,
+            int instructionCount, BigDecimal totalAmount, String fileRef, String preparedBy, LocalDateTime preparedAt,
+            String approvedBy, LocalDateTime approvedAt, String submittedBy, LocalDateTime submittedAt,
+            LocalDateTime completedAt, String note, java.util.Map<String, Long> byStatus,
+            List<InstructionView> instructions, List<String> notes) {
     }
 
     public record InstalmentView(String ref, LocalDate periodStart, LocalDate periodEnd, LocalDate dueDate,
@@ -34,11 +61,26 @@ public final class CollectionsViews {
             String reason, String reversedBy, LocalDateTime reversedAt, LocalDate paidTo, String policyStatus) {
     }
 
+    /** A staff-keyed reversal waiting for, or decided by, a second person (NS-SH04-005). */
+    public record ReversalRequestView(String ref, String receiptRef, String policyRef, String kind, BigDecimal amount,
+            String reason, String status, String requestedBy, LocalDateTime requestedAt, String decidedBy,
+            LocalDateTime decidedAt, String decisionNote, String reversalRef, LocalDate paidTo, String policyStatus) {
+    }
+
     public record BillingRunView(int issued, List<String> instalments) {
     }
 
     public record StatementView(String ref, String provider, LocalDate periodFrom, LocalDate periodTo,
-            String uploadedBy, LocalDateTime uploadedAt, long lines, long matched, long openExceptions) {
+            String uploadedBy, LocalDateTime uploadedAt, long lines, long matched, long openExceptions,
+            ControlTotals totals) {
+    }
+
+    /**
+     * NS-SH04-006 control totals for the statement period: what the statement shows, what matched, the receipts this
+     * provider settled here, premium allocated to instalments, and the net cash the subledger posted (account 1000).
+     */
+    public record ControlTotals(BigDecimal statementTotal, BigDecimal matchedTotal, BigDecimal receiptsTotal,
+            BigDecimal allocationsTotal, BigDecimal ledgerCash, BigDecimal statementLessReceipts) {
     }
 
     public record ReconItemView(Long id, String statementRef, String side, Integer lineNo, String providerRef,

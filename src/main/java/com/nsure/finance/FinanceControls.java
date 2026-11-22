@@ -53,9 +53,16 @@ public class FinanceControls {
     private final Outbox outbox;
     private final ObjectMapper mapper;
     private final com.nsure.collections.BillingService billing;
+    private final RefundControls refunds;
+    private final boolean softCloseBlocksManual;
 
     public FinanceControls(EntityManager em, PlatformSecurityContext security, Subledger subledger,
-            PolicyWorkflow policies, Outbox outbox, ObjectMapper mapper, com.nsure.collections.BillingService billing) {
+            PolicyWorkflow policies, Outbox outbox, ObjectMapper mapper, com.nsure.collections.BillingService billing,
+            RefundControls refunds,
+            @org.springframework.beans.factory.annotation.Value("${nsure.finance.soft-close-blocks-manual:true}")
+            boolean softCloseBlocksManual) {
+        this.softCloseBlocksManual = softCloseBlocksManual;
+        this.refunds = refunds;
         this.billing = billing;
         this.em = em;
         this.security = security;
@@ -86,6 +93,14 @@ public class FinanceControls {
                     : LocalDate.now();
         } catch (DateTimeParseException ex) {
             throw new IllegalArgumentException("accountingDate must be yyyy-MM-dd.");
+        }
+        // NS-SH08-005: a soft-closed period takes system postings only; a manual adjustment waits for an open period.
+        String month = java.time.YearMonth.from(date).toString();
+        String periodStatus = em.createQuery("select p.status from AccountingPeriod p where p.code = :code", String.class)
+                .setParameter("code", month).getResultStream().findFirst().orElse(AccountingPeriod.OPEN);
+        if (softCloseBlocksManual && AccountingPeriod.SOFT_CLOSED.equals(periodStatus)) {
+            throw new IllegalArgumentException("Period " + month + " is soft-closed: it accepts system postings only."
+                    + " Date the manual journal in an open period, or have the period reopened.");
         }
         List<FinanceViews.ManualLineView> lines = new ArrayList<>();
         BigDecimal debit = BigDecimal.ZERO;
@@ -177,7 +192,15 @@ public class FinanceControls {
                 policyRef = required(body, "policyRef", 3, 40);
                 allocationProblem(policyRef, receipt.getUnapplied());
             }
-        } else if (!REFUND.equals(action)) {
+        } else if (REFUND.equals(action)) {
+            // NS-SH04-005: a refund names where the money goes; the approver verifies it and a payout instruction pays it.
+            String payee = required(body, "payeeName", 2, 150);
+            String method = required(body, "payoutMethod", 2, 40);
+            String account = required(body, "accountRef", 4, 60);
+            refunds.raise("SUSPENSE", "SUS-" + receipt.getId(), receipt.getBusinessRef(), payee, method, account,
+                    receipt.getUnapplied(), reason.length() <= 500 ? reason : reason.substring(0, 500),
+                    maker.getUsername());
+        } else {
             throw new IllegalArgumentException("Action must be ALLOCATE or REFUND.");
         }
         receipt.requestClearance(action, policyRef, plan, reason, maker.getUsername());
@@ -186,6 +209,12 @@ public class FinanceControls {
 
     @Transactional
     public FinanceViews.SuspenseView approveClearance(Long id) {
+        return approveClearance(id, null);
+    }
+
+    /** {verificationNote?}: for a refund, how the approver verified the destination when it is no mandate on file. */
+    @Transactional
+    public FinanceViews.SuspenseView approveClearance(Long id, JsonNode body) {
         AppUser checker = checker();
         InboundMessage receipt = inSuspense(id);
         if (receipt.getClearanceAction() == null) {
@@ -237,20 +266,16 @@ public class FinanceControls {
             data.put("amount", applied.toPlainString());
         } else {
             data.put("amount", receipt.getUnapplied().toPlainString());
-            String requestedBy = receipt.getClearanceRequestedBy();
-            receipt.cleared(InboundMessage.REFUNDED, null, "Refunded from suspense: " + receipt.getClearanceReason(),
-                    checker.getUsername());
-            Map<String, Object> refund = new LinkedHashMap<>();
-            refund.put("refundRef", "SUS-" + receipt.getId());
-            refund.put("source", "SUSPENSE");
-            refund.put("providerRef", receipt.getProviderRef());
-            refund.put("policyRef", receipt.getBusinessRef() == null ? "" : receipt.getBusinessRef());
-            refund.put("amount", data.get("amount"));
-            refund.put("requestedBy", requestedBy == null ? "" : requestedBy);
-            refund.put("approvedBy", checker.getUsername());
-            outbox.publish(Events.SUSPENSE_CLEARED, receipt.getProviderRef(), data, checker.getUsername());
-            outbox.publish(Events.REFUND_SETTLED, receipt.getProviderRef(), refund, checker.getUsername());
-            return suspenseView(receipt);
+            RefundRequest refund = refunds.pendingFor("SUSPENSE", "SUS-" + receipt.getId());
+            if (refund == null) {
+                throw new ConflictException("This refund was asked for without a destination; reject it and ask again"
+                        + " with the payee's account or wallet.");
+            }
+            // Verifies the destination, sends the payout instruction and raises RefundSettled once it is confirmed.
+            refunds.pay(refund, checker, body);
+            receipt.cleared(InboundMessage.REFUNDED, refund.getRef(), "Refunded from suspense by " + refund.getRef()
+                    + " (payout " + refund.getPayoutRef() + "): " + receipt.getClearanceReason(), checker.getUsername());
+            data.put("refundRef", refund.getRef());
         }
         outbox.publish(Events.SUSPENSE_CLEARED, receipt.getProviderRef(), data, checker.getUsername());
         return suspenseView(receipt);
@@ -258,10 +283,14 @@ public class FinanceControls {
 
     @Transactional
     public FinanceViews.SuspenseView rejectClearance(Long id) {
-        checker();
+        AppUser checker = checker();
         InboundMessage receipt = inSuspense(id);
         if (receipt.getClearanceAction() == null) {
             throw new ConflictException("Nothing is waiting for approval on this receipt.");
+        }
+        RefundRequest refund = refunds.pendingFor("SUSPENSE", "SUS-" + receipt.getId());
+        if (refund != null) {
+            refund.decide(RefundRequest.REJECTED, checker.getUsername(), "Suspense refund request rejected");
         }
         receipt.clearanceRejected();
         return suspenseView(receipt);

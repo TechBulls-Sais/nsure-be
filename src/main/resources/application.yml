@@ -95,6 +95,35 @@ nsure:
   # Where claim and policy documents are kept, one folder per reference (data/ is git-ignored).
   documents:
     dir: ${NSURE_DOCUMENTS_DIR:data/documents}
+  # Money modules (SH04, SH06, SH07, SH08). These are DEMO DEFAULTS standing in for insurer decisions D02, D07-D10
+  # and D12; change them here (or with the environment) once the insurer approves its own values.
+  collections:
+    # A collection run takes instalments due up to this many days after its collection date.
+    collection-window-days: 7
+    # The simulated debit-order rail (no provider yet, D12): an account ending in fail-suffix is unpaid, one ending
+    # in pending-suffix stays pending; any other account is collected.
+    simulator:
+      fail-suffix: "99"
+      pending-suffix: "98"
+  distribution:
+    # A lapse within this many months of the first premium claws back the initial commission (an agreement may set
+    # its own period).
+    clawback-months: 12
+    # Appointment statuses that stop new sales and that hold commission payments (NS-SH06-001, AT-SH06-02).
+    sales-block-statuses: SUSPENDED,LAPSED
+    payment-hold-statuses: SUSPENDED
+    # A portfolio transfer applies only once a second person approves it (AT-SH06-03).
+    transfer-approval: true
+  reinsurance:
+    # A recovery still expected this many days after it was recognised shows in the overdue queue (NS-SH07-006).
+    recovery-overdue-days: 60
+  finance:
+    # A policy cancelled within this many days of cover start (and with no claim) has its premiums refunded.
+    cooling-off-days: 30
+    # An event dated in a closed period: NEXT_OPEN_PERIOD (posted there, keeping its date) or EXCEPTION (waits).
+    late-events: NEXT_OPEN_PERIOD
+    # A soft-closed period takes system postings only, not manual journals.
+    soft-close-blocks-manual: true
 
 management:
   endpoints:

@@ -96,9 +96,25 @@ public class StatementReconciliation {
                     .getResultStream().findFirst().orElse(null);
             if (tx != null) {
                 matchedTransactions.add(tx.getProviderReference());
+                // A statement line is not matched on amount alone: money for an attempt closed as failed or expired,
+                // or not yet confirmed here, is a late settlement (NS-SH04-006).
+                String outcome = Set.of(PaymentTransaction.FAILED, PaymentTransaction.EXPIRED, PaymentTransaction.CREATED,
+                        PaymentTransaction.REDIRECTED, PaymentTransaction.PENDING_VERIFICATION).contains(tx.getStatus())
+                        ? ReconItem.LATE_SETTLEMENT : compare(amount, currency, tx.getAmount(), tx.getCurrency());
                 em.persist(new ReconItem(statement, STATEMENT, lineNo, ref, amount, currency, valueDate,
-                        compare(amount, currency, tx.getAmount(), tx.getCurrency()), "PAYMENT_TRANSACTION",
-                        tx.getProviderReference(), tx.getAmount(), user.getUsername()));
+                        outcome, "PAYMENT_TRANSACTION", tx.getProviderReference(), tx.getAmount(), user.getUsername()));
+                continue;
+            }
+            CollectionInstruction instruction = em.createQuery("select c from CollectionInstruction c join c.batch b"
+                            + " where lower(b.provider) = :provider and c.providerReference = :ref",
+                            CollectionInstruction.class)
+                    .setParameter("provider", provider.toLowerCase(Locale.ROOT)).setParameter("ref", ref)
+                    .getResultStream().findFirst().orElse(null);
+            if (instruction != null) {
+                // A debit order the bank answered as unpaid (or never answered) but whose money arrived after all.
+                em.persist(new ReconItem(statement, STATEMENT, lineNo, ref, amount, currency, valueDate,
+                        ReconItem.LATE_SETTLEMENT, "COLLECTION_INSTRUCTION", instruction.getRef(),
+                        instruction.getAmount(), user.getUsername()));
                 continue;
             }
             InboundMessage inbound = em.createQuery("select m from InboundMessage m where lower(m.provider) = :provider"
@@ -121,7 +137,8 @@ public class StatementReconciliation {
                         + " :provider and t.status in :settled and t.settledAt >= :from and t.settledAt < :to",
                         PaymentTransaction.class)
                 .setParameter("provider", provider.toLowerCase(Locale.ROOT))
-                .setParameter("settled", Set.of(PaymentTransaction.SETTLED, PaymentTransaction.RETURNED))
+                .setParameter("settled", Set.of(PaymentTransaction.SETTLED, PaymentTransaction.RETURNED,
+                        PaymentTransaction.REVERSED))
                 .setParameter("from", from.atStartOfDay()).setParameter("to", to.plusDays(1).atStartOfDay())
                 .getResultList()) {
             if (!matchedTransactions.contains(tx.getProviderReference())) {
@@ -215,7 +232,34 @@ public class StatementReconciliation {
         long matched = items.stream().filter(i -> ReconItem.MATCHED.equals(i.getStatus())).count();
         long open = items.stream().filter(ReconItem::isOpen).count();
         return new CollectionsViews.StatementView(s.getRef(), s.getProvider(), s.getPeriodFrom(), s.getPeriodTo(),
-                s.getUploadedBy(), s.getUploadedAt(), lines, matched, open);
+                s.getUploadedBy(), s.getUploadedAt(), lines, matched, open, totals(s, items));
+    }
+
+    private CollectionsViews.ControlTotals totals(Statement s, List<ReconItem> items) {
+        BigDecimal statementTotal = items.stream().filter(i -> STATEMENT.equals(i.getSide()))
+                .map(ReconItem::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal matchedTotal = items.stream().filter(i -> STATEMENT.equals(i.getSide())
+                && ReconItem.MATCHED.equals(i.getStatus())).map(ReconItem::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+        java.time.LocalDateTime from = s.getPeriodFrom().atStartOfDay();
+        java.time.LocalDateTime to = s.getPeriodTo().plusDays(1).atStartOfDay();
+        BigDecimal receipts = em.createQuery("select coalesce(sum(t.amount), 0) from PaymentTransaction t where"
+                        + " lower(t.provider) = :provider and t.settledAt >= :from and t.settledAt < :to", BigDecimal.class)
+                .setParameter("provider", s.getProvider().toLowerCase(Locale.ROOT)).setParameter("from", from)
+                .setParameter("to", to).getSingleResult();
+        receipts = receipts.add(em.createQuery("select coalesce(sum(m.amount), 0) from InboundMessage m where"
+                        + " lower(m.provider) = :provider and m.receivedAt >= :from and m.receivedAt < :to", BigDecimal.class)
+                .setParameter("provider", s.getProvider().toLowerCase(Locale.ROOT)).setParameter("from", from)
+                .setParameter("to", to).getSingleResult());
+        BigDecimal allocations = em.createQuery("select coalesce(sum(a.amount), 0) from Allocation a where"
+                + " a.reversedAt is null and a.allocatedAt >= :from and a.allocatedAt < :to", BigDecimal.class)
+                .setParameter("from", from).setParameter("to", to).getSingleResult();
+        Object[] cash = em.createQuery("select coalesce(sum(l.debit), 0), coalesce(sum(l.credit), 0) from JournalLine l"
+                        + " where l.accountCode = '1000' and l.journal.accountingDate >= :d1 and l.journal.accountingDate <= :d2",
+                        Object[].class)
+                .setParameter("d1", s.getPeriodFrom()).setParameter("d2", s.getPeriodTo()).getSingleResult();
+        BigDecimal ledgerCash = ((BigDecimal) cash[0]).subtract((BigDecimal) cash[1]);
+        return new CollectionsViews.ControlTotals(statementTotal, matchedTotal, receipts, allocations, ledgerCash,
+                statementTotal.subtract(receipts));
     }
 
     static CollectionsViews.ReconItemView itemView(ReconItem i) {

@@ -20,6 +20,10 @@ public class CommissionStatement {
 
     public static final String ISSUED = "ISSUED";
     public static final String PAID = "PAID";
+    /** Approved for payment by someone other than the issuer (NS-SH06-006). */
+    public static final String APPROVED = "APPROVED";
+    /** A negative statement whose balance moved onto the intermediary's next statement (NS-SH06-005). */
+    public static final String CARRIED_FORWARD = "CARRIED_FORWARD";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -53,7 +57,62 @@ public class CommissionStatement {
     @Column(name = "paid_at")
     private LocalDateTime paidAt;
 
+    @Column(name = "approved_by", length = 100)
+    private String approvedBy;
+
+    @Column(name = "approved_at")
+    private LocalDateTime approvedAt;
+
+    @Column(name = "carried_from_ref", length = 20)
+    private String carriedFromRef;
+
+    @Column(name = "carried_amount", precision = 15, scale = 2)
+    private BigDecimal carriedAmount;
+
+    @Column(name = "batch_ref", length = 20)
+    private String batchRef;
+
     protected CommissionStatement() {
+    }
+
+    void carriedFrom(String ref, BigDecimal amount) {
+        this.carriedFromRef = ref;
+        this.carriedAmount = amount;
+        this.netAmount = this.netAmount.add(amount);
+    }
+
+    void carriedForward() {
+        this.status = CARRIED_FORWARD;
+    }
+
+    void approve(String actor) {
+        this.status = APPROVED;
+        this.approvedBy = actor;
+        this.approvedAt = LocalDateTime.now();
+    }
+
+    void batched(String ref) {
+        this.batchRef = ref;
+    }
+
+    public String getApprovedBy() {
+        return approvedBy;
+    }
+
+    public LocalDateTime getApprovedAt() {
+        return approvedAt;
+    }
+
+    public String getCarriedFromRef() {
+        return carriedFromRef;
+    }
+
+    public BigDecimal getCarriedAmount() {
+        return carriedAmount;
+    }
+
+    public String getBatchRef() {
+        return batchRef;
     }
 
     CommissionStatement(Intermediary intermediary, BigDecimal netAmount, int lineCount, String actor) {

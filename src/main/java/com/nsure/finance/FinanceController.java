@@ -19,9 +19,11 @@ public class FinanceController {
     private final FinanceControls controls;
     private final com.nsure.audit.evidence.EvidenceChain evidence;
     private final RefundControls refunds;
+    private final FinanceReports reports;
 
     public FinanceController(FinanceService finance, FinanceControls controls,
-            com.nsure.audit.evidence.EvidenceChain evidence, RefundControls refunds) {
+            com.nsure.audit.evidence.EvidenceChain evidence, RefundControls refunds, FinanceReports reports) {
+        this.reports = reports;
         this.refunds = refunds;
         this.evidence = evidence;
         this.controls = controls;
@@ -48,6 +50,20 @@ public class FinanceController {
             @org.springframework.web.bind.annotation.RequestBody(required = false)
             com.fasterxml.jackson.databind.JsonNode body) {
         return refunds.approve(ref, body);
+    }
+
+    /** {payeeName?, payoutMethod, accountRef}: where a refund is paid, recorded before approval. */
+    @PostMapping("/refunds/{ref}/destination")
+    public RefundControls.RefundView refundDestination(@org.springframework.web.bind.annotation.PathVariable String ref,
+            @org.springframework.web.bind.annotation.RequestBody com.fasterxml.jackson.databind.JsonNode body) {
+        return refunds.destination(ref, body);
+    }
+
+    /** {reference}: the bank confirmed a payout that no simulator settled. */
+    @PostMapping("/refunds/{ref}/payout-confirmed")
+    public RefundControls.RefundView confirmPayout(@org.springframework.web.bind.annotation.PathVariable String ref,
+            @org.springframework.web.bind.annotation.RequestBody com.fasterxml.jackson.databind.JsonNode body) {
+        return refunds.confirmPayout(ref, body);
     }
 
     /** {note} */
@@ -145,9 +161,41 @@ public class FinanceController {
         return finance.acknowledge(ref, body);
     }
 
+    /** {simulate?: ACCEPT|REJECT|TIMEOUT}: with it, the export file is delivered to the (simulated) corporate GL. */
     @PostMapping("/gl-batches/{ref}/submit")
-    public FinanceViews.GlBatchView submit(@PathVariable String ref) {
-        return finance.submit(ref);
+    public FinanceViews.GlBatchView submit(@PathVariable String ref, @RequestBody(required = false) JsonNode body) {
+        return finance.submit(ref, body);
+    }
+
+    /** AT-SH08-02: asks the GL what it holds under the batch id before anything is sent again. */
+    @PostMapping("/gl-batches/{ref}/status-check")
+    public FinanceViews.GlBatchView statusCheck(@PathVariable String ref) {
+        return finance.statusCheck(ref);
+    }
+
+    @GetMapping("/gl-batches/{ref}/export")
+    public CorporateGl.ExportFile exportFile(@PathVariable String ref) {
+        return finance.exportFile(ref);
+    }
+
+    @PostMapping("/periods/{code}/reopen/approve")
+    public FinanceViews.PeriodView approveReopen(@PathVariable String code) {
+        return finance.decideReopen(code, true);
+    }
+
+    @PostMapping("/periods/{code}/reopen/reject")
+    public FinanceViews.PeriodView rejectReopen(@PathVariable String code) {
+        return finance.decideReopen(code, false);
+    }
+
+    @GetMapping("/periods/{code}/close-report")
+    public List<FinanceViews.CloseItem> closeReport(@PathVariable String code) {
+        return finance.closeReport(code);
+    }
+
+    @GetMapping("/ageing")
+    public FinanceViews.AgeingView ageing() {
+        return reports.ageing();
     }
 
     /** Body: {@code {"glDebitTotal": 100, "glCreditTotal": 100}} as the GL reports them. */
@@ -193,9 +241,11 @@ public class FinanceController {
         return controls.requestClearance(id, body);
     }
 
+    /** {verificationNote?}: a refund's destination check when it is not a mandate on file. */
     @PostMapping("/suspense/{id}/clearance/approve")
-    public FinanceViews.SuspenseView approveClearance(@PathVariable Long id) {
-        return controls.approveClearance(id);
+    public FinanceViews.SuspenseView approveClearance(@PathVariable Long id,
+            @RequestBody(required = false) JsonNode body) {
+        return controls.approveClearance(id, body);
     }
 
     @PostMapping("/suspense/{id}/clearance/reject")

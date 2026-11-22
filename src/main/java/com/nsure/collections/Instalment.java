@@ -92,6 +92,13 @@ public class Instalment {
         this.status = status;
     }
 
+    /** Set before it is saved: the due date by calendar rules, and the installation's currency (NS-SH04-001). */
+    Instalment dueOn(LocalDate dueDate, String currency) {
+        this.dueDate = dueDate;
+        this.currency = currency;
+        return this;
+    }
+
     public Long getId() {
         return id;
     }

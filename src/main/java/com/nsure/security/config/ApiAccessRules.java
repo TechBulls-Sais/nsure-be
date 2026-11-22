@@ -294,6 +294,9 @@ public final class ApiAccessRules {
             // are proposed with MANAGE_FINANCE and approved by someone else with APPROVE_JOURNAL.
             rule(POST, "/finance/gl-batches/*/submit", anyOf("EXPORT_GL")),
             rule(POST, "/finance/gl-batches/*/reconcile", anyOf("EXPORT_GL")),
+            rule(POST, "/finance/gl-batches/*/status-check", anyOf("EXPORT_GL")),
+            rule(POST, "/finance/periods/*/reopen/approve", anyOf("APPROVE_JOURNAL")),
+            rule(POST, "/finance/periods/*/reopen/reject", anyOf("APPROVE_JOURNAL")),
             rule(GET, "/finance/manual-journals", anyOf("READ_FINANCE")),
             rule(POST, "/finance/manual-journals", anyOf("MANAGE_FINANCE")),
             rule(POST, "/finance/manual-journals/*/approve", anyOf("APPROVE_JOURNAL")),
@@ -307,6 +310,8 @@ public final class ApiAccessRules {
             rule(POST, "/finance/refunds", anyOf("MANAGE_FINANCE")),
             rule(POST, "/finance/refunds/*/approve", anyOf("APPROVE_JOURNAL")),
             rule(POST, "/finance/refunds/*/reject", anyOf("APPROVE_JOURNAL")),
+            rule(POST, "/finance/refunds/*/destination", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/finance/refunds/*/payout-confirmed", anyOf("MANAGE_FINANCE")),
 
             // ── distribution and commissions SH06 (Distribution Administrator) ─────────────────────────
             rule(GET, "/distribution/**", anyOf("READ_DISTRIBUTION")),
@@ -316,6 +321,17 @@ public final class ApiAccessRules {
             rule(POST, "/distribution/assignments", anyOf("MANAGE_DISTRIBUTION")),
             rule(POST, "/distribution/statements", anyOf("PAY_COMMISSION")),
             rule(POST, "/distribution/statements/*/pay", anyOf("PAY_COMMISSION")),
+            rule(POST, "/distribution/statements/*/approve", anyOf("PAY_COMMISSION")),
+            rule(POST, "/distribution/assignments/*/approve", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/assignments/*/reject", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/exceptions/*/retry", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/exceptions/*/resolve", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/commissions/*/dispute", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/commissions/*/resolve-dispute", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/payment-batches", anyOf("PAY_COMMISSION")),
+            rule(POST, "/distribution/payment-batches/*/release", anyOf("PAY_COMMISSION")),
+            rule(POST, "/distribution/agreements", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/agreements/*/activate", anyOf("MANAGE_DISTRIBUTION")),
 
             // ── individual underwriting IL02 (Underwriter) ─────────────────────────────────────────────
             rule(GET, "/underwriting/**", anyOf("READ_UNDERWRITING")),
@@ -426,6 +442,18 @@ public final class ApiAccessRules {
             rule(POST, "/reinsurance/treaties/*/approve", anyOf("APPROVE_TREATY")),
             rule(POST, "/reinsurance/bordereaux", anyOf("MANAGE_REINSURANCE")),
             rule(POST, "/reinsurance/recoveries/*/receipt", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/facultative/*/offer", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/treaties/*/amend", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/bordereaux/*/acknowledge", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/bordereaux/*/correction", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/bordereaux/*/correct", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/bordereaux/*/settle", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/facultative/*/decision", anyOf("APPROVE_TREATY")),
+            rule(POST, "/reinsurance/recoveries/*/dispute", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/recoveries/*/resolve-dispute", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/recoveries/*/write-off", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/recoveries/*/write-off/approve", anyOf("APPROVE_TREATY")),
+            rule(POST, "/reinsurance/recoveries/*/write-off/reject", anyOf("APPROVE_TREATY")),
 
             // ── communications SH09B (Service Agent, Operations Manager) ───────────────────────────────
             rule(GET, "/communications/**", anyOf("READ_COMMUNICATION")),
@@ -458,6 +486,9 @@ public final class ApiAccessRules {
             // ── collections SH04: billing accounts for anyone who reads policies or finance; changes by Finance ──
             rule(GET, "/collections/policies/*", anyOf("READ_POLICY", "READ_FINANCE")),
             rule(POST, "/collections/receipts/*/reverse", anyOf("MANAGE_FINANCE")),
+            rule(GET, "/collections/reversal-requests", anyOf("READ_FINANCE")),
+            rule(POST, "/collections/reversal-requests/*/approve", anyOf("APPROVE_JOURNAL")),
+            rule(POST, "/collections/reversal-requests/*/reject", anyOf("APPROVE_JOURNAL")),
             rule(POST, "/collections/instalments/*/adjustments", anyOf("MANAGE_FINANCE")),
             rule(POST, "/collections/billing-run", anyOf("MANAGE_FINANCE")),
             rule(POST, "/collections/statements", anyOf("MANAGE_FINANCE")),
@@ -466,6 +497,19 @@ public final class ApiAccessRules {
             rule(GET, "/collections/reconciliation", anyOf("READ_FINANCE")),
             rule(POST, "/collections/reconciliation/*/assign", anyOf("MANAGE_FINANCE")),
             rule(POST, "/collections/reconciliation/*/resolve", anyOf("MANAGE_FINANCE")),
+            // ── SH04 debit-order / mobile-money collection (NS-SH04-002): prepared and sent by Finance, approved by
+            // the finance checker ──
+            rule(GET, "/collections/mandates", anyOf("READ_POLICY", "READ_FINANCE")),
+            rule(POST, "/collections/mandates", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/mandates/*/cancel", anyOf("MANAGE_FINANCE")),
+            rule(GET, "/collections/batches", anyOf("READ_POLICY", "READ_FINANCE")),
+            rule(GET, "/collections/batches/*", anyOf("READ_POLICY", "READ_FINANCE")),
+            rule(POST, "/collections/batches", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/batches/*/approve", anyOf("APPROVE_JOURNAL")),
+            rule(POST, "/collections/batches/*/cancel", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/batches/*/submit", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/batches/*/bank-response", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/instructions/*/bank-return", anyOf("MANAGE_FINANCE")),
 
             // ── integration and operational control SH12 (Operations Manager) ──────────────────────────
             // §11 KYC/AML screening: onboarding requests it, Compliance disposes of referrals.

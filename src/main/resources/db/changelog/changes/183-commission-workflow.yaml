@@ -1,0 +1,113 @@
+databaseChangeLog:
+  # SH06: commission traced to its receipt, rule and agreement; an exception queue for premiums that earn nothing;
+  # statements approved by a second person and paid in batches; negative statements carried forward; agreements with
+  # products and payment details; transfers approved before they apply; disputed commission lines.
+  - changeSet:
+      id: 183-commission-workflow
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: dist_commission
+            columns:
+              - column: {name: receipt_ref, type: varchar(20)}
+              - column: {name: rule_id, type: bigint}
+              - column: {name: basis, type: varchar(20)}
+              - column: {name: calc_trace, type: varchar(500)}
+              - column: {name: premium_date, type: date}
+              - column: {name: agreement_ref, type: varchar(20)}
+              - column: {name: dispute_reason, type: varchar(500)}
+              - column: {name: disputed_by, type: varchar(100)}
+              - column: {name: disputed_at, type: datetime}
+        - createTable:
+            tableName: dist_commission_exception
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_dist_commission_exception}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_dist_comm_exception_ref}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: product, type: varchar(100)}
+              - column: {name: intermediary_ref, type: varchar(20)}
+              - column: {name: source_event_id, type: varchar(80), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_dist_comm_exception_source}}
+              - column: {name: premium_amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: basis, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: receipt_ref, type: varchar(20)}
+              - column: {name: premium_date, type: date, constraints: {nullable: false}}
+              - column: {name: reason_code, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: resolved_by, type: varchar(100)}
+              - column: {name: resolved_at, type: datetime}
+              - column: {name: resolution, type: varchar(500)}
+              - column: {name: commission_ref, type: varchar(20)}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - addColumn:
+            tableName: dist_statement
+            columns:
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+              - column: {name: carried_from_ref, type: varchar(20)}
+              - column: {name: carried_amount, type: 'decimal(15,2)'}
+              - column: {name: batch_ref, type: varchar(20)}
+        - createTable:
+            tableName: dist_payment_batch
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_dist_payment_batch}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_dist_payment_batch_ref}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: statement_count, type: int, constraints: {nullable: false}}
+              - column: {name: total_amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: provider, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: bank_file_ref, type: varchar(60)}
+              - column: {name: prepared_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: prepared_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: released_by, type: varchar(100)}
+              - column: {name: released_at, type: datetime}
+              - column: {name: settled_at, type: datetime}
+        - addColumn:
+            tableName: dist_policy_assignment
+            columns:
+              - column: {name: status, type: varchar(20), defaultValue: APPLIED, constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+              - column: {name: transfer_reason, type: varchar(500)}
+        - createTable:
+            tableName: dist_agreement
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_dist_agreement}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_dist_agreement_ref}}
+              - column: {name: intermediary_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_dist_agreement_intermediary, references: dist_intermediary(id)}}
+              - column: {name: version, type: int, constraints: {nullable: false}}
+              - column: {name: products, type: varchar(500)}
+              - column: {name: channels, type: varchar(100)}
+              - column: {name: clawback_months, type: int, constraints: {nullable: false}}
+              - column: {name: bank_name, type: varchar(60)}
+              - column: {name: bank_account, type: varchar(60)}
+              - column: {name: bank_branch, type: varchar(60)}
+              - column: {name: effective_from, type: date, constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: note, type: varchar(500)}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+  - changeSet:
+      id: 183-demo-agreements
+      author: nsure
+      context: demo
+      comment: >-
+        Demo agreements (D08): the seeded agent and broker each hold an approved agreement with a 12-month clawback
+        period and (fictional) bank details for commission payment batches.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO dist_agreement (record_ref, intermediary_id, version, products, channels, clawback_months,
+                bank_name, bank_account, bank_branch, effective_from, status, note, created_by, created_at, approved_by, approved_at)
+              SELECT 'AGR-00001', i.id, 1, NULL, 'AGENT', 12, 'First National Bank Botswana', '62000000101', 'Main Mall',
+                     DATE '2026-01-01', 'ACTIVE', 'Demo agency agreement', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+              FROM dist_intermediary i WHERE i.record_ref = 'INT-00001'
+                AND NOT EXISTS (SELECT 1 FROM dist_agreement a WHERE a.record_ref = 'AGR-00001');
+              INSERT INTO dist_agreement (record_ref, intermediary_id, version, products, channels, clawback_months,
+                bank_name, bank_account, bank_branch, effective_from, status, note, created_by, created_at, approved_by, approved_at)
+              SELECT 'AGR-00002', i.id, 1, NULL, 'BROKER', 12, 'Absa Botswana', '1020304050', 'Fairgrounds',
+                     DATE '2026-01-01', 'ACTIVE', 'Demo broker agreement', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+              FROM dist_intermediary i WHERE i.record_ref = 'INT-00002'
+                AND NOT EXISTS (SELECT 1 FROM dist_agreement a WHERE a.record_ref = 'AGR-00002');

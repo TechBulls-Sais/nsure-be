@@ -83,11 +83,22 @@ public class OpsService {
                 out.put("applications", jdbc.query("select record_ref, customer_name, product, amount, premium, status"
                         + " from ins_application where intermediary_code = ? order by id desc", ROW, scope));
                 // The agent's book: policies assigned to them, and policies issued from applications they sold.
+                // AT-SH06-03: access follows the assignment in force today (a future-dated transfer moves it on its
+                // date), and a policy sold by this agent but now assigned to someone else is no longer shown.
+                java.sql.Date today = java.sql.Date.valueOf(java.time.LocalDate.now());
                 out.put("policies", jdbc.query("select p.record_ref, p.customer_name, p.product, p.amount, p.premium,"
                         + " p.status from ins_policy p where p.record_ref in (select a.policy_ref from"
                         + " dist_policy_assignment a join dist_intermediary i on i.id = a.intermediary_id where"
-                        + " i.record_ref = ? and a.ended_on is null) or p.application_ref in (select ap.record_ref from"
-                        + " ins_application ap where ap.intermediary_code = ?) order by p.id desc", ROW, scope, scope));
+                        + " i.record_ref = ? and a.status = 'APPLIED' and a.effective_from <= ?"
+                        + " and (a.ended_on is null or a.ended_on > ?)) or (p.application_ref in (select ap.record_ref"
+                        + " from ins_application ap where ap.intermediary_code = ?) and not exists (select 1 from"
+                        + " dist_policy_assignment b join dist_intermediary j on j.id = b.intermediary_id where"
+                        + " b.policy_ref = p.record_ref and b.status = 'APPLIED' and j.record_ref <> ?"
+                        + " and b.effective_from <= ? and (b.ended_on is null or b.ended_on > ?))) order by p.id desc",
+                        ROW, scope, today, today, scope, scope, today, today));
+                out.put("statements", jdbc.query("select s.record_ref, s.net_amount, s.line_count, s.status, s.issued_at,"
+                        + " s.paid_at from dist_statement s join dist_intermediary i on i.id = s.intermediary_id where"
+                        + " i.record_ref = ? order by s.id desc", ROW, scope));
                 out.put("commissions", jdbc.query("select c.record_ref, c.policy_ref, c.product, c.line_kind, c.amount,"
                         + " c.status, c.created_at from dist_commission c join dist_intermediary i on i.id ="
                         + " c.intermediary_id where i.record_ref = ? order by c.id desc", ROW, scope));

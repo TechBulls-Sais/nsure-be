@@ -20,6 +20,7 @@ import java.util.Set;
  *   CREATED ─▶ REDIRECTED ─▶ PENDING_VERIFICATION ─┬─▶ SETTLED   (policy activated)
  *                                                  ├─▶ FAILED
  *                                                  └─▶ EXPIRED
+ *   SETTLED ─▶ RETURNED (unpaid return) | REVERSED (reversal or chargeback)
  * </pre>
  */
 @Entity
@@ -34,7 +35,9 @@ public class PaymentTransaction {
     public static final String EXPIRED = "EXPIRED";
     /** Settled, then returned or charged back by the provider (NS-SH04-002): the money did not stay. */
     public static final String RETURNED = "RETURNED";
-    public static final Set<String> TERMINAL = Set.of(SETTLED, FAILED, EXPIRED, RETURNED);
+    /** Settled, then reversed or charged back by the payer's bank (NS-SH04-002), distinct from an unpaid return. */
+    public static final String REVERSED = "REVERSED";
+    public static final Set<String> TERMINAL = Set.of(SETTLED, FAILED, EXPIRED, RETURNED, REVERSED);
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -194,6 +197,15 @@ public class PaymentTransaction {
         }
         this.failureReason = reason;
         this.status = RETURNED;
+    }
+
+    /** The payer's bank reversed or charged back the settled money: kept as settled once, now reversed. */
+    public void reversed(String reason) {
+        if (!SETTLED.equals(status)) {
+            throw new IllegalStateException("Only a settled payment can be reversed; this one is " + status + ".");
+        }
+        this.failureReason = reason;
+        this.status = REVERSED;
     }
 
     void expire(String reason) {

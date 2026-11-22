@@ -34,4 +34,12 @@ public interface DomainEventHandler {
     default String ignoreReason(DomainEvent event) {
         return null;
     }
+
+    /**
+     * Called inside the business transaction when an event this handler subscribes to is published. A handler may
+     * refuse the business action by throwing (NS-SH08-003: Finance can make an event type block when it could not be
+     * posted). It must only read. Most handlers do nothing.
+     */
+    default void beforePublish(String eventType, String aggregateRef, java.util.Map<String, ?> data) {
+    }
 }

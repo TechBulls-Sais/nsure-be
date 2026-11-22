@@ -327,3 +327,36 @@ how the sender was verified. The bus carries `CommunicationRequested`, `MessageD
 - **Spec-named events** added beside the older names: ClaimRegistered, ClaimAssessed, ClaimDeclined, ClaimPaymentSettled,
   ReceiptConfirmed, RefundSettled, CommissionReleased, ReinsuranceBordereauSubmitted, RecoveryReceived, JournalPosted,
   FinancialExceptionRaised, GlBatchAccepted and PeriodClosed.
+
+## Money workflows on demo data (SH04, SH06, SH07, SH08)
+
+Every value below marked *demo default* stands in for an insurer decision (D02, D07–D10, D12) and lives in
+`application.yml` (`nsure.collections.*`, `nsure.distribution.*`, `nsure.reinsurance.*`, `nsure.finance.*`) or in
+seeded, editable records. Simulated rails (debit orders, payouts, corporate GL) run only where the payment simulators
+may run (not under `prod` unless `nsure.payments.demo=true`). Use `admin` as maker and `secadmin` as checker.
+
+- **Collections (SH04)** — Finance › Billing: run billing, open a policy, add a debit-order or wallet mandate (copied
+  automatically from the application's mandate when there is one). Finance › Debit orders: prepare a run, a second
+  person approves it, send it to the simulated bank and read its response (per instruction: collected, unpaid or no
+  answer; *demo default* account ending 99 = unpaid, 98 = pending). A confirmation settles the instalment (receipt,
+  allocation, ReceiptConfirmed); unappliable money goes to suspense; a simulated bank return reverses the receipt and the
+  transaction becomes REVERSED or RETURNED. Staff reversals (Billing › Receipts) and refunds need a second person;
+  refunds verify the destination (the mandate on file, or a recorded check) and pay through a numbered payout
+  instruction. A cooling-off cancellation raises its premium refund. Receipts may quote an instalment reference or be
+  matched by the payer's account; overpayments pay whole premiums oldest-first and leave the rest in suspense.
+  Debit-order premiums fall due on the debit day (next working day of the business calendar).
+- **Commission (SH06)** — accrual on each premium (receipt, rule, agreement and trace), exception queue for premiums
+  that earned nothing, statements issued by one person and approved by another, payment batches released by a third
+  look, clawback of the reversed receipt's own commission, of all accruals on cancellation and of initial commission on
+  a lapse within the agreement's clawback period (*demo default* 12 months), negative statements carried forward,
+  versioned agreements, sales blocked for suspended/lapsed/expired intermediaries, transfers approved and effective
+  from their date.
+- **Reinsurance (SH07)** — exposure ceded at issue and on benefit change, per life, under the treaty in force on the
+  event date; excess over treaty capacity (*demo default* TRT-00001 BWP 300,000 per life) goes to the facultative queue
+  (offer, then a second person records the acceptance); premium and claims bordereaux with acknowledgement, correction
+  and settlement; recoveries expected at claim approval with disputes and approved write-offs; treaty versions,
+  participants (shares must total 100%) and an excess-of-loss model; a monthly reconciliation to the subledger.
+- **Subledger (SH08)** — product-specific posting rules with cost centre and an approved failure mode (BLOCK refuses
+  the business action), journal dimensions, NOT_POSTED recognition-basis rules, a simulated corporate GL keyed by batch
+  id (accept, reject or a lost answer resolved by checking the batch id), a period close report by category, reopening
+  authorised by a second person, soft-close blocking manual journals, and aged receivables/payables.

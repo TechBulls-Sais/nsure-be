@@ -104,11 +104,27 @@ class CollectionsApiTest {
         mockMvc.perform(json(post("/collections/receipts/" + receipt + "/reverse"), "ops",
                         "{\"kind\":\"RETURNED\",\"reason\":\"Debit returned: insufficient funds\"}"))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(json(post("/collections/receipts/" + receipt + "/reverse"), "finance",
+        // NS-SH04-005: Finance asks; nothing changes until a different person approves.
+        String request = mockMvc.perform(json(post("/collections/receipts/" + receipt + "/reverse"), "finance",
                         "{\"kind\":\"RETURNED\",\"reason\":\"Debit returned: insufficient funds\"}"))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING_APPROVAL"))
+                .andExpect(jsonPath("$.ref").value(org.hamcrest.Matchers.startsWith("RVQ-")))
+                .andReturn().getResponse().getContentAsString();
+        String requestRef = JsonPath.read(request, "$.ref");
+        mockMvc.perform(json(post("/collections/receipts/" + receipt + "/reverse"), "finance",
+                        "{\"kind\":\"RETURNED\",\"reason\":\"Debit returned: insufficient funds\"}"))
+                .andExpect(status().isConflict());
+        assertThat((String) JsonPath.read(account(policy), "$.receipts[0].status")).isEqualTo("SUCCESSFUL");
+        mockMvc.perform(json(post("/collections/reversal-requests/" + requestRef + "/approve"), "finance", "{}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/collections/reversal-requests/" + requestRef + "/approve"), "admin", "{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"))
                 .andExpect(jsonPath("$.policyStatus").value("Active - No Cover"))
-                .andExpect(jsonPath("$.ref").value(org.hamcrest.Matchers.startsWith("REV-")));
+                .andExpect(jsonPath("$.reversalRef").value(org.hamcrest.Matchers.startsWith("REV-")));
+        mockMvc.perform(json(post("/collections/reversal-requests/" + requestRef + "/approve"), "admin", "{}"))
+                .andExpect(status().isConflict());
         mockMvc.perform(json(post("/collections/receipts/" + receipt + "/reverse"), "finance",
                         "{\"kind\":\"RETURNED\",\"reason\":\"Debit returned: insufficient funds\"}"))
                 .andExpect(status().isConflict());

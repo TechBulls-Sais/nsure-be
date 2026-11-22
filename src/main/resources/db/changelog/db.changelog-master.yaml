@@ -324,6 +324,24 @@ databaseChangeLog:
       file: changes/155-group-census-terms.yaml
       relativeToChangelogFile: true
   - include:
+      file: changes/180-collection-instructions.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/181-reversal-approval-and-refund-payouts.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/182-reinsurance-exposure-and-recovery-ledger.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/183-commission-workflow.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/184-subledger-controls.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/185-treaty-terms-and-bordereaux.yaml
+      relativeToChangelogFile: true
+  - include:
       file: changes/210-interface-catalogue.yaml
       relativeToChangelogFile: true
   - include:

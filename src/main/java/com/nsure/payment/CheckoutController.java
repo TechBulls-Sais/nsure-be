@@ -209,6 +209,8 @@ public class CheckoutController {
             case PaymentTransaction.FAILED -> "Your payment did not go through. You have not been charged for "
                     + "this attempt; you can try again.";
             case PaymentTransaction.EXPIRED -> "This payment session expired. Please start the payment again.";
+            case PaymentTransaction.RETURNED -> "Your bank returned this payment unpaid. The premium is still due.";
+            case PaymentTransaction.REVERSED -> "This payment was reversed by your bank. The premium is still due.";
             default -> "We're confirming your payment with the provider.";
         };
         return new PaymentStatus(tx.getId(), tx.getStatus(), tx.isTerminal(),
