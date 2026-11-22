@@ -35,9 +35,26 @@ public class ApplicationCapture {
     private final EntityManager em;
     private final Outbox outbox;
 
-    public ApplicationCapture(EntityManager em, Outbox outbox) {
+    private final org.springframework.beans.factory.ObjectProvider<com.nsure.distribution.DistributionService> distribution;
+
+    public ApplicationCapture(EntityManager em, Outbox outbox,
+            org.springframework.beans.factory.ObjectProvider<com.nsure.distribution.DistributionService> distribution) {
         this.em = em;
         this.outbox = outbox;
+        this.distribution = distribution;
+    }
+
+    private boolean soldByIntermediary(InsuranceApplication app) {
+        return app.getChannel() != null && Set.of("AGENT", "BROKER").contains(app.getChannel())
+                && !blank(app.getIntermediaryCode());
+    }
+
+    /** NS-SH06-003: the policy issued from an agent or broker's application is assigned to them from today. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void assignSale(InsuranceApplication app, String policyRef, String actor) {
+        if (soldByIntermediary(app)) {
+            distribution.getObject().assignSale(policyRef, app.getIntermediaryCode(), java.time.LocalDate.now(), actor);
+        }
     }
 
     /** Copies whatever the body carries onto the application; answers are stored once it has a reference. */
@@ -82,7 +99,8 @@ public class ApplicationCapture {
                 throw new IllegalArgumentException("Channel must be one of " + String.join(", ", CHANNELS) + ".");
             }
             app.setChannel(channel);
-            app.setIntermediaryCode(clip(text(body, "intermediaryCode"), 30));
+            String code = clip(text(body, "intermediaryCode"), 30);
+            app.setIntermediaryCode(code == null ? null : code.trim().toUpperCase(Locale.ROOT));
         }
         if (body.path("declarationAccepted").asBoolean(false) && app.getDeclaredAt() == null) {
             app.setDeclaredBy(actor);
@@ -142,6 +160,13 @@ public class ApplicationCapture {
         if (app.getChannel() != null && Set.of("AGENT", "BROKER").contains(app.getChannel()) && blank(app.getIntermediaryCode())) {
             problems.add("An agent or broker application needs the intermediary's code.");
         }
+        if (soldByIntermediary(app)) {
+            // AT-SH06-02: a suspended, lapsed, expired or unknown appointment cannot take the sale.
+            String why = distribution.getObject().whyCannotSell(app.getIntermediaryCode(), java.time.LocalDate.now());
+            if (why != null) {
+                problems.add(why);
+            }
+        }
         if (app.getDeclaredAt() == null) {
             problems.add("The applicant's declaration has not been accepted.");
         }
@@ -195,6 +220,12 @@ public class ApplicationCapture {
     public void requireIssuable(InsuranceApplication app, CustomerAccount customer) {
         if (DRAFT.equals(app.getStatus())) {
             throw new IllegalArgumentException(app.getRef() + " is a draft. Complete and submit it before issue.");
+        }
+        if (soldByIntermediary(app)) {
+            String why = distribution.getObject().whyCannotSell(app.getIntermediaryCode(), java.time.LocalDate.now());
+            if (why != null) {
+                throw new IllegalArgumentException(app.getRef() + " cannot be issued: " + why);
+            }
         }
         List<String> missing = missingEvidence(app, customer);
         if (!missing.isEmpty()) {

@@ -253,6 +253,43 @@ public class DistributionService {
         return view(row, policy);
     }
 
+    /**
+     * Why the intermediary cannot take a new sale on {@code day}, or null when it can (AT-SH06-02: a suspended,
+     * lapsed or expired appointment blocks new sales; nothing already recorded changes).
+     */
+    public String whyCannotSell(String ref, LocalDate day) {
+        Intermediary i = em.createQuery("select i from Intermediary i where i.ref = :ref", Intermediary.class)
+                .setParameter("ref", ref)
+                .getResultStream()
+                .findFirst()
+                .orElse(null);
+        if (i == null) {
+            return "Intermediary " + ref + " is not on the appointment register.";
+        }
+        if (!Intermediary.ACTIVE.equals(i.getStatus())) {
+            return i.getName() + "'s appointment is " + i.getStatus().toLowerCase(Locale.ROOT)
+                    + "; no new sales can be taken under it.";
+        }
+        if (!i.canTakeBusiness(day)) {
+            return i.getName() + "'s appointment expired on " + i.getAppointmentExpiry()
+                    + "; no new sales can be taken under it.";
+        }
+        return null;
+    }
+
+    /**
+     * NS-SH06-003: a policy issued from an intermediary's application belongs to that intermediary's portfolio from
+     * its issue date, so the premium collected on it accrues their commission. Runs inside the issue.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void assignSale(String policyRef, String ref, LocalDate from, String actor) {
+        String why = whyCannotSell(ref, from);
+        if (why != null) {
+            throw new IllegalArgumentException(why);
+        }
+        em.persist(new PolicyAssignment(policyRef, intermediary(ref), from, actor));
+    }
+
     // ── commission ledger and statements ──────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)

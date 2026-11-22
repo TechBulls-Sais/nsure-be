@@ -696,6 +696,7 @@ public class PortfolioService {
         }
         policyWorkflow.logOpened(row, staff.getUsername());
         if (application != null) {
+            capture.assignSale(application, row.getRef(), staff.getUsername());
             application.setStatus("Issued");
         }
         return cover(row);
