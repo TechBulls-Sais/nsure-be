@@ -74,12 +74,12 @@ public class CollectionsService {
     }
 
     /**
-     * The bank returned, reversed or charged back a premium receipt (NS-SH04-005, AT-SH04-02). The receipt and its
-     * allocations are kept and marked reversed; the period reopens so it can be paid again; the policy is paid only
-     * up to its first unsettled period, with a cover review; PaymentReturned reverses the premium in the subledger.
+     * Asks for a premium receipt to be reversed because the bank returned, reversed or charged it back (NS-SH04-005,
+     * AT-SH04-02): nothing changes until a different person approves the request. The original receipt is named and
+     * kept; a receipt can have one open request at a time.
      */
     @Transactional
-    public CollectionsViews.ReversalView reverse(String receiptRef, JsonNode body) {
+    public CollectionsViews.ReversalRequestView reverse(String receiptRef, JsonNode body) {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("MANAGE_FINANCE");
         String kind = required(body, "kind", 6, 20).toUpperCase(Locale.ROOT);
@@ -87,7 +87,86 @@ public class CollectionsService {
             throw new IllegalArgumentException("Kind must be RETURNED, REVERSED or CHARGEBACK.");
         }
         String reason = required(body, "reason", 10, 500);
-        return reverseConfirmed(receiptRef, kind, reason, user.getUsername());
+        PremiumPayment payment = em.createQuery("select p from PremiumPayment p where p.receiptRef = :ref",
+                        PremiumPayment.class)
+                .setParameter("ref", receiptRef).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("No premium receipt " + receiptRef + "."));
+        if (!"SUCCESSFUL".equals(payment.getStatus())) {
+            throw new ConflictException("Receipt " + receiptRef + " is already " + payment.getStatus().toLowerCase(Locale.ROOT) + ".");
+        }
+        if (!em.createQuery("select r.id from ReversalRequest r where r.receiptRef = :ref and r.status = :pending",
+                        Long.class)
+                .setParameter("ref", receiptRef).setParameter("pending", ReversalRequest.PENDING)
+                .setMaxResults(1).getResultList().isEmpty()) {
+            throw new ConflictException("A reversal of receipt " + receiptRef + " is already waiting for approval.");
+        }
+        ReversalRequest request = new ReversalRequest(references.next("RVQ-", 6, () -> 0L), receiptRef,
+                payment.getPolicyRef(), kind, payment.getAmount(), reason, user.getUsername());
+        em.persist(request);
+        return view(request, null);
+    }
+
+    @Transactional(readOnly = true)
+    public List<CollectionsViews.ReversalRequestView> reversalRequests() {
+        security.authenticatedUser().validateHasPermissionTo("READ_FINANCE");
+        return em.createQuery("select r from ReversalRequest r order by r.id desc", ReversalRequest.class)
+                .setMaxResults(200).getResultStream().map(r -> view(r, null)).toList();
+    }
+
+    /** The finance checker approves a reversal someone else asked for: it is carried out now. */
+    @Transactional
+    public CollectionsViews.ReversalRequestView approveReversal(String ref, JsonNode body) {
+        AppUser checker = security.authenticatedUser();
+        checker.validateHasPermissionTo("APPROVE_JOURNAL");
+        ReversalRequest request = pendingReversal(ref);
+        if (checker.getUsername().equalsIgnoreCase(request.getRequestedBy())) {
+            throw new com.nsure.security.exception.NoAuthorizationException("You asked for reversal " + ref
+                    + "; someone else must approve it.");
+        }
+        CollectionsViews.ReversalView done = reverseConfirmed(request.getReceiptRef(), request.getKind(),
+                request.getReason() + " (requested by " + request.getRequestedBy() + ")", checker.getUsername());
+        request.decide(ReversalRequest.APPROVED, checker.getUsername(), optional(body, "note"), done.ref());
+        return view(request, done);
+    }
+
+    @Transactional
+    public CollectionsViews.ReversalRequestView rejectReversal(String ref, JsonNode body) {
+        AppUser checker = security.authenticatedUser();
+        checker.validateHasPermissionTo("APPROVE_JOURNAL");
+        ReversalRequest request = pendingReversal(ref);
+        if (checker.getUsername().equalsIgnoreCase(request.getRequestedBy())) {
+            throw new com.nsure.security.exception.NoAuthorizationException("You asked for reversal " + ref
+                    + "; someone else must decide it.");
+        }
+        request.decide(ReversalRequest.REJECTED, checker.getUsername(), required(body, "note", 5, 500), null);
+        return view(request, null);
+    }
+
+    private ReversalRequest pendingReversal(String ref) {
+        ReversalRequest request = em.createQuery("select r from ReversalRequest r where r.ref = :ref",
+                        ReversalRequest.class)
+                .setParameter("ref", ref).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Reversal request " + ref + " not found"));
+        if (!ReversalRequest.PENDING.equals(request.getStatus())) {
+            throw new ConflictException("Reversal request " + ref + " is already "
+                    + request.getStatus().toLowerCase(Locale.ROOT) + ".");
+        }
+        return request;
+    }
+
+    private static CollectionsViews.ReversalRequestView view(ReversalRequest r, CollectionsViews.ReversalView done) {
+        return new CollectionsViews.ReversalRequestView(r.getRef(), r.getReceiptRef(), r.getPolicyRef(), r.getKind(),
+                r.getAmount(), r.getReason(), r.getStatus(), r.getRequestedBy(), r.getRequestedAt(), r.getDecidedBy(),
+                r.getDecidedAt(), r.getDecisionNote(), r.getReversalRef(),
+                done == null ? null : done.paidTo(), done == null ? null : done.policyStatus());
+    }
+
+    private static String optional(JsonNode body, String field) {
+        if (body == null || !body.hasNonNull(field) || body.get(field).asText().isBlank()) {
+            return null;
+        }
+        String value = body.get(field).asText().trim();
+        return value.length() <= 500 ? value : value.substring(0, 500);
     }
 
     /**

@@ -50,6 +50,20 @@ public class FinanceController {
         return refunds.approve(ref, body);
     }
 
+    /** {payeeName?, payoutMethod, accountRef}: where a refund is paid, recorded before approval. */
+    @PostMapping("/refunds/{ref}/destination")
+    public RefundControls.RefundView refundDestination(@org.springframework.web.bind.annotation.PathVariable String ref,
+            @org.springframework.web.bind.annotation.RequestBody com.fasterxml.jackson.databind.JsonNode body) {
+        return refunds.destination(ref, body);
+    }
+
+    /** {reference}: the bank confirmed a payout that no simulator settled. */
+    @PostMapping("/refunds/{ref}/payout-confirmed")
+    public RefundControls.RefundView confirmPayout(@org.springframework.web.bind.annotation.PathVariable String ref,
+            @org.springframework.web.bind.annotation.RequestBody com.fasterxml.jackson.databind.JsonNode body) {
+        return refunds.confirmPayout(ref, body);
+    }
+
     /** {note} */
     @PostMapping("/refunds/{ref}/reject")
     public RefundControls.RefundView rejectRefund(@org.springframework.web.bind.annotation.PathVariable String ref,
@@ -193,9 +207,11 @@ public class FinanceController {
         return controls.requestClearance(id, body);
     }
 
+    /** {verificationNote?}: a refund's destination check when it is not a mandate on file. */
     @PostMapping("/suspense/{id}/clearance/approve")
-    public FinanceViews.SuspenseView approveClearance(@PathVariable Long id) {
-        return controls.approveClearance(id);
+    public FinanceViews.SuspenseView approveClearance(@PathVariable Long id,
+            @RequestBody(required = false) JsonNode body) {
+        return controls.approveClearance(id, body);
     }
 
     @PostMapping("/suspense/{id}/clearance/reject")

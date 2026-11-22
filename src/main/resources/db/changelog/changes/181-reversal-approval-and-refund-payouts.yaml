@@ -1,0 +1,57 @@
+databaseChangeLog:
+  # NS-SH04-005: a staff-keyed receipt reversal waits for a second person; refunds record how their destination was
+  # verified and the payout instruction that paid them (submission is not settlement).
+  - changeSet:
+      id: 181-reversal-requests
+      author: nsure
+      changes:
+        - createTable:
+            tableName: bil_reversal_request
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_bil_reversal_request}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_bil_reversal_request_ref}}
+              - column: {name: receipt_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: kind, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: datetime}
+              - column: {name: decision_note, type: varchar(500)}
+              - column: {name: reversal_ref, type: varchar(20)}
+        - createIndex:
+            tableName: bil_reversal_request
+            indexName: ix_bil_reversal_request_receipt
+            columns:
+              - column: {name: receipt_ref}
+  - changeSet:
+      id: 181-refund-payouts
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: fin_refund
+            columns:
+              - column: {name: destination_check, type: varchar(300)}
+              - column: {name: destination_set_by, type: varchar(100)}
+              - column: {name: payout_ref, type: varchar(20)}
+              - column: {name: payout_provider, type: varchar(40)}
+              - column: {name: payout_reference, type: varchar(60)}
+              - column: {name: settled_at, type: datetime}
+  - changeSet:
+      id: 181-refund-settled-posting
+      author: nsure
+      comment: >-
+        Demo default (D07): a premium refund paid through the refund controls reverses premium income (Dr 4000, Cr
+        1000). The posted amount is the payload's ledgerAmount, which is zero for refunds another event already posts
+        (suspense, credit and group settlements).
+      changes:
+        - sql:
+            sql: >-
+              INSERT INTO fin_posting_rule (event_type, debit_account, credit_account, amount_field, business_domain,
+                description, status, version, updated_by, updated_at, effective_from, approval_status, approved_by, approved_at)
+              SELECT 'RefundSettled', '4000', '1000', 'ledgerAmount', 'INDIVIDUAL', 'Premium refund paid to the payer',
+                     'ACTIVE', 1, 'system', CURRENT_TIMESTAMP, DATE '2000-01-01', 'APPROVED', 'system', CURRENT_TIMESTAMP
+              WHERE NOT EXISTS (SELECT 1 FROM fin_posting_rule x WHERE x.event_type = 'RefundSettled')

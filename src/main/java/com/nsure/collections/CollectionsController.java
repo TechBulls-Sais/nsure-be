@@ -34,10 +34,28 @@ public class CollectionsController {
         return collections.account(ref);
     }
 
-    /** {kind: RETURNED|REVERSED|CHARGEBACK, reason} */
+    /** {kind: RETURNED|REVERSED|CHARGEBACK, reason}: asks for the reversal; a second person approves it. */
     @PostMapping("/receipts/{ref}/reverse")
-    public CollectionsViews.ReversalView reverse(@PathVariable String ref, @RequestBody JsonNode body) {
+    public CollectionsViews.ReversalRequestView reverse(@PathVariable String ref, @RequestBody JsonNode body) {
         return collections.reverse(ref, body);
+    }
+
+    @GetMapping("/reversal-requests")
+    public List<CollectionsViews.ReversalRequestView> reversalRequests() {
+        return collections.reversalRequests();
+    }
+
+    /** {note?} */
+    @PostMapping("/reversal-requests/{ref}/approve")
+    public CollectionsViews.ReversalRequestView approveReversal(@PathVariable String ref,
+            @RequestBody(required = false) JsonNode body) {
+        return collections.approveReversal(ref, body);
+    }
+
+    /** {note} */
+    @PostMapping("/reversal-requests/{ref}/reject")
+    public CollectionsViews.ReversalRequestView rejectReversal(@PathVariable String ref, @RequestBody JsonNode body) {
+        return collections.rejectReversal(ref, body);
     }
 
     /** {amount (signed), reason}; send the instalment's version in If-Match. */

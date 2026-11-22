@@ -288,6 +288,8 @@ public final class ApiAccessRules {
             rule(POST, "/finance/refunds", anyOf("MANAGE_FINANCE")),
             rule(POST, "/finance/refunds/*/approve", anyOf("APPROVE_JOURNAL")),
             rule(POST, "/finance/refunds/*/reject", anyOf("APPROVE_JOURNAL")),
+            rule(POST, "/finance/refunds/*/destination", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/finance/refunds/*/payout-confirmed", anyOf("MANAGE_FINANCE")),
 
             // ── distribution and commissions SH06 (Distribution Administrator) ─────────────────────────
             rule(GET, "/distribution/**", anyOf("READ_DISTRIBUTION")),
@@ -420,6 +422,9 @@ public final class ApiAccessRules {
             // ── collections SH04: billing accounts for anyone who reads policies or finance; changes by Finance ──
             rule(GET, "/collections/policies/*", anyOf("READ_POLICY", "READ_FINANCE")),
             rule(POST, "/collections/receipts/*/reverse", anyOf("MANAGE_FINANCE")),
+            rule(GET, "/collections/reversal-requests", anyOf("READ_FINANCE")),
+            rule(POST, "/collections/reversal-requests/*/approve", anyOf("APPROVE_JOURNAL")),
+            rule(POST, "/collections/reversal-requests/*/reject", anyOf("APPROVE_JOURNAL")),
             rule(POST, "/collections/instalments/*/adjustments", anyOf("MANAGE_FINANCE")),
             rule(POST, "/collections/billing-run", anyOf("MANAGE_FINANCE")),
             rule(POST, "/collections/statements", anyOf("MANAGE_FINANCE")),

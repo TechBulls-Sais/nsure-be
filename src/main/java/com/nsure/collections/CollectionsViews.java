@@ -56,6 +56,12 @@ public final class CollectionsViews {
             String reason, String reversedBy, LocalDateTime reversedAt, LocalDate paidTo, String policyStatus) {
     }
 
+    /** A staff-keyed reversal waiting for, or decided by, a second person (NS-SH04-005). */
+    public record ReversalRequestView(String ref, String receiptRef, String policyRef, String kind, BigDecimal amount,
+            String reason, String status, String requestedBy, LocalDateTime requestedAt, String decidedBy,
+            LocalDateTime decidedAt, String decisionNote, String reversalRef, LocalDate paidTo, String policyStatus) {
+    }
+
     public record BillingRunView(int issued, List<String> instalments) {
     }
 

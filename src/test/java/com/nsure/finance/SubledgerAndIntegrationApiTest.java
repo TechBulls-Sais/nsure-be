@@ -413,21 +413,31 @@ class SubledgerAndIntegrationApiTest {
                         "{\"action\":\"ALLOCATE\",\"policyRef\":\"" + policy[0] + "\",\"reason\":\"Customer says it is theirs\"}"))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("refund it instead")));
+        // NS-SH04-005: a refund names its destination; the approver verifies it and a payout instruction pays it.
         mockMvc.perform(json(post("/finance/suspense/" + wrongAmount + "/clearance"), "admin",
                         "{\"action\":\"REFUND\",\"reason\":\"Short payment returned to the payer\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/finance/suspense/" + wrongAmount + "/clearance"), "admin",
+                        "{\"action\":\"REFUND\",\"reason\":\"Short payment returned to the payer\","
+                                + "\"payeeName\":\"Lorato Kgosi\",\"payoutMethod\":\"Bank Account\",\"accountRef\":\"62005550001\"}"))
                 .andExpect(jsonPath("$.clearanceAction").value("REFUND"))
                 .andExpect(jsonPath("$.requestedBy").value("admin"));
         mockMvc.perform(post("/finance/suspense/" + wrongAmount + "/clearance/approve").with(signedIn("admin", "password")))
                 .andExpect(status().isForbidden());
         mockMvc.perform(post("/finance/suspense/" + wrongAmount + "/clearance/approve").with(signedIn("secadmin", "password")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("verificationNote")));
+        mockMvc.perform(json(post("/finance/suspense/" + wrongAmount + "/clearance/approve"), "secadmin",
+                        "{\"verificationNote\":\"Bank letter on file confirms the account holder\"}"))
                 .andExpect(jsonPath("$.status").value("REFUNDED"))
                 .andExpect(jsonPath("$.clearedBy").value("secadmin"));
-        // SH04: the refund paid out is a RefundSettled naming who asked and who approved.
+        // SH04: the refund paid out is a RefundSettled naming who asked, who approved and its payout instruction.
         String refunds = mockMvc.perform(get("/integration/events?eventType=RefundSettled").with(signedIn("admin", "password")))
                 .andReturn().getResponse().getContentAsString();
-        assertThat((List<String>) JsonPath.read(refunds, "$[?(@.aggregateRef == 'BF-77')].payload")).singleElement()
+        assertThat((List<String>) JsonPath.read(refunds, "$[*].payload")).filteredOn(p -> p.contains("\"sourceRef\":\"SUS-"
+                        + wrongAmount + "\"")).singleElement()
                 .asString().contains("\"requestedBy\":\"admin\"").contains("\"approvedBy\":\"secadmin\"")
-                .contains("\"amount\":\"1.00\"");
+                .contains("\"amount\":\"1.00\"").contains("\"payoutRef\":\"RPO-").contains("\"ledgerAmount\":\"0\"");
 
         // A receipt quoting an unknown policy is allocated to the right one once approved; the premium is collected.
         mockMvc.perform(json(post("/integration/payment-notifications"), "admin", "{\"provider\":\"BankFeed\","
@@ -485,10 +495,16 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(status().isForbidden());
         mockMvc.perform(json(post("/finance/refunds/" + ref + "/approve"), "finance", "{}"))
                 .andExpect(status().isForbidden());
+        // NS-SH04-005: an account that is no mandate on file needs the approver's verification.
         mockMvc.perform(json(post("/finance/refunds/" + ref + "/approve"), "secadmin", "{}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/finance/refunds/" + ref + "/approve"), "secadmin",
+                        "{\"verificationNote\":\"Lender confirmed the borrower's account in writing\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("SETTLED"))
-                .andExpect(jsonPath("$.decidedBy").value("secadmin"));
+                .andExpect(jsonPath("$.decidedBy").value("secadmin"))
+                .andExpect(jsonPath("$.payoutRef").value(org.hamcrest.Matchers.startsWith("RPO-")))
+                .andExpect(jsonPath("$.destinationCheck").value(org.hamcrest.Matchers.startsWith("Verified by secadmin")));
         mockMvc.perform(json(post("/finance/refunds/" + ref + "/approve"), "secadmin", "{}"))
                 .andExpect(status().isConflict());
         assertThat(eventPayloads("RefundSettled", ref)).singleElement().asString()
