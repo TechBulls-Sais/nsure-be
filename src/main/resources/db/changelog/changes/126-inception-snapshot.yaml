@@ -1,0 +1,17 @@
+# IL03 inception snapshot (Nsure Life NS-IL03-001): when cover starts, the contract's issue terms are frozen once in
+# their own row (product terms and wording, rate and quote versions, accepted underwriting terms, cover, premium,
+# term and insured lives); later endorsements change the policy, never this record.
+databaseChangeLog:
+  - changeSet:
+      id: 126-inception-snapshot
+      author: nsure
+      changes:
+        - createTable:
+            tableName: pol_inception_snapshot
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_pol_inception_policy}}
+              # The frozen terms as JSON (never medical detail).
+              - column: {name: snapshot, type: varchar(4000), constraints: {nullable: false}}
+              - column: {name: sha256, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: taken_at, type: timestamp(6), constraints: {nullable: false}}

@@ -134,6 +134,9 @@ public class ServicingService {
         InsurancePolicy policy = workflow.policy(policyRef);
         List<BenefitRule> rules = benefitRules(policy.getProduct());
         List<String> offered = rules.stream().map(r -> r.benefitType).sorted().toList();
+        com.nsure.portfolio.InceptionSnapshot inception = em.createQuery("select s from InceptionSnapshot s"
+                + " where s.policyRef = :ref", com.nsure.portfolio.InceptionSnapshot.class)
+                .setParameter("ref", policyRef).getResultStream().findFirst().orElse(null);
         return new ServicingViews.ServicingView(
                 policyView(policy),
                 lives(policy).stream().map(this::lifeView).toList(),
@@ -157,7 +160,18 @@ public class ServicingService {
                         .map(b -> new ServicingViews.BeneficiaryEpisode(b.getFullName(), b.getRelationship(),
                                 b.isPrimary(), b.getEffectiveFrom(), b.getRemovedFrom(), b.getRemovedBy()))
                         .toList(),
-                consentViews(policy));
+                consentViews(policy),
+                inception == null ? null : readTree(inception.getSnapshot()),
+                inception == null ? null : inception.getSha256(),
+                inception == null ? null : inception.getTakenAt());
+    }
+
+    private JsonNode readTree(String json) {
+        try {
+            return mapper.readTree(json);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     // ── cover ending at the selected term (section 06 Term Life) ──────────────────────────────────

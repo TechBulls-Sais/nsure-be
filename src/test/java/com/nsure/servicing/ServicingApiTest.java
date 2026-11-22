@@ -342,6 +342,13 @@ class ServicingApiTest {
                         "{\"approve\":true,\"note\":\"Income evidence seen\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPLIED"));
+        // NS-IL03-001: the inception snapshot keeps the issue terms; the endorsement changed the policy, not it.
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.policy.sumAssured").value(500000.0))
+                .andExpect(jsonPath("$.inceptionSnapshot.sumAssured").value("250000.00"))
+                .andExpect(jsonPath("$.inceptionSnapshot.tier").value("Bronze"))
+                .andExpect(jsonPath("$.inceptionSnapshot.productVersion").isNotEmpty())
+                .andExpect(jsonPath("$.inceptionSha256").isNotEmpty());
         // NS-IL03-002: once the contract has ended, its beneficiaries no longer change.
         mockMvc.perform(json(post(base + "/termination"), "admin", "{\"reason\":\"DEATH\",\"note\":\"Death certificate received\"}"))
                 .andExpect(status().isOk());

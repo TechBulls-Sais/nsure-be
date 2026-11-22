@@ -197,7 +197,11 @@ public final class ServicingViews {
             // IL03: every beneficiary designation, current and removed, with its dates (no contact or bank details).
             List<BeneficiaryEpisode> beneficiaryHistory,
             // NS-IL04-006: each insured life's own consent decisions about sharing their medical evidence.
-            List<ConsentView> consents) {
+            List<ConsentView> consents,
+            // NS-IL03-001: the issue terms frozen when cover started (null before then), and its fingerprint.
+            com.fasterxml.jackson.databind.JsonNode inceptionSnapshot,
+            String inceptionSha256,
+            LocalDateTime inceptionTakenAt) {
     }
 
     /** One insured life's consent decision (NS-IL04-006); the newest per life applies. */

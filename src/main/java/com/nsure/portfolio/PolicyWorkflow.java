@@ -198,6 +198,7 @@ public class PolicyWorkflow {
             issued.put("quoteRef", policy.getQuoteRef());
             issued.put("quoteVersion", policy.getQuoteVersion());
             outbox.publish(Events.POLICY_ISSUED, ref, issued, actor);
+            freezeInception(policy);
         }
         Map<String, Object> premium = new LinkedHashMap<>();
         premium.put("policyRef", ref);
@@ -424,6 +425,74 @@ public class PolicyWorkflow {
     // ── reinstatement and termination (NS-IL03-004, IL03 events) ──────────────────────────────────
 
     /** Whether the product's servicing rule holds a late premium's reinstatement for approval. */
+    /**
+     * NS-IL03-001: the contract's issue terms frozen once, in the issuing transaction: product terms and wording, rate
+     * and quote versions, accepted underwriting terms, cover, premium, term and the insured lives (no medical detail).
+     */
+    private void freezeInception(InsurancePolicy policy) {
+        if (!em.createQuery("select s.policyRef from InceptionSnapshot s where s.policyRef = :ref", String.class)
+                .setParameter("ref", policy.getRef()).getResultList().isEmpty()) {
+            return;
+        }
+        ProductVersion version = terms(policy);
+        Map<String, Object> snap = new LinkedHashMap<>();
+        snap.put("policyRef", policy.getRef());
+        snap.put("customerRef", policy.getCustomerRef());
+        snap.put("product", policy.getProduct());
+        snap.put("tier", policy.getTier());
+        snap.put("productVersion", version.getLabel());
+        snap.put("productVersionId", version.getId());
+        snap.put("wordingRef", version.getWordingRef());
+        snap.put("waitingPeriodDays", version.getWaitingPeriodDays());
+        snap.put("gracePeriodDays", version.getGracePeriodDays());
+        snap.put("rateTableVersion", policy.getRateTableVersion());
+        snap.put("quoteRef", policy.getQuoteRef());
+        snap.put("quoteVersion", policy.getQuoteVersion());
+        snap.put("applicationRef", policy.getApplicationRef());
+        snap.put("sumAssured", policy.getAmount() == null ? null : policy.getAmount().toPlainString());
+        snap.put("premium", policy.getPremium() == null ? null : policy.getPremium().toPlainString());
+        snap.put("premiumFrequency", policy.getPremiumFrequency());
+        snap.put("underwritingTerms", policy.getUwTerms());
+        snap.put("termYears", policy.getTermYears());
+        snap.put("coverStartDate", String.valueOf(policy.getCoverStartDate()));
+        snap.put("coverEndDate", policy.getCoverEndDate() == null ? null : policy.getCoverEndDate().toString());
+        List<Map<String, Object>> lives = new java.util.ArrayList<>();
+        for (PolicyLifeCover life : em.createQuery("select l from PolicyLifeCover l where l.policy = :p order by l.displayOrder",
+                PolicyLifeCover.class).setParameter("p", policy).getResultList()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("lifeId", life.getId());
+            row.put("relationship", life.getLifeType());
+            row.put("fullName", life.getFullName());
+            row.put("ageAtEntry", life.getAgeAtEntry());
+            row.put("coverAmount", life.getCoverAmount() == null ? null : life.getCoverAmount().toPlainString());
+            row.put("monthlyPremium", life.getMonthlyPremium() == null ? null : life.getMonthlyPremium().toPlainString());
+            lives.add(row);
+        }
+        snap.put("lives", lives);
+        String json;
+        try {
+            json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(snap);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalStateException(ex);
+        }
+        if (json.length() > 4000) {
+            snap.put("lives", lives.size() + " lives (listed on the policy)");
+            try {
+                json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(snap);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+                throw new IllegalStateException(ex);
+            }
+        }
+        String hash;
+        try {
+            hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(json.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
+        }
+        em.persist(new InceptionSnapshot(policy.getRef(), json, hash));
+    }
+
     /** One of the product's servicing rule numbers (prod_servicing_rule), or the convention when it has no rule. */
     private int productRule(String product, String field, int fallback) {
         return em.createQuery("select r." + field + " from ServicingRule r where r.product = :product", Integer.class)

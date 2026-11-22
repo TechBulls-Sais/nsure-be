@@ -323,3 +323,6 @@ databaseChangeLog:
   - include:
       file: changes/125-product-packs.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/126-inception-snapshot.yaml
+      relativeToChangelogFile: true
