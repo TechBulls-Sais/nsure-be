@@ -253,6 +253,8 @@ public final class ApiAccessRules {
             rule(GET, "/group/arrears", anyOf("READ_SCHEME")),
             rule(POST, "/group/census-batches/*/commit", anyOf("PROCESS_CENSUS")),
             rule(GET, "/group/census-template", anyOf("READ_SCHEME")),
+            rule(GET, "/group/schemes/*/census-terms", anyOf("READ_SCHEME")),
+            rule(PUT, "/group/schemes/*/census-terms", anyOf("MANAGE_SCHEME")),
             rule(GET, "/group/schemes/*/sponsor-account", anyOf("READ_SCHEME")),
             rule(GET, "/group/schemes/*/renewals", anyOf("READ_SCHEME")),
             rule(POST, "/group/schemes/*/renewals", anyOf("MANAGE_SCHEME")),

@@ -146,9 +146,14 @@ public class CensusService {
         GroupRecords.requireActive(scheme, "a census");
         String externalId = GroupRecords.requiredText(body, "externalBatchId", "External batch id", 80);
         String mode = GroupRecords.text(body, "mode");
-        mode = mode == null ? CensusBatch.PARTIAL : mode.toUpperCase(Locale.ROOT);
+        CensusTerms terms = terms(scheme);
+        mode = mode == null ? (terms != null && terms.isAtomicRequired() ? CensusBatch.ATOMIC : CensusBatch.PARTIAL)
+                : mode.toUpperCase(Locale.ROOT);
         if (!CensusBatch.PARTIAL.equals(mode) && !CensusBatch.ATOMIC.equals(mode)) {
             throw new IllegalArgumentException("Mode must be PARTIAL or ATOMIC");
+        }
+        if (terms != null && terms.isAtomicRequired() && !CensusBatch.ATOMIC.equals(mode)) {
+            throw new IllegalArgumentException("Scheme " + schemeRef + " requires ATOMIC census batches (all or nothing)");
         }
         String csv = body == null || !body.hasNonNull("csv") ? "" : normalise(body.get("csv").asText());
         if (csv.isBlank()) {
@@ -307,6 +312,44 @@ public class CensusService {
         return result;
     }
 
+    private CensusTerms terms(GroupScheme scheme) {
+        return em.createQuery("select t from CensusTerms t where t.scheme = :s", CensusTerms.class)
+                .setParameter("s", scheme).getResultStream().findFirst().orElse(null);
+    }
+
+    /** The scheme's census terms (NS-GL04-002); none saved means partial batches and one person may commit. */
+    @Transactional(readOnly = true)
+    public Map<String, Object> censusTerms(String schemeRef) {
+        security.authenticatedUser().validateHasPermissionTo("READ_SCHEME");
+        return termsView(terms(records.scheme(schemeRef)));
+    }
+
+    /** {atomicRequired, fourEyes} */
+    @Transactional
+    public Map<String, Object> saveCensusTerms(String schemeRef, JsonNode body) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("MANAGE_SCHEME");
+        GroupScheme scheme = records.lockedScheme(schemeRef);
+        CensusTerms terms = terms(scheme);
+        if (terms == null) {
+            terms = new CensusTerms(scheme);
+            terms.set(false, false, user.getUsername());
+            em.persist(terms);
+        }
+        terms.set(body != null && body.path("atomicRequired").asBoolean(false),
+                body != null && body.path("fourEyes").asBoolean(false), user.getUsername());
+        return termsView(terms);
+    }
+
+    private static Map<String, Object> termsView(CensusTerms t) {
+        Map<String, Object> v = new java.util.LinkedHashMap<>();
+        v.put("atomicRequired", t != null && t.isAtomicRequired());
+        v.put("fourEyes", t != null && t.isFourEyes());
+        v.put("updatedBy", t == null ? null : t.getUpdatedBy());
+        v.put("updatedAt", t == null ? null : t.getUpdatedAt());
+        return v;
+    }
+
     /** A member's cover periods, oldest first, including superseded ones (marked) for the audit trail. */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> coverHistory(Long memberId) {
@@ -357,6 +400,11 @@ public class CensusService {
             return records.batchView(batch);
         }
         GroupRecords.requireActive(scheme, "a census commit");
+        CensusTerms terms = terms(scheme);
+        if (terms != null && terms.isFourEyes() && user.getUsername().equalsIgnoreCase(batch.getSubmittedBy())) {
+            throw new com.nsure.security.exception.NoAuthorizationException("Scheme " + scheme.getRef()
+                    + " needs someone other than the submitter to commit " + batch.getRef() + ".");
+        }
         boolean atomic = CensusBatch.ATOMIC.equals(batch.getMode());
         if (atomic && batch.getInvalidRows() > 0) {
             throw new IllegalArgumentException("ATOMIC batch " + batch.getRef() + " has " + batch.getInvalidRows()

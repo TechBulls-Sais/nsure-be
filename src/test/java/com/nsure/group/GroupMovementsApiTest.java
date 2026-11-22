@@ -234,6 +234,28 @@ class GroupMovementsApiTest {
                 .andExpect(jsonPath("$.columns[?(@.name == 'correctsLine')].sinceVersion").value("2"));
     }
 
+    @Test
+    void aSchemeCanRequireAtomicBatchesAndASecondPersonToCommit() throws Exception {
+        String scheme = scheme("2026-01-01");
+        category(scheme, "STAFF", "2", "1000000", "0.60");
+        mockMvc.perform(json(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(
+                        "/group/schemes/" + scheme + "/census-terms"), "grpadmin", "{\"atomicRequired\":true,\"fourEyes\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.atomicRequired").value(true));
+        mockMvc.perform(json(post("/group/schemes/" + scheme + "/census-batches"), "grpadmin",
+                        body(Map.of("externalBatchId", "T-1", "mode", "PARTIAL", "csv", HEADER + "\nQ1,Q,One,1985-01-01,STAFF,100000,JOIN,"
+                                + LocalDate.now()))))
+                .andExpect(status().isUnprocessableEntity());
+        String batch = JsonPath.read(ok(post("/group/schemes/" + scheme + "/census-batches"), "grpadmin",
+                body(Map.of("externalBatchId", "T-2", "csv", HEADER + "\nQ1,Q,One,1985-01-01,STAFF,100000,JOIN," + LocalDate.now())))
+                .andExpect(jsonPath("$.mode").value("ATOMIC")).andReturn().getResponse().getContentAsString(), "$.ref");
+        mockMvc.perform(post("/group/census-batches/" + batch + "/commit").with(signedIn("grpadmin", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/group/census-batches/" + batch + "/commit").with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("COMMITTED"));
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
 
     private String scheme(String inception) throws Exception {

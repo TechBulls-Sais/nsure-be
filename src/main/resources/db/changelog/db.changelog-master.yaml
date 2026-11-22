@@ -320,3 +320,6 @@ databaseChangeLog:
   - include:
       file: changes/154-group-credit-demo.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/155-group-census-terms.yaml
+      relativeToChangelogFile: true

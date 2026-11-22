@@ -165,6 +165,17 @@ public class GroupController {
         return census.commit(ref);
     }
 
+    @GetMapping("/schemes/{ref}/census-terms")
+    public java.util.Map<String, Object> censusTerms(@PathVariable String ref) {
+        return census.censusTerms(ref);
+    }
+
+    /** {atomicRequired, fourEyes} (NS-GL04-002) */
+    @PutMapping("/schemes/{ref}/census-terms")
+    public java.util.Map<String, Object> saveCensusTerms(@PathVariable String ref, @RequestBody JsonNode body) {
+        return census.saveCensusTerms(ref, body);
+    }
+
     /** The published, versioned census template (NS-GL04-001). */
     @GetMapping("/census-template")
     public java.util.Map<String, Object> censusTemplate() {
