@@ -157,6 +157,37 @@ public class ServicingService {
                 consentViews(policy));
     }
 
+    // ── cover ending at the selected term (section 06 Term Life) ──────────────────────────────────
+
+    @Transactional
+    public ServicingViews.RunResult endCoverAtTermNow() {
+        AppUser user = user("MANAGE_SERVICING");
+        return endCoverAtTerm(user.getUsername());
+    }
+
+    /**
+     * Every in-force policy whose cover end date (the selected term or the cessation age, whichever is earlier) has
+     * passed is terminated for EXPIRY from the day after; runs daily with {@link ServicingJobs}.
+     */
+    @Transactional
+    public ServicingViews.RunResult endCoverAtTerm(String actor) {
+        LocalDate today = LocalDate.now();
+        List<String> ended = new ArrayList<>();
+        for (InsurancePolicy policy : em.createQuery("select p from InsurancePolicy p where p.coverEndDate is not null"
+                        + " and p.coverEndDate < :today and p.status in :live", InsurancePolicy.class)
+                .setParameter("today", today)
+                .setParameter("live", Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.ACTIVE_NO_COVER,
+                        PolicyWorkflow.REINSTATEMENT_PENDING))
+                .getResultList()) {
+            workflow.terminate(policy.getRef(), "EXPIRY", "Cover ended on " + policy.getCoverEndDate()
+                    + (policy.getTermYears() == null ? "" : ": the " + policy.getTermYears()
+                            + "-year term or the cessation age, whichever came first"),
+                    policy.getCoverEndDate().plusDays(1), actor);
+            ended.add(policy.getRef());
+        }
+        return new ServicingViews.RunResult(ended.size(), ended);
+    }
+
     // ── relationship-specific consent (NS-IL04-006) ───────────────────────────────────────────────
 
     /** {status GRANTED|WITHDRAWN, evidence}: the insured life's own decision about sharing their medical evidence. */
@@ -1222,8 +1253,11 @@ public class ServicingService {
                     }
                     out.add(new ServicingViews.ScheduledBenefit(CASHBACK, next, amount, basis));
                 }
-            } else if (Set.of(RETURN_OF_PREMIUM, MATURITY).contains(rule.benefitType) && rule.termYears != null) {
-                LocalDate due = start.plusYears(rule.termYears);
+            } else if (Set.of(RETURN_OF_PREMIUM, MATURITY).contains(rule.benefitType)
+                    && (policy.getTermYears() != null || rule.termYears != null)) {
+                // Section 06 Term Life: a policy with a selected term pays at the end of its own term.
+                int term = policy.getTermYears() != null ? policy.getTermYears() : rule.termYears;
+                LocalDate due = start.plusYears(term);
                 BigDecimal percent = rule.percent == null ? HUNDRED : rule.percent;
                 if (dueOnly) {
                     if (!due.isAfter(asOf)) {
@@ -1231,14 +1265,14 @@ public class ServicingService {
                         out.add(new ServicingViews.ScheduledBenefit(rule.benefitType, due,
                                 paid.multiply(percent).divide(HUNDRED, 2, RoundingMode.HALF_UP),
                                 percent.stripTrailingZeros().toPlainString() + "% of premiums paid " + Money.text(paid)
-                                        + " on survival to the end of the " + rule.termYears + "-year term."));
+                                        + " on survival to the end of the " + term + "-year term."));
                     }
                 } else if (due.isAfter(today)) {
-                    BigDecimal projected = policy.getPremium().multiply(BigDecimal.valueOf(12L * rule.termYears))
+                    BigDecimal projected = policy.getPremium().multiply(BigDecimal.valueOf(12L * term))
                             .multiply(percent).divide(HUNDRED, 2, RoundingMode.HALF_UP);
                     out.add(new ServicingViews.ScheduledBenefit(rule.benefitType, due, projected,
                             percent.stripTrailingZeros().toPlainString() + "% of the premiums paid by then, on survival"
-                                    + " to the end of the " + rule.termYears + "-year term (shown if every premium is"
+                                    + " to the end of the " + term + "-year term (shown if every premium is"
                                     + " paid at today's premium)."));
                 }
             }
@@ -1414,6 +1448,13 @@ public class ServicingService {
                 throw new IllegalArgumentException("removalApproval must be BACKDATED or ALWAYS.");
             }
             r.removalApproval = removal;
+        }
+        if (body.has("termOptions")) {
+            String terms = optional(body, "termOptions");
+            if (terms != null && !terms.matches("\\s*\\d{1,2}(\\s*,\\s*\\d{1,2})*\\s*")) {
+                throw new IllegalArgumentException("termOptions is a list of terms in years, e.g. 10,12,15.");
+            }
+            r.termOptions = terms == null ? null : terms.replace(" ", "");
         }
         r.reviewLeadDays = body.path("reviewLeadDays").asInt(r.reviewLeadDays);
         r.noCoverMonths = body.path("noCoverMonths").asInt(r.noCoverMonths);
@@ -1608,7 +1649,8 @@ public class ServicingService {
                 modal(p.getPremium(), p.getPremiumFrequency()), status, cover, payment, p.getCoverStartDate(),
                 billed ? p.getNextPremiumDue() : null, billed ? p.getGracePeriodEnd() : null,
                 p.getTerminationReason(), p.getTerminatedOn(),
-                p.getPayerName(), p.getPayerRelationship(), p.getUwTerms(), paid[0].longValue(), paid[1]);
+                p.getPayerName(), p.getPayerRelationship(), p.getUwTerms(), paid[0].longValue(), paid[1],
+                p.getTermYears(), p.getCoverEndDate());
     }
 
     private ServicingViews.LifeView lifeView(PolicyLifeCover l) {
@@ -1646,7 +1688,7 @@ public class ServicingService {
     private ServicingViews.ServicingRuleView servicingRuleView(ServicingRule r) {
         return new ServicingViews.ServicingRuleView(r.id, r.product, r.reinstatementNeedsApproval, r.maxBackdateDays,
                 r.childReviewAge, r.maxCoverAge, r.updatedBy, r.updatedAt, r.lifeContinuity, r.removalApproval,
-                r.reviewLeadDays, r.noCoverMonths, r.coolingOffDays);
+                r.reviewLeadDays, r.noCoverMonths, r.coolingOffDays, r.termOptions);
     }
 
     private AppUser user(String permission) {

@@ -52,6 +52,70 @@ class NewBusinessApiTest {
     }
 
     @Test
+    void termLifeEndsAtTheSelectedTermOrAge70AndCareCashHasEveryPackTier() throws Exception {
+        String young = customer("Lame Term", "lame.term", "+267 72 900 011", 36);
+        mockMvc.perform(get("/portfolio/application-terms").param("product", "Term Life").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.length()").value(3));
+        // Section 06 Term Life: the term must be one the product sells.
+        mockMvc.perform(json(post("/portfolio/applications"), "admin", "{\"customerRef\":\"" + young + "\",\"product\":"
+                        + "\"Term Life\",\"tier\":\"Bronze\",\"termYears\":11," + CLEAN + "}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("10, 12, 15")));
+        String youngPolicy = issueAndPay(young, 12);
+        String start = jdbc.queryForObject("select cover_start_date from ins_policy where record_ref = ?", String.class,
+                youngPolicy);
+        mockMvc.perform(get("/servicing/policies/" + youngPolicy).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.policy.termYears").value(12))
+                .andExpect(jsonPath("$.policy.coverEndDate").value(LocalDate.parse(start).plusYears(12).toString()));
+        // At 62 a 15-year term would run past 70: cover ends on the 70th birthday instead.
+        String older = customer("Rra Term", "rra.term", "+267 72 900 012", 62);
+        String olderPolicy = issueAndPay(older, 15);
+        String born = jdbc.queryForObject("select date_of_birth from ins_customer where record_ref = ?", String.class, older);
+        mockMvc.perform(get("/servicing/policies/" + olderPolicy).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.policy.coverEndDate").value(LocalDate.parse(born).plusYears(70).toString()));
+        // Once the cover end date passes, the daily run ends the policy for expiry.
+        jdbc.update("update ins_policy set cover_end_date = ? where record_ref = ?",
+                java.sql.Date.valueOf(LocalDate.now().minusDays(1)), olderPolicy);
+        mockMvc.perform(post("/servicing/term-ends/run").with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.refs").value(hasItem(olderPolicy)));
+        mockMvc.perform(get("/servicing/policies/" + olderPolicy).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.policy.contractStatus").value("Terminated"))
+                .andExpect(jsonPath("$.policy.terminationReason").value("EXPIRY"));
+
+        // Section 06 Care Cash: daily benefit tiers 250 to 3,000, maintained by the product configurator.
+        mockMvc.perform(get("/portfolio/products").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.name == 'Care Cash')].tiers[*].cover").value(org.hamcrest.Matchers.hasItems(250, 500,
+                        1000, 1500, 2000, 3000)));
+        mockMvc.perform(json(put("/portfolio/products/Care Cash/tiers/Platinum"), "support", "{\"cover\":3000,\"premium\":720}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(put("/portfolio/products/Care Cash/tiers/Platinum"), "configurator", "{\"cover\":3000,\"premium\":720}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.name == 'Platinum')].premium").value(720));
+        mockMvc.perform(json(put("/portfolio/products/Care Cash/tiers/Diamond"), "configurator",
+                        "{\"cover\":4000,\"premium\":900,\"active\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.name == 'Diamond')].active").value(false));
+        mockMvc.perform(get("/portfolio/products").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.name == 'Care Cash')].tiers[?(@.name == 'Diamond')]").isEmpty());
+    }
+
+    private String issueAndPay(String customer, int term) throws Exception {
+        String app = JsonPath.read(mockMvc.perform(json(post("/portfolio/applications"), "admin", "{\"customerRef\":\""
+                                + customer + "\",\"product\":\"Term Life\",\"tier\":\"Bronze\",\"termYears\":" + term + ","
+                                + CLEAN + "}"))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.status").value("Ready to issue"))
+                        .andReturn().getResponse().getContentAsString(), "$.id");
+        String policy = JsonPath.read(mockMvc.perform(json(post("/portfolio/policies"), "admin", "{\"applicationRef\":\"" + app + "\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
+        mockMvc.perform(json(post("/portfolio/policies/" + policy + "/payments"), "admin", "{\"method\":\"Bank EFT\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Active"));
+        return policy;
+    }
+
+    @Test
     void aLenderLoanStillOpensItsCreditPolicyWithoutAnApplication() throws Exception {
         // IL05: credit cover comes from the lender's loan submission under the credit product rule, not an application.
         String borrower = customer("Kitso Borrower", "kitso.borrower", "+267 72 900 010", 35);

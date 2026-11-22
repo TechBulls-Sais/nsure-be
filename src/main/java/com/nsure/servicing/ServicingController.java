@@ -144,6 +144,12 @@ public class ServicingController {
         return servicing.recordConsent(ref, lifeId, body);
     }
 
+        /** Ends cover whose selected term or cessation age has passed (also daily). */
+    @PostMapping("/term-ends/run")
+    public ServicingViews.RunResult endCoverAtTerm() {
+        return servicing.endCoverAtTermNow();
+    }
+
         @GetMapping("/rules")
     public List<ServicingViews.ServicingRuleView> servicingRules() {
         return servicing.servicingRules();

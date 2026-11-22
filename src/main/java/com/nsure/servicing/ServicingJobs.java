@@ -24,6 +24,10 @@ public class ServicingJobs {
     public void daily() {
         ServicingViews.RunResult reviews = servicing.runLifeReviews("system");
         ServicingViews.RunResult benefits = servicing.runBenefits("system");
+        ServicingViews.RunResult ended = servicing.endCoverAtTerm("system");
+        if (ended.created() > 0) {
+            LOG.info("servicing: cover ended at term on {}", ended.refs());
+        }
         if (reviews.created() > 0 || benefits.created() > 0) {
             LOG.info("servicing: {} life review item(s) {}, {} benefit(s) due {}", reviews.created(), reviews.refs(),
                     benefits.created(), benefits.refs());

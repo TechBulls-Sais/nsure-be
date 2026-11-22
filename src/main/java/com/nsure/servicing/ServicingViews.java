@@ -34,7 +34,10 @@ public final class ServicingViews {
             String payerRelationship,
             String underwritingTerms,
             long premiumsPaid,
-            BigDecimal premiumsPaidAmount) {
+            BigDecimal premiumsPaidAmount,
+            // Section 06: the selected term and the date cover ends (term or cessation age, whichever is earlier).
+            Integer termYears,
+            LocalDate coverEndDate) {
     }
 
     public record LifeView(
@@ -134,7 +137,8 @@ public final class ServicingViews {
             String removalApproval,
             int reviewLeadDays,
             int noCoverMonths,
-            int coolingOffDays) {
+            int coolingOffDays,
+            String termOptions) {
     }
 
     /** A benefit the product's rules will make due, shown before it falls due. */

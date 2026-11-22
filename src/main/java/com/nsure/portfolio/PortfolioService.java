@@ -563,6 +563,18 @@ public class PortfolioService {
         return rows;
     }
 
+    /** The policy terms a product sells (section 06 Term Life); empty when it sells none. */
+    @Transactional(readOnly = true)
+    public List<Integer> applicationTerms(String product) {
+        AppUser user = security.authenticatedUser();
+        if (user.isPortalCustomer()) {
+            customerForLogin();
+        } else if (!user.hasPermissionTo("CREATE_APPLICATION")) {
+            user.validateHasPermissionTo("READ_APPLICATION");
+        }
+        return capture.termOptions(product);
+    }
+
     @Transactional(readOnly = true)
     public List<String> applicationRelationships() {
         AppUser user = security.authenticatedUser();
@@ -899,6 +911,10 @@ public class PortfolioService {
             }
             row.setUwTerms(underwritten.description());
         }
+        if (application != null) {
+            // Section 06 Term Life: the policy carries the term selected on the application.
+            row.setTermYears(capture.termFor(application));
+        }
         // Staff issue: every required insurer-configured field must be present (guide §15).
         policyAttributes.pinNewPolicy(row, body, true);
         policyWorkflow.openPending(row);
@@ -1071,6 +1087,9 @@ public class PortfolioService {
         if (body.has("beneficiaries")) {
             details.set("beneficiaries", body.get("beneficiaries"));
         }
+        if (body.has("termYears")) {
+            details.set("termYears", body.get("termYears"));
+        }
         capture.capture(application, details, actor);
         boolean answered = body.has("disclosures") && body.get("disclosures").isObject() && !body.get("disclosures").isEmpty();
         if (answered || portalDisclosuresRequired) {
@@ -1106,6 +1125,7 @@ public class PortfolioService {
         row.setRecordDate(LocalDate.now().format(DISPLAY));
         row.setDisplayOrder(0);
         row.setApplicationRef(application.getRef());
+        row.setTermYears(capture.termFor(application));
         List<PolicyWorkflow.BeneficiaryInput> beneficiaries = new ArrayList<>(capture.beneficiaries(application));
         if (beneficiaries.isEmpty()) {
             beneficiaries.addAll(beneficiaryInputs(body.get("beneficiaries")));
@@ -1132,6 +1152,62 @@ public class PortfolioService {
         requested.put("quoteVersion", quote == null ? 0 : quote.getVersionNo());
         outbox.publish(com.nsure.integration.Events.ISSUE_REQUESTED, application.getRef(), requested, actor);
         return shopFor(account);
+    }
+
+    /**
+     * Section 06 product packs: every plan of a product, saleable or withdrawn, for maintenance (UPDATE_TIER).
+     */
+    @Transactional(readOnly = true)
+    public List<PortfolioViews.TierRecordView> productTiers(String product) {
+        security.authenticatedUser().validateHasPermissionTo("READ_PRODUCT");
+        return em.createQuery("select t from CoverTier t where t.product.name = :p order by t.displayOrder, t.coverAmount",
+                        CoverTier.class).setParameter("p", product).getResultList().stream()
+                .map(t -> new PortfolioViews.TierRecordView(t.getId(), product, t.getName(), t.getCoverAmount(),
+                        t.getPremium(), t.getPremiumFrequency(), t.isPopular(), t.getBenefits(), t.getDisplayOrder(),
+                        t.isActive()))
+                .toList();
+    }
+
+    /**
+     * {cover, premium, frequency?, popular?, benefits?, displayOrder?, active?}: adds or changes a saleable plan of
+     * a product (UPDATE_TIER). Issued policies keep their own cover and premium; a withdrawn plan is not sold.
+     */
+    @Transactional
+    public List<PortfolioViews.TierRecordView> saveTier(String productName, String tierName, JsonNode body) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("UPDATE_TIER");
+        InsuranceProduct product = em.createQuery("select p from InsuranceProduct p where p.name = :n", InsuranceProduct.class)
+                .setParameter("n", productName).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Product " + productName + " not found"));
+        String name = blank(tierName).trim();
+        if (name.isEmpty() || name.length() > 60) {
+            throw new IllegalArgumentException("A plan needs a name of at most 60 characters.");
+        }
+        CoverTier tier = em.createQuery("select t from CoverTier t where t.product = :p and t.name = :n", CoverTier.class)
+                .setParameter("p", product).setParameter("n", name).getResultStream().findFirst().orElse(null);
+        int cover = body.path("cover").asInt(tier == null ? 0 : tier.getCoverAmount());
+        int premium = body.path("premium").asInt(tier == null ? 0 : tier.getPremium());
+        if (cover <= 0 || premium <= 0) {
+            throw new IllegalArgumentException("A plan needs a cover amount and a premium above zero.");
+        }
+        String frequency = defaultText(body, "frequency", tier == null ? "Monthly" : tier.getPremiumFrequency());
+        String benefits = body.has("benefits") ? optional(body, "benefits") : tier == null ? null : tier.getBenefits();
+        if (benefits != null && benefits.length() > 500) {
+            throw new IllegalArgumentException("Describe the plan's benefits in at most 500 characters.");
+        }
+        boolean created = tier == null;
+        if (created) {
+            tier = new CoverTier(product, name);
+        }
+        tier.change(cover, premium, frequency, body.path("popular").asBoolean(!created && tier.isPopular()), benefits,
+                body.path("displayOrder").asInt(created ? 9 : tier.getDisplayOrder()),
+                body.path("active").asBoolean(created || tier.isActive()));
+        em.persist(tier);
+        em.flush();
+        history.record("Product", product.getName(), product.getName(), created ? "Plan added" : "Plan changed", null,
+                null, name + ": cover " + cover + ", premium " + premium + " " + frequency.toLowerCase(Locale.ROOT)
+                        + (tier.isActive() ? "" : " (withdrawn)"), user.getUsername());
+        return productTiers(product.getName());
     }
 
     /** The disclosure questions the portal asks for a product (NS-IL01-003). */

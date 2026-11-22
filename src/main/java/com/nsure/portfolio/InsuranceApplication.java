@@ -105,6 +105,10 @@ public class InsuranceApplication extends CoverRecord implements TieredCover {
     @jakarta.persistence.Column(name = "beneficiaries", length = 4000)
     private String beneficiaries;
 
+    /** The selected policy term in years, where the product sells terms (section 06 Term Life). */
+    @jakarta.persistence.Column(name = "term_years")
+    private Integer termYears;
+
     /** The main life's occupation, assessed by the underwriting rules (NS-IL02-001). */
     @jakarta.persistence.Column(name = "occupation", length = 100)
     private String occupation;
@@ -226,6 +230,14 @@ public class InsuranceApplication extends CoverRecord implements TieredCover {
 
     public void setBeneficiaries(String beneficiaries) {
         this.beneficiaries = beneficiaries;
+    }
+
+    public Integer getTermYears() {
+        return termYears;
+    }
+
+    public void setTermYears(Integer termYears) {
+        this.termYears = termYears;
     }
 
     public String getOccupation() {

@@ -140,6 +140,9 @@ public final class ServicingRecords {
         /** Days after cover starts within which a cancellation is a cooling-off cancellation (NS-IL03-004). */
         @Column(name = "cooling_off_days", nullable = false)
         int coolingOffDays = 30;
+        /** Comma-separated saleable policy terms in years; null when the product has no selected term (section 06). */
+        @Column(name = "term_options", length = 60)
+        String termOptions;
         @Column(name = "updated_by", length = 100)
         String updatedBy;
         @Column(name = "updated_at")

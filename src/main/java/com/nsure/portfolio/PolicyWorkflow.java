@@ -665,6 +665,17 @@ public class PolicyWorkflow {
         policy.setNextPremiumDue(next);
         policy.setGracePeriodEnd(next.plusDays(terms(policy).getGracePeriodDays()));
         policy.setLapseDate(null);
+        // Section 06 Term Life: cover ends at the selected term or the cessation age, whichever is earlier.
+        if (policy.getTermYears() != null && policy.getCoverEndDate() == null) {
+            LocalDate end = start.plusYears(policy.getTermYears());
+            LocalDate born = em.createQuery("select c.dateOfBirth from CustomerAccount c where c.ref = :ref", LocalDate.class)
+                    .setParameter("ref", policy.getCustomerRef()).getResultStream().findFirst().orElse(null);
+            if (born != null) {
+                LocalDate ceases = born.plusYears(productRule(policy.getProduct(), "maxCoverAge", 70));
+                end = ceases.isBefore(end) ? ceases : end;
+            }
+            policy.setCoverEndDate(end);
+        }
     }
 
     /**

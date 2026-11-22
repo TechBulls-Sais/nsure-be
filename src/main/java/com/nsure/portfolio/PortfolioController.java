@@ -197,6 +197,12 @@ public class PortfolioController {
         return portfolio.evidenceQueue();
     }
 
+    /** The policy terms a product sells, in years (section 06 Term Life). */
+    @GetMapping({"/application-terms", "/shop/terms"})
+    public List<Integer> applicationTerms(@RequestParam String product) {
+        return portfolio.applicationTerms(product);
+    }
+
     /** The relationships a payer or proposer may have (NS-IL01-003). */
     @GetMapping("/application-relationships")
     public List<String> applicationRelationships() {
@@ -330,6 +336,19 @@ public class PortfolioController {
     @GetMapping("/products")
     public List<PortfolioViews.ProductView> products() {
         return portfolio.products();
+    }
+
+    /** Every plan of a product, saleable or withdrawn (section 06 product packs). */
+    @GetMapping("/products/{product}/tiers")
+    public List<PortfolioViews.TierRecordView> productTiers(@PathVariable String product) {
+        return portfolio.productTiers(product);
+    }
+
+    /** {cover, premium, frequency?, popular?, benefits?, displayOrder?, active?}: adds or changes a plan. */
+    @PutMapping("/products/{product}/tiers/{tier}")
+    public List<PortfolioViews.TierRecordView> saveTier(@PathVariable String product, @PathVariable String tier,
+            @RequestBody JsonNode body) {
+        return portfolio.saveTier(product, tier, body);
     }
 
     @GetMapping("/schemes")

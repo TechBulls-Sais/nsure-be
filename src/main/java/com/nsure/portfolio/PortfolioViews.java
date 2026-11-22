@@ -136,6 +136,9 @@ public final class PortfolioViews {
             // The proposer and payer as party records, when linked (NS-IL01-002).
             String proposerRef,
             String payerRef,
+            // Section 06: the selected policy term and the terms the product sells (empty when none).
+            Integer termYears,
+            List<Integer> termOptions,
             // Beneficiaries nominated on the application, added to the policy at issue.
             List<BeneficiaryView> beneficiaries) {
     }
@@ -386,6 +389,11 @@ public final class PortfolioViews {
             List<TierView> tiers,
             String productType
     ) {
+    }
+
+    /** One plan of a product with its maintenance fields (section 06 product packs). */
+    public record TierRecordView(Long id, String product, String name, int cover, int premium, String frequency,
+            boolean popular, String benefits, int displayOrder, boolean active) {
     }
 
     public record TierView(

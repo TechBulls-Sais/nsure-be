@@ -124,6 +124,18 @@ public class ApplicationCapture {
         if (body.has("occupation")) {
             app.setOccupation(clip(text(body, "occupation"), 100));
         }
+        if (body.has("termYears")) {
+            // Section 06 Term Life: the selected term must be one the product sells.
+            String term = text(body, "termYears");
+            Integer years = term == null ? null : Integer.valueOf(term);
+            List<Integer> options = termOptions(app.getProduct());
+            if (years != null && !options.contains(years)) {
+                throw new IllegalArgumentException(app.getProduct() + (options.isEmpty() ? " has no selected policy term."
+                        : " is sold for terms of " + options.stream().map(String::valueOf)
+                                .collect(java.util.stream.Collectors.joining(", ")) + " years."));
+            }
+            app.setTermYears(years);
+        }
         if (body.path("declarationAccepted").asBoolean(false) && app.getDeclaredAt() == null) {
             app.setDeclaredBy(actor);
             app.setDeclaredAt(LocalDateTime.now());
@@ -316,7 +328,8 @@ public class ApplicationCapture {
                 app.getSubmittedAt(), disclosures, items, draft ? submissionProblems(app) : List.of(),
                 missingEvidence(app, customer), preCapture, app.getPayerName(), app.getPayerRelationship(),
                 app.getRowVersion(), app.getOccupation(), app.getProposerName(), app.getProposerRelationship(),
-                app.getProposerRef(), app.getPayerRef(), beneficiaries(app).stream()
+                app.getProposerRef(), app.getPayerRef(), app.getTermYears(), termOptions(app.getProduct()),
+                beneficiaries(app).stream()
                         .map(b -> new PortfolioViews.BeneficiaryView(null, b.fullName(), b.relationship(), b.nationalId(),
                                 b.mobile(), null, null, b.primary()))
                         .toList());
@@ -392,6 +405,27 @@ public class ApplicationCapture {
             }
         }
         return names;
+    }
+
+    /** The saleable policy terms of a product in years (product servicing rule); empty when it sells none. */
+    public List<Integer> termOptions(String product) {
+        List<String> found = em.createQuery("select r.termOptions from ServicingRule r where r.product = :p", String.class)
+                .setParameter("p", product).getResultList();
+        String raw = found.isEmpty() ? null : found.get(0);
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(raw.split(",")).map(String::trim).filter(v -> !v.isEmpty())
+                .map(Integer::valueOf).toList();
+    }
+
+    /** The term a policy takes: the one selected, or the longest the product sells when none was chosen. */
+    public Integer termFor(InsuranceApplication app) {
+        List<Integer> options = termOptions(app.getProduct());
+        if (options.isEmpty()) {
+            return null;
+        }
+        return app.getTermYears() != null ? app.getTermYears() : options.stream().max(Integer::compareTo).orElse(null);
     }
 
     /** The beneficiaries nominated on the application (NS-IL01-002). */
