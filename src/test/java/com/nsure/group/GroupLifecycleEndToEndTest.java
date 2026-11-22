@@ -145,6 +145,8 @@ class GroupLifecycleEndToEndTest {
         dispatcher.dispatch();
         assertJournal(febRef, new BigDecimal("1200.00"));
         assertJournal(receipt, new BigDecimal("1000.00"));
+        // The paid claim posts its benefit once (GroupClaimPaid).
+        assertJournal(claim, new BigDecimal("250000.00"));
     }
 
     private void assertJournal(String sourceRef, BigDecimal amount) {

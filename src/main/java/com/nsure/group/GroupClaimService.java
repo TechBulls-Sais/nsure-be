@@ -150,6 +150,15 @@ public class GroupClaimService {
                 claim.paid(GroupRecords.requiredText(body, "paymentReference", "Payment reference", 80),
                         user.getUsername());
                 accelerate(claim, user.getUsername());
+                // The paid benefit posts to the subledger (posting rule GroupClaimPaid, changeset 153).
+                Map<String, Object> paid = new java.util.LinkedHashMap<>();
+                paid.put("schemeRef", claim.getScheme().getRef());
+                paid.put("claimRef", claim.getRef());
+                paid.put("memberKey", claim.getMember().getMemberKey());
+                paid.put("benefit", claim.getBenefitType());
+                paid.put("paymentReference", claim.getPaymentReference());
+                paid.put("amount", claim.getApprovedAmount().toPlainString());
+                records.publish(com.nsure.integration.Events.GROUP_CLAIM_PAID, claim.getRef(), paid, user.getUsername());
             }
             case "REVIEW" -> {
                 user.validateHasPermissionTo("ASSESS_CLAIM");
