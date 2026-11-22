@@ -320,3 +320,6 @@ databaseChangeLog:
   - include:
       file: changes/199-partner-submissions.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/200-document-links-and-disposal.yaml
+      relativeToChangelogFile: true

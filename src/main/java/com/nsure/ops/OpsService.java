@@ -576,6 +576,114 @@ public class OpsService {
         return Map.of("docKey", docKey, "legalHold", hold);
     }
 
+    // ── approved disposal (NS-SH09A-006) ─────────────────────────────────────────────────────────
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.nsure.portfolio.DocumentFiles documentFiles;
+
+    /** Disposal requests, newest first. */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> disposals() {
+        staff();
+        return jdbc.query("select * from doc_disposal order by id desc", ROW);
+    }
+
+    /**
+     * {docKey, reason}: asks for a policy document or claim evidence to be disposed of. Only a document past its
+     * retention date and not on legal hold qualifies; nothing happens until someone else approves.
+     */
+    @Transactional
+    public Map<String, Object> requestDisposal(JsonNode body) {
+        AppUser user = user("MANAGE_CONFIG");
+        String key = required(body, "docKey");
+        String reason = required(body, "reason");
+        if (reason.length() < 10) {
+            throw new IllegalArgumentException("Give the reason for disposal (at least 10 characters).");
+        }
+        Map<String, Object> doc = disposable(key);
+        Integer open = jdbc.queryForObject("select count(*) from doc_disposal where doc_key = ? and status = 'PENDING'",
+                Integer.class, key);
+        if (open != null && open > 0) {
+            throw new ConflictException("A disposal of this document is already waiting for approval.");
+        }
+        jdbc.update("insert into doc_disposal (doc_key, file_name, reason, status, requested_by, requested_at) values"
+                + " (?, ?, ?, 'PENDING', ?, ?)", key, doc.get("fileName"), reason, user.getUsername(), LocalDateTime.now());
+        audit.record(user.getUsername(), "Document disposal requested", "Document", key, reason);
+        return first("select * from doc_disposal where doc_key = ? and status = 'PENDING'", key);
+    }
+
+    /**
+     * A second person approves: the file is deleted from storage, its indexed text cleared (no search can find it),
+     * and the row kept as DISPOSED with the decision in the evidence chain. Retention and holds are checked again.
+     */
+    @Transactional
+    public Map<String, Object> decideDisposal(Long id, boolean approve) {
+        AppUser user = user("MANAGE_CONFIG");
+        Map<String, Object> d = first("select * from doc_disposal where id = ?", id);
+        if (d == null) {
+            throw new NotFoundException("Disposal request " + id + " not found");
+        }
+        if (!"PENDING".equals(d.get("status"))) {
+            throw new ConflictException("Disposal request " + id + " is " + d.get("status") + ".");
+        }
+        if (user.getUsername().equalsIgnoreCase((String) d.get("requestedBy"))) {
+            throw new NoAuthorizationException("You asked for this disposal, so another person decides it.");
+        }
+        String key = (String) d.get("docKey");
+        if (approve) {
+            Map<String, Object> doc = disposable(key);
+            String table = key.startsWith("P:") ? "ins_policy_document" : "ins_claim_document";
+            documentFiles.dispose((String) doc.get("storagePath"));
+            jdbc.update("update " + table + " set status = 'DISPOSED', search_text = null where id = ?", doc.get("id"));
+        }
+        jdbc.update("update doc_disposal set status = ?, decided_by = ?, decided_at = ? where id = ?",
+                approve ? "DISPOSED" : "REJECTED", user.getUsername(), LocalDateTime.now(), id);
+        audit.record(user.getUsername(), approve ? "Document disposed" : "Document disposal rejected", "Document", key,
+                "Requested by " + d.get("requestedBy") + ": " + d.get("reason"));
+        return first("select * from doc_disposal where id = ?", id);
+    }
+
+    /** The document behind a key, refused unless its retention has passed and it is not on legal hold. */
+    private Map<String, Object> disposable(String key) {
+        String table;
+        String docClass;
+        if (key.startsWith("P:")) {
+            table = "ins_policy_document";
+            docClass = "Policy document";
+        } else if (key.startsWith("C:")) {
+            table = "ins_claim_document";
+            docClass = "Claim evidence";
+        } else {
+            throw new IllegalArgumentException("Only policy documents and claim evidence are disposed of here.");
+        }
+        long id;
+        try {
+            id = Long.parseLong(key.substring(2));
+        } catch (NumberFormatException e) {
+            throw new NotFoundException("Document " + key + " not found");
+        }
+        Map<String, Object> doc = first("select id, file_name, storage_path, status, uploaded_at from " + table
+                + " where id = ?", id);
+        if (doc == null) {
+            throw new NotFoundException("Document " + key + " not found");
+        }
+        if ("DISPOSED".equals(doc.get("status"))) {
+            throw new ConflictException(doc.get("fileName") + " was already disposed of.");
+        }
+        Map<String, Object> control = first("select legal_hold, hold_reason from doc_control where doc_key = ?", key);
+        if (control != null && Boolean.TRUE.equals(control.get("legalHold"))) {
+            throw new ConflictException(doc.get("fileName") + " is on legal hold (" + control.get("holdReason")
+                    + "), so it cannot be disposed of.");
+        }
+        Integer years = jdbc.queryForObject("select retain_years from doc_retention where document_class = ?",
+                Integer.class, docClass);
+        LocalDate retainUntil = ((LocalDateTime) doc.get("uploadedAt")).toLocalDate().plusYears(years == null ? 7 : years);
+        if (!retainUntil.isBefore(LocalDate.now())) {
+            throw new ConflictException(doc.get("fileName") + " must be kept until " + retainUntil + ".");
+        }
+        return doc;
+    }
+
     /** {documentClass, retainYears} */
     @Transactional
     public Map<String, Object> saveRetention(JsonNode body) {

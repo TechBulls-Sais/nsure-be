@@ -63,6 +63,16 @@ public class DocumentFiles {
         }
     }
 
+    /** Deletes a disposed document's file (NS-SH09A-006 approved disposal); true when it is gone. */
+    public boolean dispose(String storagePath) {
+        try {
+            Files.deleteIfExists(resolve(storagePath));
+            return true;
+        } catch (IOException | IllegalArgumentException e) {
+            return false;
+        }
+    }
+
     /** Removes a file whose row was not saved; an orphan left behind is harmless. */
     void deleteQuietly(String storagePath) {
         try {

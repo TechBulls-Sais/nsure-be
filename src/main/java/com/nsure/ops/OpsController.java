@@ -86,6 +86,26 @@ public class OpsController {
         return ops.documents(q, customerRef, ownerRef, documentClass, from, to);
     }
 
+    @GetMapping("/documents/disposals")
+    public List<Map<String, Object>> disposals() {
+        return ops.disposals();
+    }
+
+    @PostMapping("/documents/disposals")
+    public Map<String, Object> requestDisposal(@RequestBody JsonNode body) {
+        return ops.requestDisposal(body);
+    }
+
+    @PostMapping("/documents/disposals/{id}/approve")
+    public Map<String, Object> approveDisposal(@PathVariable Long id) {
+        return ops.decideDisposal(id, true);
+    }
+
+    @PostMapping("/documents/disposals/{id}/reject")
+    public Map<String, Object> rejectDisposal(@PathVariable Long id) {
+        return ops.decideDisposal(id, false);
+    }
+
     @PutMapping("/documents/hold")
     public Map<String, Object> legalHold(@RequestParam String docKey, @RequestBody JsonNode body) {
         return ops.legalHold(docKey, body);

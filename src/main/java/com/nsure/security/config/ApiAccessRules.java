@@ -194,6 +194,9 @@ public final class ApiAccessRules {
             rule(GET, "/portfolio/claims/*/document-access", anyOf("READ_AUDIT")),
             // The upload quarantine (AT-SH09A-02): the queue for claim staff, decisions for the document reviewer.
             rule(GET, "/portfolio/document-quarantine", anyOf("READ_CLAIM", "READ_CUSTOMER", "READ_SERVICE_CASE")),
+            // NS-SH09A-006 short-lived links: anyone signed in asks; the service checks the owning record's access.
+            rule(POST, "/portfolio/document-links", authenticated()),
+            rule(GET, "/portfolio/document-links/*", authenticated()),
             rule(GET, "/portfolio/document-quarantine/*/file", anyOf("RELEASE_DOCUMENT")),
             rule(POST, "/portfolio/document-quarantine/*/release", anyOf("RELEASE_DOCUMENT")),
             rule(POST, "/portfolio/document-quarantine/*/reject", anyOf("RELEASE_DOCUMENT")),
@@ -415,6 +418,10 @@ public final class ApiAccessRules {
             rule(GET, "/ops/queue/assignees", anyOf("ASSIGN_WORK")),
             rule(GET, "/ops/documents", anyOf("READ_POLICY", "READ_CLAIM")),
             rule(PUT, "/ops/documents/hold", anyOf("UPDATE_POLICY")),
+            rule(GET, "/ops/documents/disposals", anyOf("READ_POLICY", "READ_CLAIM", "MANAGE_CONFIG")),
+            rule(POST, "/ops/documents/disposals", anyOf("MANAGE_CONFIG")),
+            rule(POST, "/ops/documents/disposals/*/approve", anyOf("MANAGE_CONFIG")),
+            rule(POST, "/ops/documents/disposals/*/reject", anyOf("MANAGE_CONFIG")),
             rule(PUT, "/ops/documents/retention", anyOf("MANAGE_CONFIG")),
             rule(GET, "/ops/payouts", anyOf("READ_CLAIM")),
 
