@@ -72,7 +72,8 @@ class PlatformServicesApiTest {
                 .andExpect(jsonPath("$.reviewStatus").value("PENDING"))
                 .andExpect(jsonPath("$.output[0]").value(containsString("Dear Bonolo")))
                 .andReturn().getResponse().getContentAsString(), "$.id");
-        mockMvc.perform(json(post("/platform/assistants/log/" + id + "/review"), "admin", "{\"accept\":true}"))
+        // A drafted customer message is reviewed by someone other than the person who asked (four eyes).
+        mockMvc.perform(json(post("/platform/assistants/log/" + id + "/review"), "secadmin", "{\"accept\":true}"))
                 .andExpect(jsonPath("$.reviewStatus").value("ACCEPTED"));
         // NS-AIG-006: switched off, the assistant says so and the manual route is unaffected.
         mockMvc.perform(json(put("/platform/assistants/DRAFT_MESSAGE"), "admin", "{\"enabled\":false}")).andExpect(status().isOk());

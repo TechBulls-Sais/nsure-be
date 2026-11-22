@@ -1,0 +1,95 @@
+databaseChangeLog:
+  # Specification section 15 and 17: governance around the rule-based assistants (no AI model is called) — permitted
+  # inputs, review authority, thresholds, approved version changes separate from wording edits, review outcomes with
+  # overrides and the final human text — plus the RFP AI coverage register and the scope-exception register.
+  - changeSet:
+      id: 213-governed-assistants
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ai_use_case
+            columns:
+              - column: {name: engine, type: varchar(80), defaultValue: 'Deterministic rules (no AI model)', constraints: {nullable: false}}
+              - column: {name: permitted_inputs, type: varchar(400)}
+              - column: {name: outputs, type: varchar(300)}
+              - column: {name: review_permission, type: varchar(60), defaultValue: 'READ_CUSTOMER', constraints: {nullable: false}}
+              - column: {name: four_eyes, type: boolean, defaultValueBoolean: false, constraints: {nullable: false}}
+              - column: {name: acceptance_threshold, type: int, defaultValueNumeric: 80, constraints: {nullable: false}}
+              - column: {name: approval_status, type: varchar(20), defaultValue: 'APPROVED', constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+        - addColumn:
+            tableName: ai_interaction
+            columns:
+              - column: {name: explanation, type: varchar(1000)}
+              - column: {name: template_ref, type: varchar(80)}
+              - column: {name: final_text, type: varchar(4000)}
+              - column: {name: review_reason, type: varchar(500)}
+              - column: {name: reviewed_at, type: datetime}
+              - column: {name: sent_ref, type: varchar(40)}
+        - createTable:
+            tableName: ai_model_change
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ai_model_change}}
+              - column: {name: use_case, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: from_version, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: to_version, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: change_note, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: validation_summary, type: varchar(500)}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: datetime}
+              - column: {name: decision_note, type: varchar(500)}
+        - createTable:
+            tableName: ai_rfp_disposition
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ai_rfp_disposition}}
+              - column: {name: rfp_range, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: capability, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: disposition, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: delivered_by, type: varchar(300)}
+              - column: {name: controls, type: varchar(300)}
+              - column: {name: limits, type: varchar(400)}
+              - column: {name: decision_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: owner, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+        - createTable:
+            tableName: scope_exception
+            columns:
+              - column: {name: code, type: varchar(30), constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_scope_exception}}
+              - column: {name: requirement, type: varchar(200), constraints: {nullable: false}}
+              - column: {name: current_position, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: proposed_disposition, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: decision_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: owner, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: decision_note, type: varchar(500)}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: datetime}
+        - sql:
+            comment: Register values are demo defaults pending decision D15 (AI) and D01/D05/D08 (scope).
+            sql: |
+              UPDATE ai_use_case SET permitted_inputs = 'Application, its customer (KYC status, date of birth) and underwriting case and evidence status; no medical answers', outputs = 'List of outstanding items with record sources', review_permission = 'READ_APPLICATION', four_eyes = FALSE, acceptance_threshold = 80 WHERE code = 'APPLICATION_CHECK';
+              UPDATE ai_use_case SET permitted_inputs = 'Claim, its policy and other claims on the policy; no medical evidence or documents', outputs = 'Case summary and points to check, with sources', review_permission = 'READ_CLAIM', four_eyes = FALSE, acceptance_threshold = 80 WHERE code = 'CLAIM_SUMMARY';
+              UPDATE ai_use_case SET permitted_inputs = 'Customer name and the approved message template for the purpose; latest policy and claim references', outputs = 'Draft customer message for review before sending', review_permission = 'MANAGE_COMMUNICATION', four_eyes = TRUE, acceptance_threshold = 90 WHERE code = 'DRAFT_MESSAGE';
+              UPDATE ai_use_case SET permitted_inputs = 'Customer policies (status, sum assured) and claim count; no health data', outputs = 'Advisory lapse/claims indicators with the facts behind them', review_permission = 'READ_CUSTOMER', four_eyes = FALSE, acceptance_threshold = 70 WHERE code = 'RISK_SCORE';
+
+              INSERT INTO ai_rfp_disposition (rfp_range, capability, disposition, delivered_by, controls, limits, decision_ref, owner, status) VALUES
+              ('AI-001-010', 'Underwriting governance, risk scoring and medical extraction', 'PARTLY_RULES', 'APPLICATION_CHECK and RISK_SCORE assistants; deterministic underwriting rules (IL02/GL03)', 'Human review, register, switch, monitoring', 'No statistical risk score or medical extraction: needs approved data, validation and bias review', 'D15', 'Chief Underwriter', 'PROPOSED'),
+              ('AI-011-018', 'Claims classification, extraction, anomaly/risk scoring, prioritisation and recommendations', 'PARTLY_RULES', 'CLAIM_SUMMARY assistant; rule-based claim checks and duplicate checks', 'Human review, register, switch, monitoring', 'No model-based classification or document extraction (OCR not selected)', 'D15', 'Head of Claims', 'PROPOSED'),
+              ('AI-019-025', 'Lapse, retention, fraud and network analysis; evidence cases', 'PARTLY_RULES', 'RISK_SCORE lapse/claims indicators; rule-based party duplicate detection', 'Advisory only; never a decision', 'No predictive lapse or fraud model; network analysis not built', 'D15', 'Head of Customer Service', 'PROPOSED'),
+              ('AI-026-032', 'Authenticated assistants: approved sources, escalation, languages, confidence, logs, access', 'PARTLY_RULES', 'DRAFT_MESSAGE from approved templates with four-eyes review and send; interaction log', 'Template versions logged, final human text kept', 'No conversational chatbot (needs an approved model and hosting)', 'D15', 'Head of Customer Service', 'PROPOSED'),
+              ('AI-033-039', 'Executive analytics, metric citation and drill-through, trends, forecasting', 'PARTLY_RULES', 'Management dashboard with governed metric dictionary, drill-through and exports', 'Each figure cites its dictionary entry', 'No forecasting or copilot', 'D15', 'Chief Operating Officer', 'PROPOSED'),
+              ('AI-040-050', 'Owner, fairness, validation, rollback/change, false-positive monitoring, overrides, review, data quality, search, disable', 'DELIVERED_RULES', 'Assistant register (owner, inputs, version, threshold), approved version changes, monitoring, override log, switch', 'Maker-checker on version changes; review authority', 'No held-out validation dataset or subgroup fairness tests (no model)', 'D15', 'Chief Risk Officer', 'PROPOSED');
+
+              INSERT INTO scope_exception (code, requirement, current_position, proposed_disposition, decision_ref, owner, status) VALUES
+              ('FR-012', 'Endowment product (RFP mandatory)', 'No endowment product pack was supplied; no endowment product or logic in this build.', 'Phase exception: deliver once the insurer supplies an approved endowment pack (benefits, maturity values, rates).', 'D01', 'Product owner', 'PROPOSED'),
+              ('FR-060', 'Surrender and maturity values', 'Surrender, maturity and paid-up only where a product has an approved servicing rule; no seeded product has one; no surrender on Whole of Life.', 'Implement only approved contractual values and triggers per product.', 'D05', 'Actuarial', 'PROPOSED'),
+              ('FR-099', 'Persistency-linked commission', 'Persistency (13-month) is computed on the dashboard with its definition awaiting actuarial approval; no persistency commission rule.', 'Agree metric, period, eligibility and payment/clawback formula; then configure in distribution.', 'D08', 'Distribution', 'PROPOSED'),
+              ('FR-126-135', 'Actuarial / IFRS 17 calculation', 'Versioned extracts with counts, control totals and checksum; no IFRS 17 engine.', 'External valuation engine; this system supplies data only.', 'D07', 'Finance', 'PROPOSED'),
+              ('FR-157', 'OCR', 'Documents are stored and hash-sealed; no OCR component is selected or connected.', 'Select an OCR component, supported documents/languages and accuracy; add a verification workflow.', 'D12', 'Operations', 'PROPOSED'),
+              ('FR-226-235', 'Investment administration', 'No investment administration; no investment transactions are enabled, so FR-232 is not triggered.', 'Separate/conditional scope; FR-232 audit obligations apply if enabled.', 'D01', 'Product owner', 'PROPOSED'),
+              ('DIGITAL-MOBILE', 'Native mobile apps and offline use', 'Responsive web portals only; no native app or offline mode.', 'Responsive portals first; native app scope, devices and offline behaviour to be agreed.', 'D01', 'Digital', 'PROPOSED'),
+              ('AI-MANDATORY', 'Mandatory RFP AI items', 'Four rule-based governed assistants; no AI model is called (see the AI coverage register).', 'Individual disposition per AI item group; predictive and model-based items deferred until data, validation and hosting are approved.', 'D15', 'Chief Risk Officer', 'PROPOSED');

@@ -17,9 +17,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class PlatformController {
 
     private final PlatformService platform;
+    private final AssistantGovernance governance;
 
-    public PlatformController(PlatformService platform) {
+    public PlatformController(PlatformService platform, AssistantGovernance governance) {
         this.platform = platform;
+        this.governance = governance;
     }
 
     @GetMapping("/parties/duplicates")
@@ -113,8 +115,53 @@ public class PlatformController {
         return platform.riskIndicators(customerRef);
     }
 
+    /** {decision ACCEPT | OVERRIDE | REJECT, reason, finalText}: the human review of one output. */
     @PostMapping("/assistants/log/{id}/review")
     public Map<String, Object> review(@PathVariable Long id, @RequestBody JsonNode body) {
         return platform.review(id, body);
+    }
+
+    /** Sends a reviewed draft message as the reviewer's final text. */
+    @PostMapping("/assistants/log/{id}/send")
+    public Map<String, Object> sendDraft(@PathVariable Long id) {
+        return platform.sendDraft(id);
+    }
+
+    @GetMapping("/assistants/changes")
+    public List<Map<String, Object>> changes() {
+        return governance.changes();
+    }
+
+    /** {toVersion, changeNote, validationSummary?}: a version change of an assistant's rules, for approval. */
+    @PostMapping("/assistants/{code}/changes")
+    public Map<String, Object> requestChange(@PathVariable String code, @RequestBody JsonNode body) {
+        return governance.requestChange(code, body);
+    }
+
+    /** {approve, note}. */
+    @PostMapping("/assistants/changes/{id}/decision")
+    public Map<String, Object> decideChange(@PathVariable Long id, @RequestBody JsonNode body) {
+        return governance.decideChange(id, body);
+    }
+
+    @GetMapping("/assistants/monitoring")
+    public List<Map<String, Object>> monitoring() {
+        return governance.monitoring();
+    }
+
+    @GetMapping("/ai-coverage")
+    public List<Map<String, Object>> aiCoverage() {
+        return governance.dispositions();
+    }
+
+    @GetMapping("/scope-exceptions")
+    public List<Map<String, Object>> scopeExceptions() {
+        return governance.scopeExceptions();
+    }
+
+    /** {decision ACCEPTED | REJECTED, note}: the insurer's decision on a proposed scope exception. */
+    @PostMapping("/scope-exceptions/{code}/decision")
+    public Map<String, Object> decideScope(@PathVariable String code, @RequestBody JsonNode body) {
+        return governance.decideScope(code, body);
     }
 }

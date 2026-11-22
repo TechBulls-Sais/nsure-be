@@ -52,6 +52,10 @@ public class PlatformService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.nsure.portfolio.PartyRegister parties;
 
+    /** Sends a reviewed draft as a service message (consent and logging stay with communications). */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.nsure.communication.CommunicationService communications;
+
     /** The governed metric dictionary (NS-SH13-003), owned by reporting. */
     @org.springframework.beans.factory.annotation.Autowired
     private com.nsure.reporting.MetricDictionary dictionary;
@@ -369,6 +373,9 @@ public class PlatformService {
     }
 
     // ── governed assistants (NS-AIG-001..006) ─────────────────────────────────────────────────────
+    // No AI model is called anywhere: each assistant is a set of deterministic rules over the record's own data. The
+    // governance around them (register, permitted inputs, approved versions, review authority, overrides, thresholds,
+    // switch) is what a model would sit inside once one is approved (decision D15).
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> useCases() {
@@ -380,6 +387,13 @@ public class PlatformService {
             m.put("purpose", rs.getString("purpose"));
             m.put("owner", rs.getString("owner"));
             m.put("modelVersion", rs.getString("model_version"));
+            m.put("engine", rs.getString("engine"));
+            m.put("permittedInputs", rs.getString("permitted_inputs"));
+            m.put("outputs", rs.getString("outputs"));
+            m.put("reviewPermission", rs.getString("review_permission"));
+            m.put("fourEyes", rs.getBoolean("four_eyes"));
+            m.put("acceptanceThreshold", rs.getInt("acceptance_threshold"));
+            m.put("approvalStatus", rs.getString("approval_status"));
             m.put("enabled", rs.getBoolean("enabled"));
             m.put("updatedBy", rs.getString("updated_by"));
             return m;
@@ -390,23 +404,42 @@ public class PlatformService {
     @Transactional
     public List<Map<String, Object>> switchUseCase(String code, JsonNode body) {
         AppUser user = user("MANAGE_CONFIG");
-        if (jdbc.update("update ai_use_case set enabled = ?, updated_by = ?, updated_at = ? where code = ?",
-                body.path("enabled").asBoolean(false), user.getUsername(), LocalDateTime.now(), code) == 0) {
+        boolean enable = body.path("enabled").asBoolean(false);
+        List<String> approval = jdbc.queryForList("select approval_status from ai_use_case where code = ?",
+                String.class, code);
+        if (approval.isEmpty()) {
             throw new NotFoundException("Assistant " + code + " not found");
         }
-        audit.record(user.getUsername(), "Assistant " + (body.path("enabled").asBoolean(false) ? "enabled" : "disabled"),
-                "Assistant", code, null);
+        if (enable && !"APPROVED".equals(approval.get(0))) {
+            throw new ConflictException("Assistant " + code + " has no approved version, so it cannot be switched on.");
+        }
+        jdbc.update("update ai_use_case set enabled = ?, updated_by = ?, updated_at = ? where code = ?", enable,
+                user.getUsername(), LocalDateTime.now(), code);
+        audit.record(user.getUsername(), "Assistant " + (enable ? "enabled" : "disabled"), "Assistant", code, null);
         return useCases();
     }
 
+    /**
+     * The interaction log. NS-AIG-002: an output is shown only to a reader who may read its subject (the use case's
+     * review permission); for anyone else the text is withheld and only the metadata shows.
+     */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> interactions() {
-        user("READ_AUDIT");
-        return jdbc.query("select * from ai_interaction order by id desc", (rs, n) -> interaction(rs.getLong("id"),
-                rs.getString("use_case"), rs.getString("subject_ref"), rs.getString("model_version"),
-                rs.getString("output"), rs.getString("sources"), rs.getInt("confidence"), rs.getString("review_status"),
-                rs.getString("reviewed_by"), rs.getString("requested_by"), rs.getTimestamp("requested_at")
-                        .toLocalDateTime()));
+        AppUser user = user("READ_AUDIT");
+        Map<String, String> permissions = new java.util.HashMap<>();
+        jdbc.query("select code, review_permission from ai_use_case", rs -> {
+            permissions.put(rs.getString(1), rs.getString(2));
+        });
+        return jdbc.query("select * from ai_interaction order by id desc", (rs, n) -> {
+            Map<String, Object> m = interaction(rs);
+            String needed = permissions.getOrDefault(rs.getString("use_case"), "READ_CUSTOMER");
+            if (!user.hasPermissionTo(needed)) {
+                m.put("output", List.of("[Withheld: reading this output needs " + needed + "]"));
+                m.put("finalText", null);
+                m.put("withheld", true);
+            }
+            return m;
+        });
     }
 
     /** What an application still needs, each finding with where it comes from. */
@@ -418,43 +451,70 @@ public class PlatformService {
                 .orElseThrow(() -> new NotFoundException("Application " + applicationRef + " not found"));
         List<String> lines = new ArrayList<>();
         List<String> sources = new ArrayList<>();
+        List<String> rules = new ArrayList<>();
+        int checks = 0;
+        int known = 0;
         CustomerAccount c = app.getCustomerRef() == null ? null : em.createQuery(
                 "select c from CustomerAccount c where c.ref = :ref", CustomerAccount.class)
                 .setParameter("ref", app.getCustomerRef()).getResultStream().findFirst().orElse(null);
+        checks += 3;
         if (c == null) {
             lines.add("No customer record is linked.");
+            rules.add("R1 customer linked: no");
         } else {
+            known++;
+            rules.add("R1 customer linked: yes");
+            if (c.getKycStatus() != null) {
+                known++;
+            }
             if (!"VERIFIED".equals(c.getKycStatus())) {
                 lines.add("Identity is not verified (KYC " + c.getKycStatus() + ").");
+                rules.add("R2 KYC verified: no");
+            } else {
+                rules.add("R2 KYC verified: yes");
             }
             if (c.getDateOfBirth() == null) {
                 lines.add("Date of birth is missing, so entry age cannot be checked.");
+                rules.add("R3 date of birth present: no");
+            } else {
+                known++;
+                rules.add("R3 date of birth present: yes");
             }
             sources.add("Customer " + c.getRef());
         }
-        List<String> uw = jdbc.queryForList("select status from uw_case where application_ref = ?", String.class,
-                applicationRef);
-        if (uw.isEmpty()) {
-            lines.add("Not yet submitted to underwriting.");
-        } else {
-            sources.add("Underwriting case");
-            if (!"ACCEPTED".equals(uw.get(0))) {
-                lines.add("Underwriting is " + uw.get(0).toLowerCase(Locale.ROOT).replace('_', ' ') + ".");
-            }
-            Integer evidence = jdbc.queryForObject("select count(*) from uw_evidence e join uw_case c on"
-                    + " c.record_ref = e.case_ref where c.application_ref = ? and e.status = 'REQUESTED'", Integer.class,
+        // Underwriting detail is only read for someone who may see underwriting (NS-AIG-002).
+        if (user.hasPermissionTo("READ_UNDERWRITING")) {
+            checks += 2;
+            List<String> uw = jdbc.queryForList("select status from uw_case where application_ref = ?", String.class,
                     applicationRef);
-            if (evidence != null && evidence > 0) {
-                lines.add(evidence + " underwriting evidence request(s) are outstanding.");
+            if (uw.isEmpty()) {
+                lines.add("Not yet submitted to underwriting.");
+                rules.add("R4 underwriting case: none");
+            } else {
+                known += 2;
+                sources.add("Underwriting case");
+                rules.add("R4 underwriting case: " + uw.get(0));
+                if (!"ACCEPTED".equals(uw.get(0))) {
+                    lines.add("Underwriting is " + uw.get(0).toLowerCase(Locale.ROOT).replace('_', ' ') + ".");
+                }
+                Integer evidence = jdbc.queryForObject("select count(*) from uw_evidence e join uw_case c on"
+                        + " c.record_ref = e.case_ref where c.application_ref = ? and e.status = 'REQUESTED'",
+                        Integer.class, applicationRef);
+                rules.add("R5 evidence outstanding: " + evidence);
+                if (evidence != null && evidence > 0) {
+                    lines.add(evidence + " underwriting evidence request(s) are outstanding.");
+                }
             }
+        } else {
+            rules.add("R4-R5 underwriting not read: the requester may not see underwriting");
         }
         sources.add("Application " + app.getRef() + " (" + app.getStatus() + ")");
         String output = lines.isEmpty() ? "Nothing outstanding: the application is complete on the records held."
                 : String.join("\n", lines);
-        return log("APPLICATION_CHECK", applicationRef, output, sources, lines.isEmpty() ? 95 : 90, user);
+        return log("APPLICATION_CHECK", applicationRef, output, sources, confidence(known, checks), rules, null, user);
     }
 
-    /** A summary of the claim from its own record, for the assessor. */
+    /** A summary of the claim from its own record, for the assessor. Medical evidence is never read. */
     @Transactional
     public Map<String, Object> claimSummary(String claimRef) {
         AppUser user = user("READ_CLAIM");
@@ -462,55 +522,134 @@ public class PlatformService {
                 .setParameter("ref", claimRef).getResultStream().findFirst()
                 .orElseThrow(() -> new NotFoundException("Claim " + claimRef + " not found"));
         List<String> lines = new ArrayList<>();
+        List<String> rules = new ArrayList<>();
+        int checks = 4;
+        int known = 0;
         lines.add(claim.getCustomerName() + " claims " + Money.text(claim.getAmount()) + " under " + claim.getProduct()
                 + " policy " + claim.getPolicyRef() + ".");
         lines.add("Claim type: " + (claim.getClaimType() == null ? "not stated" : claim.getClaimType()) + "; event date: "
                 + (claim.getEventDate() == null ? "not recorded" : claim.getEventDate()) + "; status: "
                 + claim.getStatus() + ".");
+        if (claim.getClaimType() != null) {
+            known++;
+        }
         InsurancePolicy policy = claim.getPolicyRef() == null ? null : em.createQuery(
                 "select p from InsurancePolicy p where p.ref = :ref", InsurancePolicy.class)
                 .setParameter("ref", claim.getPolicyRef()).getResultStream().findFirst().orElse(null);
         List<String> sources = new ArrayList<>(List.of("Claim " + claim.getRef()));
         if (policy != null) {
+            known++;
             sources.add("Policy " + policy.getRef());
             lines.add("Policy is " + policy.getStatus() + ", cover from " + policy.getCoverStartDate() + ", sum assured "
                     + Money.text(policy.getAmount()) + ".");
             try {
                 LocalDate event = LocalDate.parse(claim.getEventDate().trim());
-                if (policy.getCoverStartDate() != null && event.isBefore(policy.getCoverStartDate().plusMonths(6))) {
+                known++;
+                boolean waiting = policy.getCoverStartDate() != null
+                        && event.isBefore(policy.getCoverStartDate().plusMonths(6));
+                rules.add("W1 event within 6 months of cover start: " + (waiting ? "yes" : "no"));
+                if (waiting) {
                     lines.add("Point to check: the event is within 6 months of the cover start (waiting period).");
                 }
             } catch (RuntimeException ignored) {
+                rules.add("W1 event date usable: no");
                 lines.add("Point to check: the event date is missing or not a date.");
             }
+        } else {
+            rules.add("P1 policy found: no");
         }
         Integer earlier = jdbc.queryForObject("select count(*) from ins_claim where policy_ref = ? and record_ref <> ?",
                 Integer.class, claim.getPolicyRef(), claim.getRef());
+        known++;
+        rules.add("D1 other claims on the policy: " + earlier);
         if (earlier != null && earlier > 0) {
             lines.add("Point to check: " + earlier + " other claim(s) exist on this policy.");
         }
-        return log("CLAIM_SUMMARY", claimRef, String.join("\n", lines), sources, 85, user);
+        lines.add("Freshness: read from the claim and policy records at " + LocalDateTime.now().withNano(0) + ".");
+        return log("CLAIM_SUMMARY", claimRef, String.join("\n", lines), sources, confidence(known, checks), rules, null,
+                user);
     }
 
-    /** {customerRef, purpose PREMIUM_REMINDER|EVIDENCE_REQUEST|CLAIM_UPDATE}: a draft for a person to review. */
+    /** Draft purposes and the approved message template each is drafted from (§15 draft communications). */
+    private static final Map<String, String> DRAFT_TEMPLATES = Map.of("PREMIUM_REMINDER", "PremiumDueReminder",
+            "EVIDENCE_REQUEST", "OperationalNotice", "CLAIM_UPDATE", "ClaimReceived");
+
+    /**
+     * {customerRef, purpose PREMIUM_REMINDER|EVIDENCE_REQUEST|CLAIM_UPDATE}: a draft for a person to review. It is
+     * rendered from the latest approved email template for the purpose (its code and version are logged); merge fields
+     * the records cannot fill are left marked for the reviewer, which lowers the confidence. Record content is treated
+     * as data: only plain name text is merged (NS-AIG-003).
+     */
     @Transactional
     public Map<String, Object> draftMessage(JsonNode body) {
         AppUser user = user("READ_CUSTOMER");
         CustomerAccount c = customer(text(body, "customerRef"));
         String purpose = required(body, "purpose").toUpperCase(Locale.ROOT);
-        String first = c.getName().split(" ")[0];
-        String text = switch (purpose) {
-            case "PREMIUM_REMINDER" -> "Dear " + first + ", this is a reminder that your premium is due. You can pay"
-                    + " in the customer portal or at any branch. If you have already paid, please ignore this message.";
-            case "EVIDENCE_REQUEST" -> "Dear " + first + ", to continue with your application we still need a document"
-                    + " from you. Please sign in to the customer portal to see what is needed and upload it there.";
-            case "CLAIM_UPDATE" -> "Dear " + first + ", we are working on your claim. You can follow its progress in"
-                    + " the customer portal. We will contact you if we need anything further.";
-            default -> throw new IllegalArgumentException("purpose must be PREMIUM_REMINDER, EVIDENCE_REQUEST or"
-                    + " CLAIM_UPDATE.");
-        };
-        return log("DRAFT_MESSAGE", c.getRef(), text, List.of("Approved service wording: " + purpose, "Customer "
-                + c.getRef()), 100, user);
+        String eventType = DRAFT_TEMPLATES.get(purpose);
+        if (eventType == null) {
+            throw new IllegalArgumentException("purpose must be PREMIUM_REMINDER, EVIDENCE_REQUEST or CLAIM_UPDATE.");
+        }
+        String name = c.getName() == null ? "" : c.getName().replaceAll("[^\\p{L} '\\-]", "").trim();
+        String first = name.split(" ")[0];
+        List<Map<String, Object>> template = jdbc.queryForList("select code, version, subject, body from com_template"
+                + " where event_type = ? and channel = 'EMAIL' and status = 'APPROVED' order by version desc",
+                eventType);
+        List<String> rules = new ArrayList<>();
+        String text;
+        String templateRef;
+        int confidence;
+        if (template.isEmpty()) {
+            text = switch (purpose) {
+                case "PREMIUM_REMINDER" -> "Dear " + first + ", this is a reminder that your premium is due. You can"
+                        + " pay in the customer portal or at any branch. If you have already paid, please ignore this"
+                        + " message.";
+                case "EVIDENCE_REQUEST" -> "Dear " + first + ", to continue with your application we still need a"
+                        + " document from you. Please sign in to the customer portal to see what is needed.";
+                default -> "Dear " + first + ", we are working on your claim. You can follow its progress in the"
+                        + " customer portal.";
+            };
+            templateRef = "built-in fallback wording (no approved template)";
+            confidence = 60;
+            rules.add("T0 no approved template for " + eventType + ": fallback wording used");
+        } else {
+            Map<String, Object> t = template.get(0);
+            String[] policy = jdbc.query("select record_ref, product, premium, next_premium_due from ins_policy where"
+                    + " customer_ref = ? order by id desc", rs -> rs.next() ? new String[] {rs.getString(1),
+                            rs.getString(2), rs.getBigDecimal(3) == null ? null : Money.text(rs.getBigDecimal(3)),
+                            rs.getDate(4) == null ? null : rs.getDate(4).toString()} : new String[4], c.getRef());
+            String policyRef = policy[0];
+            String claimRef = jdbc.query("select record_ref from ins_claim where customer_ref = ? order by id desc",
+                    rs -> rs.next() ? rs.getString(1) : null, c.getRef());
+            Map<String, String> fields = new LinkedHashMap<>();
+            fields.put("customerName", name);
+            fields.put("firstName", first);
+            fields.put("policyRef", policyRef);
+            fields.put("product", policy[1]);
+            fields.put("amount", policy[2]);
+            fields.put("dueDate", policy[3]);
+            fields.put("claimRef", claimRef);
+            fields.put("portalLink", "the Nsure Life customer portal");
+            String rendered = value(t, "body");
+            int unfilled = 0;
+            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\{\\{(\\w+)}}").matcher(rendered);
+            StringBuilder out = new StringBuilder();
+            while (matcher.find()) {
+                String v = fields.get(matcher.group(1));
+                if (v == null) {
+                    unfilled++;
+                    rules.add("T2 merge field " + matcher.group(1) + ": not on record, left for the reviewer");
+                }
+                matcher.appendReplacement(out, java.util.regex.Matcher.quoteReplacement(v == null
+                        ? "[" + matcher.group(1) + "]" : v));
+            }
+            matcher.appendTail(out);
+            text = out.toString();
+            templateRef = value(t, "code") + " v" + value(t, "version");
+            confidence = Math.max(50, 100 - 15 * unfilled);
+            rules.add("T1 template " + templateRef + " (approved) for " + eventType);
+        }
+        return log("DRAFT_MESSAGE", c.getRef(), text, List.of("Approved template: " + templateRef, "Customer "
+                + c.getRef()), confidence, rules, templateRef, user);
     }
 
     /** Advisory indicators for one customer: never a decision, always shown with the facts behind them. */
@@ -535,24 +674,138 @@ public class PlatformService {
                 .equals(p.getStatus())).count() + " active policies.");
         lines.add("These are rule-based indicators for a person to weigh. They do not accept, decline or price"
                 + " anything.");
+        List<String> rules = List.of("L1 lapse ELEVATED when any policy is lapsed, cancelled or without cover: "
+                + lapsedOrOff, "C1 claims REVIEW at 3 or more claims: " + claims, "E1 exposure = sum assured of Active"
+                + " policies");
+        // Little history means little to go on: confidence grows with the policies on record (capped).
+        int confidence = Math.min(90, 50 + 10 * policies.size());
         return log("RISK_SCORE", c.getRef(), String.join("\n", lines), List.of("Customer " + c.getRef(), policies.size()
-                + " policies", claims + " claims"), 80, user);
+                + " policies", claims + " claims"), confidence, rules, null, user);
     }
 
-    /** {accept, note}: the human review of an assistant's output. */
+    /**
+     * {decision ACCEPT | OVERRIDE | REJECT, reason, finalText} (or the older {accept, note}): the human review of an
+     * assistant's output (NS-AIG-004). The reviewer must hold the use case's review permission, and where the use case
+     * requires four eyes (drafted customer messages) must not be the person who asked. A rejection or an override needs
+     * a reason; an override keeps the reviewer's own final text. Every review is audit evidence.
+     */
     @Transactional
     public Map<String, Object> review(Long id, JsonNode body) {
         AppUser user = security.authenticatedUser();
-        if (jdbc.update("update ai_interaction set review_status = ?, reviewed_by = ?, review_note = ? where id = ?"
-                + " and review_status = 'PENDING'", body.path("accept").asBoolean(false) ? "ACCEPTED" : "REJECTED",
-                user.getUsername(), text(body, "note"), id) == 0) {
+        Map<String, Object> row = jdbc.query("select i.use_case, i.requested_by, i.review_status, i.output,"
+                + " u.review_permission, u.four_eyes from ai_interaction i join ai_use_case u on u.code = i.use_case"
+                + " where i.id = ?", rs -> {
+                    if (!rs.next()) {
+                        return null;
+                    }
+                    Map<String, Object> m = new java.util.HashMap<>();
+                    m.put("useCase", rs.getString(1));
+                    m.put("requestedBy", rs.getString(2));
+                    m.put("status", rs.getString(3));
+                    m.put("output", rs.getString(4));
+                    m.put("permission", rs.getString(5));
+                    m.put("fourEyes", rs.getBoolean(6));
+                    return m;
+                }, id);
+        if (row == null) {
+            throw new NotFoundException("Assistant output " + id + " not found");
+        }
+        user.validateHasPermissionTo((String) row.get("permission"));
+        if (!"PENDING".equals(row.get("status"))) {
             throw new ConflictException("That output has already been reviewed.");
         }
-        return Map.of("id", id, "reviewStatus", body.path("accept").asBoolean(false) ? "ACCEPTED" : "REJECTED");
+        if (Boolean.TRUE.equals(row.get("fourEyes")) && user.getUsername().equalsIgnoreCase((String) row.get("requestedBy"))) {
+            throw new NoAuthorizationException("You asked for this draft, so someone else must review it.");
+        }
+        String decision = text(body, "decision");
+        if (decision == null) {
+            decision = body.path("accept").asBoolean(false) ? "ACCEPT" : "REJECT";
+        }
+        decision = decision.toUpperCase(Locale.ROOT);
+        String reason = text(body, "reason") != null ? text(body, "reason") : text(body, "note");
+        String finalText = text(body, "finalText");
+        String status = switch (decision) {
+            case "ACCEPT" -> "ACCEPTED";
+            case "OVERRIDE" -> "OVERRIDDEN";
+            case "REJECT" -> "REJECTED";
+            default -> throw new com.nsure.common.exception.InvalidFieldException("decision",
+                    "decision must be ACCEPT, OVERRIDE or REJECT.");
+        };
+        if (!"ACCEPTED".equals(status) && (reason == null || reason.length() < 5)) {
+            throw new com.nsure.common.exception.InvalidFieldException("reason",
+                    "Say why the output is " + status.toLowerCase(Locale.ROOT) + " (at least 5 characters).");
+        }
+        if ("OVERRIDDEN".equals(status) && finalText == null) {
+            throw new com.nsure.common.exception.InvalidFieldException("finalText",
+                    "An override keeps your own final text: write it.");
+        }
+        if (finalText != null && finalText.length() > 4000) {
+            throw new com.nsure.common.exception.InvalidFieldException("finalText", "The final text is too long.");
+        }
+        String kept = "OVERRIDDEN".equals(status) ? finalText : "ACCEPTED".equals(status) ? (String) row.get("output")
+                : null;
+        jdbc.update("update ai_interaction set review_status = ?, reviewed_by = ?, review_note = ?, review_reason = ?,"
+                + " final_text = ?, reviewed_at = ? where id = ? and review_status = 'PENDING'", status,
+                user.getUsername(), reason, reason, kept, LocalDateTime.now(), id);
+        audit.record(user.getUsername(), "Assistant output " + status.toLowerCase(Locale.ROOT), "Assistant",
+                row.get("useCase") + "#" + id, reason);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("id", id);
+        out.put("reviewStatus", status);
+        out.put("finalText", kept);
+        return out;
+    }
+
+    /**
+     * §15 draft communications: a reviewed (accepted or overridden) draft is sent as the reviewer's final text through
+     * the communications service, which applies consent and logs the message. Unreviewed or rejected drafts cannot be
+     * sent; each draft is sent at most once.
+     */
+    @Transactional
+    public Map<String, Object> sendDraft(Long id) {
+        AppUser user = security.authenticatedUser();
+        Map<String, Object> row = jdbc.query("select use_case, subject_ref, review_status, final_text, sent_ref"
+                + " from ai_interaction where id = ?", rs -> {
+                    if (!rs.next()) {
+                        return null;
+                    }
+                    Map<String, Object> m = new java.util.HashMap<>();
+                    m.put("useCase", rs.getString(1));
+                    m.put("customer", rs.getString(2));
+                    m.put("status", rs.getString(3));
+                    m.put("text", rs.getString(4));
+                    m.put("sent", rs.getString(5));
+                    return m;
+                }, id);
+        if (row == null || !"DRAFT_MESSAGE".equals(row.get("useCase"))) {
+            throw new NotFoundException("Draft " + id + " not found");
+        }
+        if (row.get("sent") != null) {
+            throw new ConflictException("This draft was already sent as " + row.get("sent") + ".");
+        }
+        if (!"ACCEPTED".equals(row.get("status")) && !"OVERRIDDEN".equals(row.get("status"))) {
+            throw new ConflictException("Only a reviewed and accepted draft can be sent.");
+        }
+        com.fasterxml.jackson.databind.node.ObjectNode message = new com.fasterxml.jackson.databind.ObjectMapper()
+                .createObjectNode();
+        message.put("customerRef", (String) row.get("customer"));
+        message.put("channel", "EMAIL");
+        message.put("subject", "A message from Nsure Life");
+        message.put("body", (String) row.get("text"));
+        var sent = communications.sendManual(message);
+        jdbc.update("update ai_interaction set sent_ref = ? where id = ?", sent.ref(), id);
+        audit.record(user.getUsername(), "Reviewed draft sent", "Assistant", "DRAFT_MESSAGE#" + id, sent.ref() + " · "
+                + sent.status());
+        return Map.of("id", id, "messageRef", sent.ref(), "messageStatus", sent.status());
+    }
+
+    /** Share of the checks the records could answer, as a whole percentage: computed, never a constant. */
+    private static int confidence(int known, int checks) {
+        return checks == 0 ? 0 : Math.round(known * 100f / checks);
     }
 
     private Map<String, Object> log(String useCase, String subject, String output, List<String> sources, int confidence,
-            AppUser user) {
+            List<String> rules, String templateRef, AppUser user) {
         List<Boolean> enabled = jdbc.queryForList("select enabled from ai_use_case where code = ?", Boolean.class,
                 useCase);
         if (enabled.isEmpty()) {
@@ -562,33 +815,56 @@ public class PlatformService {
             // NS-AIG-006: switched off, the manual route still works and nothing is lost.
             throw new IllegalArgumentException("This assistant is switched off. Carry on with the manual process.");
         }
+        // NS-AIG-003: a structured output is validated before anyone sees it: sources present, bounded size.
+        if (sources.isEmpty() || output.isBlank() || output.length() > 4000) {
+            throw new IllegalStateException("Assistant " + useCase + " produced an output that failed validation.");
+        }
         String version = jdbc.queryForObject("select model_version from ai_use_case where code = ?", String.class,
                 useCase);
+        String explanation = String.join("; ", rules);
+        explanation = explanation.length() <= 1000 ? explanation : explanation.substring(0, 1000);
         LocalDateTime now = LocalDateTime.now();
         jdbc.update("insert into ai_interaction (use_case, subject_ref, model_version, output, sources, confidence,"
-                + " review_status, requested_by, requested_at) values (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)", useCase,
-                subject, version, output, String.join("; ", sources), confidence, user.getUsername(), now);
+                + " review_status, requested_by, requested_at, explanation, template_ref) values (?, ?, ?, ?, ?, ?,"
+                + " 'PENDING', ?, ?, ?, ?)", useCase, subject, version, output, String.join("; ", sources), confidence,
+                user.getUsername(), now, explanation, templateRef);
         Long id = jdbc.queryForObject("select max(id) from ai_interaction", Long.class);
-        return interaction(id, useCase, subject, version, output, String.join("; ", sources), confidence, "PENDING",
-                null, user.getUsername(), now);
+        return jdbc.queryForObject("select * from ai_interaction where id = ?", (rs, n) -> interaction(rs), id);
     }
 
-    private static Map<String, Object> interaction(Long id, String useCase, String subject, String version,
-            String output, String sources, int confidence, String status, String reviewedBy, String requestedBy,
-            LocalDateTime at) {
+    private static Map<String, Object> interaction(java.sql.ResultSet rs) throws java.sql.SQLException {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", id);
-        m.put("useCase", useCase);
-        m.put("subjectRef", subject);
-        m.put("modelVersion", version);
-        m.put("output", List.of(output.split("\n")));
+        m.put("id", rs.getLong("id"));
+        m.put("useCase", rs.getString("use_case"));
+        m.put("subjectRef", rs.getString("subject_ref"));
+        m.put("modelVersion", rs.getString("model_version"));
+        m.put("engine", "Deterministic rules (no AI model)");
+        m.put("output", List.of(rs.getString("output").split("\n")));
+        String sources = rs.getString("sources");
         m.put("sources", sources == null ? List.of() : List.of(sources.split("; ")));
-        m.put("confidence", confidence);
-        m.put("reviewStatus", status);
-        m.put("reviewedBy", reviewedBy);
-        m.put("requestedBy", requestedBy);
-        m.put("requestedAt", at);
+        m.put("confidence", rs.getInt("confidence"));
+        String explanation = rs.getString("explanation");
+        m.put("explanation", explanation == null ? List.of() : List.of(explanation.split("; ")));
+        m.put("templateRef", rs.getString("template_ref"));
+        m.put("reviewStatus", rs.getString("review_status"));
+        m.put("reviewedBy", rs.getString("reviewed_by"));
+        m.put("reviewReason", rs.getString("review_reason"));
+        m.put("reviewedAt", rs.getTimestamp("reviewed_at") == null ? null : rs.getTimestamp("reviewed_at")
+                .toLocalDateTime());
+        m.put("finalText", rs.getString("final_text"));
+        m.put("sentRef", rs.getString("sent_ref"));
+        m.put("requestedBy", rs.getString("requested_by"));
+        m.put("requestedAt", rs.getTimestamp("requested_at").toLocalDateTime());
         return m;
+    }
+
+    private static String value(Map<String, Object> row, String column) {
+        for (Map.Entry<String, Object> e : row.entrySet()) {
+            if (e.getKey().equalsIgnoreCase(column)) {
+                return e.getValue() == null ? null : e.getValue().toString();
+            }
+        }
+        return null;
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────
