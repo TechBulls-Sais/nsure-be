@@ -49,6 +49,8 @@ public enum PermissionCatalog {
     READ_UNDERWRITING(null),
     UNDERWRITE_APPLICATION(null),
     MANAGE_UNDERWRITING(null),
+    // Compliance clears or confirms a possible sanctions/PEP screening match on an application (NS-IL01-006).
+    CLEAR_SCREENING(null),
     // IL03/IL04 policy servicing (Nsure Life NS-IL03-002..006, NS-IL04-001..006).
     READ_SERVICING(null),
     MANAGE_SERVICING(null),

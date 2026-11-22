@@ -94,6 +94,8 @@ public final class Events {
     public static final String ISSUE_REQUESTED = "IssueRequested";
     // IL02 underwriting.
     public static final String EVIDENCE_REQUESTED = "EvidenceRequested";
+    /** A reminder for underwriting evidence that is due or overdue (IL02); references only. */
+    public static final String EVIDENCE_REMINDER_SENT = "EvidenceReminderSent";
     public static final String UNDERWRITING_DECIDED = "UnderwritingDecided";
     public static final String OFFER_REVISED = "OfferRevised";
     public static final String OFFER_ANSWERED = "OfferAnswered";

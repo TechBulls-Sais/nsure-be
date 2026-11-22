@@ -301,7 +301,10 @@ public final class ApiAccessRules {
             // ── individual underwriting IL02 (Underwriter) ─────────────────────────────────────────────
             rule(GET, "/underwriting/**", anyOf("READ_UNDERWRITING")),
             rule(POST, "/underwriting/cases/*/offer", anyOf("UNDERWRITE_APPLICATION", "UPDATE_APPLICATION")),
+            rule(POST, "/underwriting/cases/*/screening", anyOf("CLEAR_SCREENING")),
             rule(POST, "/underwriting/cases/**", anyOf("UNDERWRITE_APPLICATION")),
+            rule(POST, "/underwriting/review-due", anyOf("UNDERWRITE_APPLICATION")),
+            rule(POST, "/underwriting/rule-changes/*/decision", anyOf("MANAGE_UNDERWRITING")),
             rule(PUT, "/underwriting/rules/*", anyOf("MANAGE_UNDERWRITING")),
             rule(PUT, "/underwriting/authorities/*", anyOf("MANAGE_UNDERWRITING")),
 

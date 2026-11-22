@@ -457,6 +457,10 @@ public class PortfolioService {
         return cover(row);
     }
 
+    private static boolean sameAmount(BigDecimal a, BigDecimal b) {
+        return a == null ? b == null : b != null && a.compareTo(b) == 0;
+    }
+
     private static boolean draftRequested(JsonNode body) {
         return ApplicationCapture.DRAFT.equalsIgnoreCase(blank(optional(body, "status")));
     }
@@ -614,9 +618,17 @@ public class PortfolioService {
         if (quote.getApplicationRef() != null) {
             InsuranceApplication application = one(InsuranceApplication.class, quote.getApplicationRef(), "Application");
             if (!"Issued".equals(application.getStatus())) {
+                BigDecimal premiumBefore = application.getPremium();
+                BigDecimal amountBefore = application.getAmount();
                 takeQuote(application, quote);
                 logApplication(application, "Quote accepted", application.getStatus(),
                         quote.getRef() + " v" + quote.getVersionNo(), actor.getUsername());
+                // NS-IL01-004, NS-IL02-006: underwriting decided on the earlier price; a changed price or cover is
+                // reassessed (never the earlier offer's premium silently applied to the new quote).
+                if (!sameAmount(premiumBefore, application.getPremium()) || !sameAmount(amountBefore, application.getAmount())) {
+                    underwriting.getObject().materialChange(application, customerOf(application), quote.getRef() + " v"
+                            + quote.getVersionNo() + " accepted with a changed price or cover", actor.getUsername());
+                }
             }
         }
         return quotes.view(quote);

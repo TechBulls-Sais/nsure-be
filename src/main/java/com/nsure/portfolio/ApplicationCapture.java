@@ -93,6 +93,9 @@ public class ApplicationCapture {
             app.setChannel(channel);
             app.setIntermediaryCode(clip(text(body, "intermediaryCode"), 30));
         }
+        if (body.has("occupation")) {
+            app.setOccupation(clip(text(body, "occupation"), 100));
+        }
         if (body.path("declarationAccepted").asBoolean(false) && app.getDeclaredAt() == null) {
             app.setDeclaredBy(actor);
             app.setDeclaredAt(LocalDateTime.now());

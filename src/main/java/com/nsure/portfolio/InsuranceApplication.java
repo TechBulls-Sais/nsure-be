@@ -94,6 +94,10 @@ public class InsuranceApplication extends CoverRecord implements TieredCover {
     @jakarta.persistence.Column(name = "intermediary_code", length = 30)
     private String intermediaryCode;
 
+    /** The main life's occupation, assessed by the underwriting rules (NS-IL02-001). */
+    @jakarta.persistence.Column(name = "occupation", length = 100)
+    private String occupation;
+
     @jakarta.persistence.Column(name = "declared_by", length = 100)
     private String declaredBy;
 
@@ -187,6 +191,14 @@ public class InsuranceApplication extends CoverRecord implements TieredCover {
 
     public void setIntermediaryCode(String intermediaryCode) {
         this.intermediaryCode = intermediaryCode;
+    }
+
+    public String getOccupation() {
+        return occupation;
+    }
+
+    public void setOccupation(String occupation) {
+        this.occupation = occupation;
     }
 
     public String getDeclaredBy() {
