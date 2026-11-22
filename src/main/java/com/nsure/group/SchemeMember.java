@@ -32,9 +32,14 @@ public class SchemeMember {
     public static final String CEASED = "CEASED";
     /** Cover suspended with the scheme (NS-GL01-006): not covered, billed or certified until reactivated. */
     public static final String SUSPENDED = "SUSPENDED";
+    /**
+     * Not actively at work on entry under a scheme whose rule is DEFER (AT-GL03-02): no cover, not billed or certified,
+     * until the employer confirms the member is back at work.
+     */
+    public static final String COVER_DEFERRED = "COVER_DEFERRED";
 
     /** Statuses with a live episode: the member can leave or change salary, and counts as a scheme member. */
-    public static final Set<String> ON_COVER = Set.of(ACTIVE, UNDERWRITING_PENDING, PARTIALLY_ACCEPTED);
+    public static final Set<String> ON_COVER = Set.of(ACTIVE, UNDERWRITING_PENDING, PARTIALLY_ACCEPTED, COVER_DEFERRED);
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -120,6 +125,14 @@ public class SchemeMember {
     @Column(name = "suspended_until")
     private LocalDate suspendedUntil;
 
+    /** Premium loading on the member's accepted cover from an underwriting decision (NS-GL03-004); null: none. */
+    @Column(name = "loading_percent", precision = 7, scale = 2)
+    private BigDecimal loadingPercent;
+
+    /** Exclusions an underwriting decision applies to the member's cover. */
+    @Column(name = "uw_exclusions", length = 500)
+    private String exclusions;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -141,7 +154,8 @@ public class SchemeMember {
         this.joinDate = joinDate;
         this.sourceBatchRef = sourceBatchRef;
         this.createdAt = LocalDateTime.now();
-        applyCover(category.coverFor(salary), category.getFreeCoverLimit());
+        // AT-GL02-02: the category formula in force on the join date, not one amended since.
+        applyCover(category.coverFor(salary, joinDate), category.getFreeCoverLimit());
     }
 
     /**
@@ -153,9 +167,85 @@ public class SchemeMember {
             boolean withholdFreeCover) {
         this(scheme, category, memberKey, firstName, lastName, dateOfBirth, salary, joinDate, sourceBatchRef);
         this.activelyAtWork = activelyAtWork;
-        if (withholdFreeCover) {
-            applyCover(category.coverFor(salary), BigDecimal.ZERO.setScale(2));
+        if (Boolean.FALSE.equals(activelyAtWork) && "DEFER".equals(scheme.getAawRule())) {
+            // AT-GL03-02, deferred-cover path: nothing in force or pending until the member is back at work.
+            applyCover(category.coverFor(salary, joinDate), BigDecimal.ZERO.setScale(2));
+            this.pendingCover = BigDecimal.ZERO.setScale(2);
+            this.status = COVER_DEFERRED;
+        } else if (withholdFreeCover) {
+            applyCover(category.coverFor(salary, joinDate), BigDecimal.ZERO.setScale(2));
+        } else if (!scheme.isPartialCoverAllowed() && pendingCover.signum() > 0) {
+            // NS-GL03-002: where the scheme does not permit partial cover, none is admitted until all is underwritten.
+            applyCover(requestedCover, BigDecimal.ZERO.setScale(2));
         }
+    }
+
+    /**
+     * The employer confirms a deferred member is actively at work (AT-GL03-02): cover starts with the free-cover
+     * treatment the member would have had on entry; anything above it is referred to underwriting.
+     */
+    void backAtWork() {
+        if (!COVER_DEFERRED.equals(status)) {
+            throw new IllegalArgumentException("Member " + memberKey + " has no cover deferred for not being at work");
+        }
+        this.activelyAtWork = Boolean.TRUE;
+        BigDecimal ceiling = scheme.isPartialCoverAllowed() || requestedCover.compareTo(category.getFreeCoverLimit()) <= 0
+                ? category.getFreeCoverLimit() : BigDecimal.ZERO.setScale(2);
+        applyCover(requestedCover, ceiling);
+    }
+
+    /**
+     * A category transfer (NS-GL03-005) keeps the cover already accepted on the previous episode, with its loading and
+     * exclusions, up to the new category's formula (the demo scheme rule); only what is above it is referred.
+     */
+    void carryOver(SchemeMember previous) {
+        this.activelyAtWork = previous.activelyAtWork;
+        BigDecimal kept = previous.acceptedCover.min(requestedCover);
+        if (kept.compareTo(acceptedCover) > 0) {
+            this.underwrittenCover = kept;
+            applyCover(requestedCover, kept);
+        }
+        this.loadingPercent = previous.loadingPercent;
+        this.exclusions = previous.exclusions;
+    }
+
+    /** Moves the member's accepted cover onto the decision's terms: amount, loading and exclusions (NS-GL03-004). */
+    void accept(BigDecimal amount, BigDecimal loading, String exclusions, String reason, String actor) {
+        accept(amount, reason, actor);
+        this.loadingPercent = loading == null || loading.signum() == 0 ? null : loading;
+        this.exclusions = exclusions;
+    }
+
+    /** The monthly rate per 1,000 the member's cover is billed at: the category's, plus any underwriting loading. */
+    public BigDecimal ratePerMille() {
+        BigDecimal rate = category.getRatePerMille();
+        return loadingPercent == null ? rate : rate.multiply(BigDecimal.ONE.add(loadingPercent
+                .divide(BigDecimal.valueOf(100), 6, java.math.RoundingMode.HALF_UP))).setScale(4, java.math.RoundingMode.HALF_UP);
+    }
+
+    /** A full month's premium on the accepted cover at the member's rate. */
+    BigDecimal monthlyPremium() {
+        return acceptedCover.multiply(ratePerMille()).divide(BigDecimal.valueOf(1000), 2, java.math.RoundingMode.HALF_UP);
+    }
+
+    /** A critical-illness payment that accelerates the life cover reduces it by the amount paid (section 08). */
+    void accelerate(BigDecimal amount) {
+        this.acceptedCover = acceptedCover.subtract(amount).max(BigDecimal.ZERO).setScale(2);
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /** Restores accelerated cover under the approved reinstatement rule, never above the requested cover. */
+    void reinstate(BigDecimal amount) {
+        this.acceptedCover = acceptedCover.add(amount).min(requestedCover).setScale(2);
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public BigDecimal getLoadingPercent() {
+        return loadingPercent;
+    }
+
+    public String getExclusions() {
+        return exclusions;
     }
 
     /** Accepts cover up to the ceiling (free-cover limit or underwritten amount); the excess stays pending. */
@@ -177,7 +267,21 @@ public class SchemeMember {
      * the cover already in force and any increase is referred to underwriting (NS-GL03-001).
      */
     void changeSalary(BigDecimal newSalary, Boolean activelyAtWorkNow) {
+        changeSalary(newSalary, activelyAtWorkNow, null);
+    }
+
+    /**
+     * A salary change effective on a date (AT-GL02-02): cover is recalculated with the category formula version in
+     * force on that date, so a later amendment does not rewrite it.
+     */
+    void changeSalary(BigDecimal newSalary, Boolean activelyAtWorkNow, LocalDate effective) {
         this.salary = newSalary;
+        if (COVER_DEFERRED.equals(status)) {
+            // Still deferred: the cover it will start with follows the salary, nothing is in force yet.
+            this.requestedCover = category.coverFor(newSalary, effective);
+            this.updatedAt = LocalDateTime.now();
+            return;
+        }
         BigDecimal ceiling = category.getFreeCoverLimit();
         if (underwrittenCover != null && underwrittenCover.compareTo(ceiling) > 0) {
             ceiling = underwrittenCover;
@@ -188,7 +292,7 @@ public class SchemeMember {
         if (activelyAtWorkNow != null) {
             this.activelyAtWork = activelyAtWorkNow;
         }
-        applyCover(category.coverFor(newSalary), ceiling);
+        applyCover(category.coverFor(newSalary, effective), ceiling);
     }
 
     /**

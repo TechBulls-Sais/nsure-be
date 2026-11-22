@@ -1,0 +1,26 @@
+databaseChangeLog:
+  # Group claims on the section 08 benefit packs (NS-GL02-004/005, AT-GL02-03): the life claimed for under family
+  # benefits, the critical-illness condition group and survival confirmation, a partial disability claim, an accident
+  # inside the waiting period, the benefit limit at notification, an income benefit's first payment, escalation and
+  # cessation dates, and cover accelerated by a critical-illness payment and its reinstatement.
+  - changeSet:
+      id: 139-group-claim-benefit-rules
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: grp_claim
+            columns:
+              - column: {name: life_insured, type: varchar(20)}
+              - column: {name: life_name, type: varchar(100)}
+              - column: {name: condition_group, type: varchar(60)}
+              - column: {name: partial_claim, type: varchar(3)}
+              - column: {name: accident, type: varchar(3)}
+              - column: {name: gestation_weeks, type: int}
+              - column: {name: child_age, type: int}
+              - column: {name: survival_confirmed_on, type: date}
+              - column: {name: benefit_limit, type: 'decimal(15,2)'}
+              - column: {name: first_payment_date, type: date}
+              - column: {name: cessation_date, type: date}
+              - column: {name: escalation_percent, type: 'decimal(7,2)'}
+              - column: {name: accelerated_amount, type: 'decimal(15,2)'}
+              - column: {name: reinstated_on, type: date}

@@ -40,19 +40,19 @@ class GroupWorkspaceApiTest {
         String quote = JsonPath.read(mockMvc.perform(json(post("/group-life/quotes"), "admin",
                         "{\"sponsorName\":\"Timeline Mills " + System.nanoTime() + "\",\"sector\":\"Milling\",\"lives\":5,"
                                 + "\"salaryRoll\":500000,\"benefits\":[\"GLA\",\"FAMILY\"],\"ratePerMille\":2,"
-                                + "\"freeCoverLimit\":500000}"))
+                                + "\"freeCoverLimit\":500000,\"census\":\"" + com.nsure.testsupport.GroupSchemeSetup.QUOTE_CENSUS + "\"}"))
                 .andReturn().getResponse().getContentAsString(), "$.ref");
         for (String[] step : new String[][] {{"admin", "SUBMIT"}, {"secadmin", "APPROVE"}, {"admin", "ACCEPT"}}) {
             mockMvc.perform(json(post("/group-life/quotes/" + quote + "/progress"), step[0], "{\"action\":\"" + step[1] + "\"}"))
                     .andExpect(status().isOk());
         }
         String scheme = JsonPath.read(mockMvc.perform(json(post("/group-life/quotes/" + quote + "/activation"), "admin",
-                        "{\"inceptionDate\":\"" + LocalDate.now() + "\",\"wordingConfirmed\":true}"))
+                        "{\"inceptionDate\":\"" + LocalDate.now() + "\",\"wordingRef\":\"WRD-G001\",\"conditions\":[\"SIGNED_PROPOSAL\",\"SIGNED_CENSUS\",\"FIRST_PREMIUM_OR_DEFERRAL\"],"
+                                + "\"categories\":[{\"code\":\"STAFF\",\"name\":\"Staff\",\"benefitBasis\":\"SALARY_MULTIPLE\","
+                                + "\"salaryMultiple\":2,\"freeCoverLimit\":500000,\"ratePerMille\":2,\"minEntryAge\":18,"
+                                + "\"maxEntryAge\":64}]}"))
+                .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(), "$.schemeRef");
-        mockMvc.perform(json(post("/group/schemes/" + scheme + "/categories"), "admin",
-                        "{\"code\":\"STAFF\",\"name\":\"Staff\",\"benefitBasis\":\"SALARY_MULTIPLE\",\"salaryMultiple\":2,"
-                                + "\"freeCoverLimit\":500000,\"ratePerMille\":2,\"minEntryAge\":18,\"maxEntryAge\":64}"))
-                .andExpect(status().isOk());
         // The accepted terms the master policy came from are on the scheme.
         mockMvc.perform(get("/group/schemes/" + scheme).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.scheme.quoteRef").value(quote))
@@ -99,6 +99,7 @@ class GroupWorkspaceApiTest {
                         "{\"code\":\"STAFF\",\"name\":\"Staff\",\"benefitBasis\":\"FIXED\",\"fixedCover\":800000,"
                                 + "\"freeCoverLimit\":500000,\"ratePerMille\":1,\"minEntryAge\":18,\"maxEntryAge\":64}"))
                 .andExpect(status().isOk());
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme);
         String batch = JsonPath.read(mockMvc.perform(json(post("/group/schemes/" + scheme + "/census-batches"), "admin",
                         "{\"externalBatchId\":\"Q-1\",\"csv\":\"" + HEADER + "\\nQ1,Quinn,One,1985-01-01,STAFF,,JOIN,2026-01-01\"}"))
                 .andReturn().getResponse().getContentAsString(), "$.ref");
@@ -133,6 +134,7 @@ class GroupWorkspaceApiTest {
         mockMvc.perform(json(put("/group-life/schemes/" + scheme + "/benefits"), "admin",
                         "{\"benefitType\":\"CREDIT\",\"basis\":\"FIXED\",\"fixedAmount\":300000}"))
                 .andExpect(status().isOk());
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme);
         mockMvc.perform(json(post("/group-life/schemes/" + scheme + "/credit-loans"), "admin",
                         "{\"batchReference\":\"BH-1\",\"rows\":[{\"lenderLoanId\":\"H1\",\"borrowerName\":\"A\",\"loanAmount\":100000,\"termMonths\":12},"
                                 + "{\"lenderLoanId\":\"H2\",\"borrowerName\":\"B\",\"loanAmount\":400000,\"termMonths\":12}]}"))

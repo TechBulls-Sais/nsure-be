@@ -183,6 +183,7 @@ class SchemeLifecycleApiTest {
                 .andExpect(jsonPath("$.members[?(@.memberKey == 'S2')].status").value("UNDERWRITING_PENDING"));
         mockMvc.perform(json(post("/group/schemes/" + scheme + "/invoices"), "admin", "{\"period\":\"2026-04\"}"))
                 .andExpect(jsonPath("$.amount").value(600.0));
+        com.nsure.testsupport.GroupSchemeSetup.receiveEvidence(mockMvc, pendingMember);
         mockMvc.perform(json(post("/group/members/" + pendingMember + "/underwriting"), "admin",
                         "{\"decision\":\"ACCEPT\",\"reason\":\"Evidence received\"}"))
                 .andExpect(status().isOk());
@@ -192,6 +193,7 @@ class SchemeLifecycleApiTest {
     void transferMovesMembersToTheTargetSchemeOnItsTermsAndKeepsTheirHistory() throws Exception {
         String source = scheme();
         String target = scheme();
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, target);
         category(source, "STAFF", "100000", "500000");
         commit(upload(source, "TR-1", "T1,Tau,One,1985-01-01,STAFF,,JOIN,2026-01-01\n"
                 + "T2,Tau,Two,1986-01-01,STAFF,,JOIN,2026-01-01"));
@@ -268,6 +270,7 @@ class SchemeLifecycleApiTest {
     }
 
     private String upload(String scheme, String externalId, String rows) throws Exception {
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme);
         return JsonPath.read(mockMvc.perform(json(post("/group/schemes/" + scheme + "/census-batches"), "admin",
                         body(Map.of("externalBatchId", externalId, "mode", "PARTIAL", "csv", HEADER + "\n" + rows))))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.ref");

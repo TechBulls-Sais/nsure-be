@@ -88,6 +88,7 @@ class GroupAdministrationApiTest {
                     .append(category).append(',').append(salary).append(",JOIN,2026-01-01\n");
         }
         String upload = body(Map.of("externalBatchId", "HR-2026-01", "mode", "PARTIAL", "csv", csv.toString()));
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme);
         String batchBody = mockMvc.perform(json(post("/group/schemes/" + scheme + "/census-batches"), "grpadmin", upload))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("VALIDATED"))
@@ -179,6 +180,7 @@ class GroupAdministrationApiTest {
         String batch = upload(scheme, "UW-1", "PARTIAL", "E1,Ada,Moeng,1980-05-05,MGMT,250000,JOIN,2026-01-01");
         String committed = commit(batch);
         Integer member = JsonPath.read(committed, "$.rows[0].memberId");
+        com.nsure.testsupport.GroupSchemeSetup.receiveEvidence(mockMvc, member);
         mockMvc.perform(json(post("/group/members/" + member + "/underwriting"), "grpadmin",
                         "{\"decision\":\"ACCEPT\",\"reason\":\"Evidence satisfactory\"}"))
                 .andExpect(status().isOk())
@@ -323,14 +325,21 @@ class GroupAdministrationApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.salaryMultiple").value(3.0))
                 .andExpect(jsonPath("$.activeMembers").value(1));
-        commit(upload(scheme, "C-2", "PARTIAL", "S2,Sam,New,1990-01-01,STAFF,100000,JOIN,2026-02-01"));
+        // AT-GL02-02: the amendment applies from today. A join dated before it uses the formula then in force; a join
+        // dated from it uses the new one.
+        commit(upload(scheme, "C-2", "PARTIAL", "S2,Sam,New,1990-01-01,STAFF,100000,JOIN,2026-02-01\n"
+                + "S4,Sue,Today,1990-01-01,STAFF,100000,JOIN," + java.time.LocalDate.now()));
         mockMvc.perform(get("/group/schemes/" + scheme).with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$.members[?(@.memberKey == 'S1')].acceptedCover").value(200000.0))
-                .andExpect(jsonPath("$.members[?(@.memberKey == 'S2')].acceptedCover").value(300000.0));
-        // A salary change recalculates S1 from its effective date with the category formula now in force.
+                .andExpect(jsonPath("$.members[?(@.memberKey == 'S2')].acceptedCover").value(200000.0))
+                .andExpect(jsonPath("$.members[?(@.memberKey == 'S4')].acceptedCover").value(300000.0));
+        // A salary change recalculates S1 from its effective date with the category formula in force on that date.
         commit(upload(scheme, "C-3", "PARTIAL", "S1,,,,,120000,SALARY,2026-03-01"));
         mockMvc.perform(get("/group/schemes/" + scheme).with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$.members[?(@.memberKey == 'S1')].salary").value(120000.0))
+                .andExpect(jsonPath("$.members[?(@.memberKey == 'S1')].acceptedCover").value(240000.0));
+        commit(upload(scheme, "C-4", "PARTIAL", "S1,,,,,120000,SALARY," + java.time.LocalDate.now()));
+        mockMvc.perform(get("/group/schemes/" + scheme).with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$.members[?(@.memberKey == 'S1')].acceptedCover").value(360000.0));
     }
 
@@ -368,6 +377,7 @@ class GroupAdministrationApiTest {
     }
 
     private String upload(String scheme, String externalId, String mode, String rows) throws Exception {
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme);
         String response = mockMvc.perform(json(post("/group/schemes/" + scheme + "/census-batches"), "grpadmin",
                         body(Map.of("externalBatchId", externalId, "mode", mode, "csv", HEADER + "\n" + rows))))
                 .andExpect(status().isOk())

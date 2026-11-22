@@ -306,6 +306,24 @@ databaseChangeLog:
       file: changes/111-mysql-new-booleans.yaml
       relativeToChangelogFile: true
   - include:
+      file: changes/135-group-scheme-setup.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/136-group-quote-pricing.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/137-group-benefit-rules.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/138-group-member-underwriting.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/139-group-claim-benefit-rules.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/140-group-demo-quotes.yaml
+      relativeToChangelogFile: true
+  - include:
       file: changes/150-group-cover-history.yaml
       relativeToChangelogFile: true
   - include:

@@ -248,6 +248,41 @@ with 409 (`WorkOwnershipGuard`; service desk cases check their own owner). Event
   (`/credit-refunds/{ref}/decision|payment`), and claims (`/credit-loans/{id}/claims`, `/credit-claims/{ref}/decision`,
   posted as `GroupClaimPaid`). Demo lender scheme SCH-010 (changeset 154, context demo).
 
+### Quotation, set-up, plans and member underwriting (GL01-GL03, demo-ready round)
+
+- **Quotation pricing** (`/group-life/quotes`, `/census`, `/history`, `/rate-tables`): a quotation is rated on a census
+  kept as numbered versions with every row's validation outcome; only a version rated on a fully valid census can be
+  submitted (otherwise the price is indicative). The premium follows the stated basis (sum assured, salary, per member,
+  loan balance) with age-banded rates from the approved version of a group rate table plus expense, commission and
+  profit loadings and a negotiated adjustment, or a negotiated rate recorded as such. Rate tables are versioned and
+  approved by a second person (`CREATE_RATE_TABLE` / `PUBLISH_RATE_TABLE`); the seeded `DEMO-*` tables are illustrative
+  demo rates, not a tariff. Prospect sponsors: `/group-life/sponsors`.
+- **Set-up and activation**: `POST /group/schemes` creates a scheme in `SETUP` (no census, underwriting or cover). It
+  becomes `ACTIVE` only through activation from an accepted, underwriter-approved quotation
+  (`POST /group-life/quotes/{ref}/activation` or `POST /group/schemes/{ref}/activation`) on an approved group wording
+  version (`/group-life/wordings`, demo `WRD-G001`), with the inception conditions confirmed
+  (`nsure.group.activation.inception-conditions`) and every category's free cover within the accepted terms; it records
+  sponsor, payer, broker, billing method/due day, the actively-at-work rule (`REFER`/`DEFER`) and whether partial
+  cover is allowed. `GET /group-life/quotes/{ref}/activation-check` previews the checks. Tests activate schemes with
+  `testsupport/GroupSchemeSetup.activate`.
+- **Plans** (`/group-life/product-rules`, `/benefit-terms`, `/plan-approval`, `/resolved-benefits`): benefit parameters
+  for the section 08 packs have product defaults, bounds and an overridable flag (`grp_product_rule`, each labelled with
+  its source). Scheme and category terms are versions validated against them, approved by a second person and resolved
+  category > scheme > product from their effective date. Categories carry factors, exit age, waiting period, cap and
+  eligibility rule with dated versions (`/group/schemes/{ref}/categories/{code}/versions`, `/impact`); joins and salary
+  changes use the formula in force on their date; `/group/schemes/{ref}/cessations` ceases cover at the exit age.
+- **Member underwriting** (`/group/members/{id}/underwriting-file`, `/evidence`, `/underwriting`, `/authority`,
+  `/offer-response`, `/actively-at-work`, `/category-transfer`): referrals generate evidence requirements (medical ones
+  restricted to underwriters); cover is accepted only with evidence received or waived; decisions per benefit with
+  loading (billed through the member's rate), exclusions and effective date; above
+  `nsure.group.underwriting.authority-limit` a second underwriter confirms; modified terms are an offer the member
+  answers before it applies, lapsing after `nsure.group.underwriting.offer-days` (`MemberDecisionExpired`).
+- **Documents and claims**: `/group-life/schemes/{ref}/schedule` and `/certificates/{memberKey}/document` are PDFs
+  generated from the accepted version; certificates list only the category's benefits. Group claims apply the resolved
+  terms on the event date (category benefits, waiting period, CI survival, related conditions, acceleration and
+  reinstatement rule, disability assessment and partial benefit, family limits, income protection limit, deferred
+  period and cessation).
+
 ## Party master (SH01)
 
 - **Identity numbers** are checked by document type on Add customer and self sign-up: by default an Omang is 9 digits

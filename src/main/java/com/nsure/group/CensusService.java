@@ -609,7 +609,9 @@ public class CensusService {
             if (nationalId != null) {
                 member.identify(nationalId.replaceAll("\\s+", "").toUpperCase(Locale.ROOT), partyFor(nationalId));
             }
-            String joinNote = notAtWork ? "Not actively at work on the entry date: all cover is referred to underwriting"
+            String joinNote = notAtWork && SchemeMember.COVER_DEFERRED.equals(member.getStatus())
+                    ? "Not actively at work on the entry date: cover is deferred until the member is back at work"
+                    : notAtWork ? "Not actively at work on the entry date: all cover is referred to underwriting"
                     : lateEntrant ? "Late entrant (eligible " + eligible + ", outside the " + category.getLateEntryDays()
                             + "-day window): all cover is referred to underwriting"
                     : SchemeMember.UNDERWRITING_PENDING.equals(member.getStatus())
@@ -634,7 +636,7 @@ public class CensusService {
             note = "Category " + from + " to " + to.getCode()
                     + (member.getPendingCover().signum() > 0 ? "; cover above the limit is pending underwriting" : "");
         } else {
-            member.changeSalary(amount(row.getSalary()), activelyAtWork);
+            member.changeSalary(amount(row.getSalary()), activelyAtWork, effective);
             if (Boolean.FALSE.equals(activelyAtWork) && member.getPendingCover().signum() > 0) {
                 note = "Not actively at work on the increase date: the increase is referred to underwriting";
             }

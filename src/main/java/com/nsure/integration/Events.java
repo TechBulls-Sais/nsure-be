@@ -132,6 +132,8 @@ public final class Events {
     public static final String MEMBER_UNDERWRITING_REFERRED = "MemberUnderwritingReferred";
     /** schemeRef, memberKey, memberId, decision (ACCEPT or DECLINE), acceptedCover, effectiveDate. */
     public static final String MEMBER_COVER_AUTHORISED = "MemberCoverAuthorised";
+    /** schemeRef, memberKey, memberId, expiredOn, pendingCover: an underwriting offer lapsed unanswered (GL03). */
+    public static final String MEMBER_DECISION_EXPIRED = "MemberDecisionExpired";
     /** schemeRef, batchRef, externalBatchId, mode, totalRows, validRows, invalidRows. */
     public static final String CENSUS_BATCH_VALIDATED = "CensusBatchValidated";
     /** schemeRef, memberKey, memberId, changeType, effectiveDate, coverBefore, coverAfter, pendingAfter, sourceRef. */

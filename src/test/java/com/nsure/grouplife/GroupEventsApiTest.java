@@ -45,7 +45,7 @@ class GroupEventsApiTest {
         String quote = JsonPath.read(mockMvc.perform(json(post("/group-life/quotes"), "admin",
                         "{\"sponsorName\":\"Events Quarry " + System.nanoTime() + "\",\"sector\":\"Mining\",\"lives\":10,"
                                 + "\"salaryRoll\":1000000,\"benefits\":[\"GLA\",\"FAMILY\"],\"ratePerMille\":3,"
-                                + "\"freeCoverLimit\":500000}"))
+                                + "\"freeCoverLimit\":500000,\"census\":\"" + com.nsure.testsupport.GroupSchemeSetup.QUOTE_CENSUS + "\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.ref");
         progress(quote, "admin", "SUBMIT");
         assertThat(events(Events.SCHEME_QUOTED, quote)).isEmpty();
@@ -53,7 +53,7 @@ class GroupEventsApiTest {
         assertThat(events(Events.SCHEME_QUOTED, quote)).hasSize(1);
         progress(quote, "admin", "ACCEPT");
         String scheme = JsonPath.read(mockMvc.perform(json(post("/group-life/quotes/" + quote + "/activation"), "admin",
-                        "{\"inceptionDate\":\"" + LocalDate.now() + "\",\"wordingConfirmed\":true}"))
+                        "{\"inceptionDate\":\"" + LocalDate.now() + "\",\"wordingRef\":\"WRD-G001\",\"conditions\":[\"SIGNED_PROPOSAL\",\"SIGNED_CENSUS\",\"FIRST_PREMIUM_OR_DEFERRAL\"]}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.schemeRef");
         List<OutboxEvent> activated = events(Events.SCHEME_ACTIVATED, scheme);
         assertThat(activated).hasSize(1);
@@ -75,12 +75,17 @@ class GroupEventsApiTest {
         mockMvc.perform(json(post("/group-life/schemes/" + scheme + "/benefits/approval"), "secadmin", "{\"note\":\"again\"}"))
                 .andExpect(status().isConflict());
 
-        // A scheme set up directly (not from a quote) is announced too.
+        // A scheme set up directly is not in force, so not announced, until it is activated on accepted terms.
         String direct = JsonPath.read(mockMvc.perform(json(post("/group/schemes"), "admin",
                         "{\"name\":\"Direct Events " + System.nanoTime() + "\",\"sector\":\"Retail\","
                                 + "\"inceptionDate\":\"2026-01-01\",\"renewalDate\":\"2027-01-01\"}"))
-                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.scheme.ref");
-        assertThat(events(Events.SCHEME_ACTIVATED, direct)).hasSize(1);
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.scheme.status").value("SETUP"))
+                .andReturn().getResponse().getContentAsString(), "$.scheme.ref");
+        assertThat(events(Events.SCHEME_ACTIVATED, direct)).isEmpty();
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, direct);
+        assertThat(events(Events.SCHEME_ACTIVATED, direct)).singleElement()
+                .satisfies(e -> assertThat(e.getPayload()).contains("\"wording\":\"WRD-G001 v1\""));
     }
 
     @Test
@@ -100,9 +105,11 @@ class GroupEventsApiTest {
         assertThat(terms.get(0).getPayload()).contains("\"change\":\"ADDED\"");
         assertThat(terms.get(1).getPayload()).contains("\"change\":\"AMENDED\"").contains("\"fixedCover\":\"700000.00\"");
 
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme);
         String batch = JsonPath.read(mockMvc.perform(json(post("/group/schemes/" + scheme + "/census-batches"), "admin",
-                        "{\"externalBatchId\":\"EV-1\",\"csv\":\"" + HEADER + "\\nE1,Eve,One,1985-01-01,STAFF,,JOIN,2026-01-01"
-                                + "\\nE2,Eli,Two,1985-01-01,NOPE,,JOIN,2026-01-01\"}"))
+                        // Joining from today, under the amended category terms (a join dated earlier uses the version then in force).
+                        "{\"externalBatchId\":\"EV-1\",\"csv\":\"" + HEADER + "\\nE1,Eve,One,1985-01-01,STAFF,,JOIN," + LocalDate.now()
+                                + "\\nE2,Eli,Two,1985-01-01,NOPE,,JOIN," + LocalDate.now() + "\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.ref");
         assertThat(events(Events.CENSUS_BATCH_VALIDATED, scheme)).singleElement()
                 .satisfies(e -> assertThat(e.getPayload()).contains("\"validRows\":1").contains("\"invalidRows\":1"));
@@ -118,6 +125,7 @@ class GroupEventsApiTest {
         assertThat(events(Events.MEMBER_UNDERWRITING_REFERRED, scheme)).singleElement()
                 .satisfies(e -> assertThat(e.getPayload()).contains("\"pendingCover\":\"200000.00\""));
         Integer member = JsonPath.read(committed, "$.rows[0].memberId");
+        com.nsure.testsupport.GroupSchemeSetup.receiveEvidence(mockMvc, member);
         mockMvc.perform(json(post("/group/members/" + member + "/underwriting"), "admin",
                         "{\"decision\":\"ACCEPT\",\"reason\":\"Evidence satisfactory\"}"))
                 .andExpect(status().isOk());
@@ -138,6 +146,7 @@ class GroupEventsApiTest {
         mockMvc.perform(json(put("/group-life/schemes/" + scheme + "/benefits"), "admin",
                         "{\"benefitType\":\"CREDIT\",\"basis\":\"LOAN_BALANCE\"}"))
                 .andExpect(status().isOk());
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme);
         mockMvc.perform(json(post("/group-life/schemes/" + scheme + "/credit-loans"), "admin",
                         "{\"batchReference\":\"EVB-1\",\"rows\":[{\"lenderLoanId\":\"EV1\",\"borrowerName\":\"B One\","
                                 + "\"loanAmount\":120000,\"termMonths\":12}]}"))

@@ -32,7 +32,25 @@ public final class GroupViews {
             String quoteRef,
             Integer policyYear,
             // Send back in If-Match when changing the scheme (NS-TXN-001).
-            long version) {
+            long version,
+            // The master policy's set-up terms and what it was activated on (NS-GL01-003/004).
+            SetupView setup) {
+    }
+
+    /** Legal sponsor, payer, broker, billing arrangement, member rules and the activation record of a scheme. */
+    public record SetupView(
+            String sponsorRef,
+            String payerName,
+            String brokerRef,
+            String billingMethod,
+            Integer billingDueDay,
+            String aawRule,
+            boolean partialCoverAllowed,
+            String wordingRef,
+            Integer wordingVersion,
+            String inceptionConditions,
+            String activatedBy,
+            LocalDateTime activatedAt) {
     }
 
     public record SchemeDetailView(
@@ -56,7 +74,16 @@ public final class GroupViews {
             Integer lateEntryDays,
             int activeMembers,
             String updatedBy,
-            LocalDateTime updatedAt) {
+            LocalDateTime updatedAt,
+            // NS-GL02-001: approved factors, cessation, waiting period, cap, eligibility; the current version.
+            String employmentClass,
+            String occupationClass,
+            String salaryBasis,
+            Integer exitAge,
+            Integer waitingDays,
+            BigDecimal maxCover,
+            String eligibilityRule,
+            int version) {
     }
 
     public record MemberView(
@@ -87,7 +114,11 @@ public final class GroupViews {
             String membershipStatus,
             String coverStatus,
             // NS-GL04-003: the party the member was resolved to by national id, when one matched.
-            String partyRef) {
+            String partyRef,
+
+            // NS-GL03-004: the premium loading and exclusions of the member's underwriting decision.
+            BigDecimal loadingPercent,
+            String exclusions) {
     }
 
     public record CensusBatchSummaryView(
@@ -267,7 +298,22 @@ public final class GroupViews {
             String notifiedBy,
             LocalDateTime notifiedAt,
             String decidedBy,
-            LocalDateTime decidedAt) {
+            LocalDateTime decidedAt,
+            // Benefit-pack details (NS-GL02-004/005): the life claimed for, CI condition group, partial disability,
+            // accident, the limit under the terms in force, income benefit dates and escalation, CI survival and
+            // acceleration/reinstatement.
+            String lifeInsured,
+            String lifeName,
+            String conditionGroup,
+            boolean partial,
+            boolean accident,
+            BigDecimal benefitLimit,
+            LocalDate firstPaymentDate,
+            LocalDate cessationDate,
+            BigDecimal escalationPercent,
+            LocalDate survivalConfirmedOn,
+            BigDecimal acceleratedAmount,
+            LocalDate reinstatedOn) {
     }
 
     /** The allocation just made (or the existing one for a repeated reference) and the invoice after it. */

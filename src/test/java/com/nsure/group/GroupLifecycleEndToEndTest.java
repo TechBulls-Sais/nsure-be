@@ -77,6 +77,7 @@ class GroupLifecycleEndToEndTest {
         // Member underwriting of the cover above the free-cover limit.
         String detail = detail(scheme);
         Integer manager = ((List<Integer>) JsonPath.read(detail, "$.members[?(@.memberKey == 'E2')].id")).get(0);
+        com.nsure.testsupport.GroupSchemeSetup.receiveEvidence(mockMvc, manager);
         mockMvc.perform(json(post("/group/members/" + manager + "/underwriting"), "admin",
                         "{\"decision\":\"ACCEPT\",\"acceptedAmount\":700000,\"reason\":\"Partial on evidence\"}"))
                 .andExpect(jsonPath("$.status").value("PARTIALLY_ACCEPTED"));
@@ -174,6 +175,7 @@ class GroupLifecycleEndToEndTest {
     }
 
     private String upload(String scheme, String externalId, String rows) throws Exception {
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme);
         return JsonPath.read(mockMvc.perform(json(post("/group/schemes/" + scheme + "/census-batches"), "admin",
                         body(Map.of("externalBatchId", externalId, "mode", "PARTIAL", "csv", HEADER + "\n" + rows))))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.ref");

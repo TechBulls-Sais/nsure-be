@@ -1,0 +1,138 @@
+databaseChangeLog:
+  # Group quotation pricing (NS-GL01-001/002, section 08 pricing): versioned group rate tables approved by a second
+  # person; the census a quotation is rated on, kept as numbered versions with every row's validation outcome; and the
+  # terms of each quotation version (census version, sponsor, rate source and table versions, pricing breakdown,
+  # assumptions, validity and benefit design), beside grp_quote so an offered version is never rewritten.
+  - changeSet:
+      id: 136-group-quote-pricing
+      author: nsure
+      changes:
+        - createTable:
+            tableName: grp_rate_table
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: table_code, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: version_no, type: int, constraints: {nullable: false}}
+              - column: {name: label, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: benefit_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: rating_basis, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: table_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: note, type: varchar(500)}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: timestamp(6)}
+        - addUniqueConstraint:
+            tableName: grp_rate_table
+            columnNames: table_code, version_no
+            constraintName: uk_grp_rate_table_version
+        - createTable:
+            tableName: grp_rate_band
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: table_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_grp_rate_band_table, references: grp_rate_table(id)}}
+              - column: {name: age_from, type: int, constraints: {nullable: false}}
+              - column: {name: age_to, type: int, constraints: {nullable: false}}
+              - column: {name: rate, type: 'decimal(12,4)', constraints: {nullable: false}}
+        - createTable:
+            tableName: grp_quote_census
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: quote_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: census_version, type: int, constraints: {nullable: false}}
+              - column: {name: file_hash, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: total_rows, type: int, constraints: {nullable: false}}
+              - column: {name: valid_rows, type: int, constraints: {nullable: false}}
+              - column: {name: invalid_rows, type: int, constraints: {nullable: false}}
+              - column: {name: lives, type: int, constraints: {nullable: false}}
+              - column: {name: salary_roll, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: loan_balance, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: average_age, type: 'decimal(5,1)'}
+              - column: {name: warnings, type: varchar(1000)}
+              - column: {name: census_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: submitted_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: submitted_at, type: timestamp(6), constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: grp_quote_census
+            columnNames: quote_ref, census_version
+            constraintName: uk_grp_quote_census_version
+        - createTable:
+            tableName: grp_quote_census_row
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: census_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_grp_quote_census_row, references: grp_quote_census(id)}}
+              - column: {name: line_no, type: int, constraints: {nullable: false}}
+              - column: {name: member_key, type: varchar(40)}
+              - column: {name: date_of_birth, type: varchar(20)}
+              - column: {name: category_code, type: varchar(20)}
+              - column: {name: salary, type: varchar(30)}
+              - column: {name: loan_balance, type: varchar(30)}
+              - column: {name: row_status, type: varchar(10), constraints: {nullable: false}}
+              - column: {name: error, type: varchar(500)}
+        - createTable:
+            tableName: grp_quote_terms
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: quote_id, type: bigint, constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_quote_terms_quote, foreignKeyName: fk_grp_quote_terms_quote, references: grp_quote(id)}}
+              - column: {name: census_id, type: bigint}
+              - column: {name: sponsor_ref, type: varchar(20)}
+              - column: {name: rate_source, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: pricing_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: technical_premium, type: 'decimal(19,2)'}
+              - column: {name: adjustment_percent, type: 'decimal(7,2)'}
+              - column: {name: expense_percent, type: 'decimal(7,2)'}
+              - column: {name: commission_percent, type: 'decimal(7,2)'}
+              - column: {name: profit_percent, type: 'decimal(7,2)'}
+              - column: {name: validity_days, type: int, constraints: {nullable: false}}
+              - column: {name: rate_tables, type: varchar(500)}
+              - column: {name: pricing_detail, type: clob}
+              - column: {name: design, type: clob}
+  # As 111 does for earlier long text: H2 maps clob to CLOB, which the LONGVARCHAR mapping (for MySQL longtext) refuses.
+  - changeSet:
+      id: 136-h2-quote-terms-longvarchar
+      author: nsure
+      dbms: h2
+      changes:
+        - modifyDataType: {tableName: grp_quote_terms, columnName: pricing_detail, newDataType: longvarchar}
+        - modifyDataType: {tableName: grp_quote_terms, columnName: design, newDataType: longvarchar}
+  # Demo group rate tables: illustrative risk rates by age band, NOT the insurer's tariff (the MAYFAIRGroupLife
+  # workbook is a release dependency, D02). Rates per 1,000 a year of sum assured, salary or loan balance, or an
+  # amount a year per member. Replace with approved tables (new versions) through /group-life/rate-tables.
+  - changeSet:
+      id: 136-group-demo-rate-tables
+      author: nsure
+      context: demo
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO grp_rate_table (table_code, version_no, label, benefit_type, rating_basis, table_status, note, created_by, created_at, approved_by, approved_at)
+              SELECT t.c, 1, t.l, t.b, t.r, 'APPROVED', 'Demo rate table: illustrative rates, not an approved tariff.', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP FROM (
+                SELECT 'DEMO-GLA-SA' c, 'Demo GLA rates per 1,000 sum assured' l, 'GLA' b, 'SUM_ASSURED' r UNION ALL
+                SELECT 'DEMO-GLA-SAL', 'Demo GLA rates per 1,000 salary', 'GLA', 'SALARY' UNION ALL
+                SELECT 'DEMO-GLA-PM', 'Demo GLA rates per member a year', 'GLA', 'PER_MEMBER' UNION ALL
+                SELECT 'DEMO-LSD-SA', 'Demo lump-sum disability rates per 1,000 sum assured', 'LUMP_SUM_DISABILITY', 'SUM_ASSURED' UNION ALL
+                SELECT 'DEMO-CI-SA', 'Demo critical illness rates per 1,000 sum assured', 'CRITICAL_ILLNESS', 'SUM_ASSURED' UNION ALL
+                SELECT 'DEMO-FAM-PM', 'Demo family benefit rates per member a year', 'FAMILY', 'PER_MEMBER' UNION ALL
+                SELECT 'DEMO-IP-SAL', 'Demo income protection rates per 1,000 salary', 'INCOME_PROTECTION', 'SALARY' UNION ALL
+                SELECT 'DEMO-CREDIT-LB', 'Demo group credit rates per 1,000 loan balance', 'CREDIT', 'LOAN_BALANCE'
+              ) t
+        - sql:
+            sql: |
+              INSERT INTO grp_rate_band (table_id, age_from, age_to, rate)
+              SELECT t.id, b.f, b.t, CASE t.table_code
+                  WHEN 'DEMO-GLA-SA' THEN b.gla
+                  WHEN 'DEMO-GLA-SAL' THEN b.gla * 2
+                  WHEN 'DEMO-GLA-PM' THEN b.pm
+                  WHEN 'DEMO-LSD-SA' THEN b.gla / 2
+                  WHEN 'DEMO-CI-SA' THEN b.gla * 0.8
+                  WHEN 'DEMO-FAM-PM' THEN b.fam
+                  WHEN 'DEMO-IP-SAL' THEN b.gla * 3
+                  ELSE b.gla * 1.5 END
+              FROM grp_rate_table t CROSS JOIN (
+                SELECT 16 f, 29 t, 1.2000 gla, 300.0000 pm, 180.0000 fam UNION ALL
+                SELECT 30, 39, 1.6000, 420.0000, 200.0000 UNION ALL
+                SELECT 40, 49, 2.9000, 780.0000, 240.0000 UNION ALL
+                SELECT 50, 59, 6.1000, 1650.0000, 320.0000 UNION ALL
+                SELECT 60, 70, 12.5000, 3400.0000, 480.0000
+              ) b
+              WHERE t.table_code LIKE 'DEMO-%' AND t.version_no = 1

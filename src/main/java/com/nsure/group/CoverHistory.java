@@ -219,12 +219,17 @@ public class CoverHistory {
     record Priced(BigDecimal premium, int daysCovered, BigDecimal cover, BigDecimal rate, String categoryCode) {
     }
 
+    private static BigDecimal loaded(BigDecimal rate, BigDecimal loadingPercent) {
+        return loadingPercent == null || loadingPercent.signum() == 0 ? rate : rate.multiply(BigDecimal.ONE.add(
+                loadingPercent.divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP))).setScale(4, RoundingMode.HALF_UP);
+    }
+
     Priced price(SchemeMember member, List<MemberCoverPeriod> periods, Map<Long, List<CategoryVersion>> versions,
             LocalDate start, LocalDate end, int daysInPeriod) {
         BigDecimal sum = BigDecimal.ZERO;
         int days = 0;
         BigDecimal lastCover = BigDecimal.ZERO.setScale(2);
-        BigDecimal lastRate = member.getCategory().getRatePerMille();
+        BigDecimal lastRate = member.ratePerMille();
         String lastCategory = member.getCategory().getCode();
         LocalDate mid = start.withDayOfMonth(Math.min(15, start.lengthOfMonth()));
         for (MemberCoverPeriod p : periods) {
@@ -242,7 +247,8 @@ public class CoverHistory {
                 if (member.suspendedDays(d, d) > 0) {
                     continue;
                 }
-                BigDecimal rate = rateOn(p.getCategory(), catVersions, d);
+                // The category rate in force that day, plus the member's underwriting loading (NS-GL03-004).
+                BigDecimal rate = loaded(rateOn(p.getCategory(), catVersions, d), member.getLoadingPercent());
                 days++;
                 lastCover = p.getAcceptedCover();
                 lastRate = rate;

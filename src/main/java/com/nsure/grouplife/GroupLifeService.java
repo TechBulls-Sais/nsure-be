@@ -115,6 +115,8 @@ public class GroupLifeService {
         q.createdBy = user.getUsername();
         q.createdAt = LocalDateTime.now();
         em.persist(q);
+        // NS-GL01-001/002: census version, rate source, pricing and terms of this version (SchemeSetup).
+        setup.price(q, body, null, user);
         return quoteView(q);
     }
 
@@ -145,6 +147,7 @@ public class GroupLifeService {
         q.createdBy = user.getUsername();
         q.createdAt = LocalDateTime.now();
         em.persist(q);
+        setup.price(q, body, latest, user);
         return quoteView(q);
     }
 
@@ -158,6 +161,7 @@ public class GroupLifeService {
             case "SUBMIT" -> {
                 user.validateHasPermissionTo("MANAGE_SCHEME");
                 expect(q, "DRAFT");
+                setup.requireRated(q);
                 q.status = "SUBMITTED";
             }
             case "APPROVE", "DECLINE" -> {
@@ -191,60 +195,26 @@ public class GroupLifeService {
         return quoteView(q);
     }
 
+    /** Contract set-up and activation (NS-GL01-003/004, AT-GL01-01): see {@link SchemeSetup}. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private SchemeSetup setup;
+
     /**
-     * {inceptionDate, wordingConfirmed}: activates the master policy from the accepted quote. Refused without the
-     * approved wording and a free-cover limit (AT-GL01-01).
+     * {inceptionDate, wordingRef, wordingVersion?, conditions [..], categories [..]?, sponsorRef?, payerName?,
+     * brokerRef?, billingMethod?, billingDueDay?, aawRule?, partialCoverAllowed?}: activates the master policy from the
+     * accepted quote. Refused without an approved group wording, the inception conditions or free-cover rules.
      */
     @Transactional
     public Map<String, Object> activate(String ref, JsonNode body) {
         AppUser user = user("MANAGE_SCHEME");
         Quote q = latest(ref);
-        expect(q, "ACCEPTED");
-        if (!body.path("wordingConfirmed").asBoolean(false)) {
-            throw new IllegalArgumentException("Confirm the approved scheme wording before activating the master policy.");
-        }
-        if (q.freeCoverLimit == null) {
-            throw new IllegalArgumentException(ref + " has no free-cover limit. Revise the quote to set it before"
-                    + " activation.");
-        }
-        LocalDate inception = LocalDate.parse(required(body, "inceptionDate"));
-        ObjectNode scheme = mapper.createObjectNode();
-        scheme.put("name", q.sponsorName).put("sector", q.sector).put("inceptionDate", inception.toString())
-                .put("renewalDate", inception.plusYears(1).toString());
-        // SchemeActivated is published by the scheme's creation, with the quote it came from.
-        String schemeRef = schemes.createScheme(scheme, ref).scheme().ref();
-        q.status = "ACTIVATED";
-        q.schemeRef = schemeRef;
-        for (String type : q.benefits.split(",")) {
-            Benefit b = new Benefit();
-            b.schemeRef = schemeRef;
-            b.benefitType = type.trim();
-            b.basis = "GLA".equals(b.benefitType) || "LUMP_SUM_DISABILITY".equals(b.benefitType) ? "SALARY_MULTIPLE"
-                    : "INCOME_PROTECTION".equals(b.benefitType) ? "MONTHLY_INCOME_PERCENT" : "FIXED";
-            b.multiple = "SALARY_MULTIPLE".equals(b.basis) ? q.salaryMultiple
-                    : "MONTHLY_INCOME_PERCENT".equals(b.basis) ? new BigDecimal("75.00") : null;
-            b.fixedAmount = "FIXED".equals(b.basis) ? PRODUCT_MAXIMUM.get(b.benefitType) : null;
-            b.terms = defaultTerms(b.benefitType);
-            b.updatedBy = user.getUsername();
-            b.updatedAt = LocalDateTime.now();
-            // The plan comes from the quote the underwriter approved.
-            b.approvalStatus = "APPROVED";
-            b.approvedBy = q.decidedBy;
-            b.approvedAt = LocalDateTime.now();
-            em.persist(b);
-        }
-        outbox.publish(Events.SCHEME_PLAN_APPROVED, schemeRef, Map.of("schemeRef", schemeRef, "benefits",
-                List.of(q.benefits.split(",")), "approvedBy", q.decidedBy == null ? "" : q.decidedBy,
-                "source", ref + " v" + q.versionNo), user.getUsername());
-        audit.record(user.getUsername(), "Scheme activated", "Scheme", schemeRef, "From " + ref + " v" + q.versionNo);
+        setup.activateQuote(q, body, user);
         return quoteView(q);
     }
 
     private Quote fill(Quote q, JsonNode body) {
         q.sponsorName = required(body, "sponsorName");
         q.sector = required(body, "sector");
-        q.lives = body.path("lives").asInt(0);
-        q.salaryRoll = Money.of(new BigDecimal(required(body, "salaryRoll")));
         List<String> benefits = new ArrayList<>();
         JsonNode list = body.get("benefits");
         if (list != null && list.isArray()) {
@@ -259,24 +229,9 @@ public class GroupLifeService {
                     .toList() + ".");
         }
         q.benefits = String.join(",", benefits);
-        // NS-GL01-002: the rating basis is stated, never assumed.
-        q.ratingBasis = optional(body, "ratingBasis") == null ? "SALARY" : optional(body, "ratingBasis")
-                .toUpperCase(Locale.ROOT);
-        if (!Set.of("SALARY", "SUM_ASSURED", "PER_MEMBER", "LOAN_BALANCE").contains(q.ratingBasis)) {
-            throw new IllegalArgumentException("ratingBasis must be SALARY, SUM_ASSURED, PER_MEMBER or LOAN_BALANCE.");
-        }
-        q.salaryMultiple = new BigDecimal(optional(body, "salaryMultiple") == null ? "1" : optional(body,
-                "salaryMultiple")).setScale(2, RoundingMode.HALF_UP);
-        q.ratePerMille = new BigDecimal(required(body, "ratePerMille")).setScale(4, RoundingMode.HALF_UP);
-        if (q.lives < 1 || q.salaryRoll.signum() <= 0 || q.ratePerMille.signum() <= 0 || q.salaryMultiple.signum() <= 0) {
-            throw new IllegalArgumentException("The census needs at least one life, a salary roll, a multiple and a"
-                    + " rate above zero.");
-        }
-        BigDecimal sumAssured = q.salaryRoll.multiply(q.salaryMultiple);
-        q.annualPremium = sumAssured.multiply(q.ratePerMille).divide(THOUSAND, 2, RoundingMode.HALF_UP);
-        q.freeCoverLimit = optional(body, "freeCoverLimit") == null ? null
-                : Money.of(new BigDecimal(optional(body, "freeCoverLimit")));
-        q.validUntil = LocalDate.now().plusDays(30);
+        // NS-GL01-002: the rating basis is stated, never assumed; the premium is set from the census and the
+        // approved rate tables or a negotiated rate once the version exists (SchemeSetup.price).
+        setup.basis(q, body);
         q.notes = optional(body, "notes");
         return q;
     }
@@ -308,12 +263,10 @@ public class GroupLifeService {
         }
         BigDecimal fixed = optional(body, "fixedAmount") == null ? null
                 : Money.of(new BigDecimal(optional(body, "fixedAmount")));
-        // AT-GL02-01: a scheme may not go above the product's maximum for the benefit.
-        BigDecimal max = PRODUCT_MAXIMUM.get(type);
-        if (max != null && fixed != null && fixed.compareTo(max) > 0) {
-            throw new IllegalArgumentException(label(type) + " cannot exceed the product maximum of " + Money.text(max)
-                    + "; " + Money.text(fixed) + " was asked for.");
-        }
+        // AT-GL02-01: a scheme may not go above the product's maximums for the benefit (grp_product_rule).
+        setup.checkBenefit(type, basis, optional(body, "multiple") == null ? null : new BigDecimal(optional(body,
+                "multiple")), fixed, optional(body, "waitingMonths") == null ? null : Integer.valueOf(optional(body,
+                "waitingMonths")));
         Benefit b = em.createQuery("select b from SchemeBenefit b where b.schemeRef = :ref and b.benefitType = :t",
                 Benefit.class).setParameter("ref", schemeRef).setParameter("t", type).getResultStream().findFirst()
                 .orElseGet(Benefit::new);
@@ -362,7 +315,7 @@ public class GroupLifeService {
         return benefits(schemeRef);
     }
 
-    private static String defaultTerms(String type) {
+    static String defaultTerms(String type) {
         return switch (type) {
             case "GLA" -> "Death benefit as a multiple of annual salary. Actively-at-work and free-cover rules apply.";
             case "LUMP_SUM_DISABILITY" -> "Own-occupation disability after a 6-month assessment period; 50% partial"
@@ -748,7 +701,7 @@ public class GroupLifeService {
         for (Benefit b : em.createQuery("select b from SchemeBenefit b where b.schemeRef = :ref order by b.benefitType",
                 Benefit.class).setParameter("ref", schemeRef).getResultList()) {
             Map<String, Object> v = benefitView(b);
-            BigDecimal max = PRODUCT_MAXIMUM.get(b.benefitType);
+            BigDecimal max = setup.productMaximum(b.benefitType);
             v.put("source", max != null && b.fixedAmount != null && b.fixedAmount.compareTo(max) < 0
                     ? "Scheme override below the product maximum" : b.terms != null && b.terms.equals(defaultTerms(
                     b.benefitType)) ? "Product default terms" : "Scheme terms");
@@ -832,7 +785,9 @@ public class GroupLifeService {
                     // AT-GL03-01: only accepted cover is certified; cover awaiting underwriting is shown as pending.
                     c.put("acceptedCover", m.getAcceptedCover());
                     c.put("pendingCover", m.getPendingCover());
-                    c.put("benefits", benefits.isEmpty() ? List.of("GLA") : benefits);
+                    // AT-GL01-02: the member's category benefits only, stamped with the terms they came from.
+                    c.put("benefits", setup.certificateBenefits(s, m, benefits));
+                    c.putAll(setup.certificateTerms(s, m));
                     return c;
                 }).toList();
     }
@@ -881,6 +836,7 @@ public class GroupLifeService {
         v.put("createdAt", q.createdAt);
         v.put("decidedBy", q.decidedBy);
         v.put("decisionNote", q.decisionNote);
+        v.putAll(setup.termsView(q));
         return v;
     }
 
@@ -892,7 +848,7 @@ public class GroupLifeService {
         v.put("fixedAmount", b.fixedAmount);
         v.put("waitingMonths", b.waitingMonths);
         v.put("terms", b.terms);
-        v.put("productMaximum", PRODUCT_MAXIMUM.get(b.benefitType));
+        v.put("productMaximum", setup.productMaximum(b.benefitType));
         v.put("updatedBy", b.updatedBy);
         v.put("updatedAt", b.updatedAt);
         v.put("approvalStatus", b.approvalStatus);

@@ -1,0 +1,51 @@
+databaseChangeLog:
+  # Group scheme set-up (NS-GL01-001/003/004, AT-GL01-01): a prospect sponsor record the quotation and scheme refer
+  # to; the master policy's set-up terms (legal sponsor, payer, broker, billing arrangement, actively-at-work path,
+  # whether partial cover is allowed); and what it was activated on (the approved wording version and the inception
+  # conditions). A scheme created directly is in SETUP until it is activated from an accepted quotation.
+  - changeSet:
+      id: 135-group-scheme-setup
+      author: nsure
+      changes:
+        - createTable:
+            tableName: grp_sponsor
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_sponsor_ref}}
+              - column: {name: legal_name, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: registration_no, type: varchar(40)}
+              - column: {name: sector, type: varchar(80), constraints: {nullable: false}}
+              - column: {name: contact_name, type: varchar(100)}
+              - column: {name: contact_email, type: varchar(150)}
+              - column: {name: sponsor_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+        - addColumn:
+            tableName: ins_scheme
+            columns:
+              - column: {name: sponsor_ref, type: varchar(20)}
+              - column: {name: payer_name, type: varchar(150)}
+              - column: {name: broker_ref, type: varchar(30)}
+              - column: {name: billing_method, type: varchar(20)}
+              - column: {name: billing_due_day, type: int}
+              - column: {name: aaw_rule, type: varchar(10), defaultValue: REFER, constraints: {nullable: false}}
+              - column: {name: partial_cover, type: varchar(3), defaultValue: 'YES', constraints: {nullable: false}}
+              - column: {name: wording_ref, type: varchar(20)}
+              - column: {name: wording_version, type: int}
+              - column: {name: inception_conditions, type: varchar(1000)}
+              - column: {name: activated_by, type: varchar(100)}
+              - column: {name: activated_at, type: timestamp(6)}
+  # Demo group wording (SH09A library): the master-policy wording a demo scheme is activated on. Labelled as demo text;
+  # the insurer's approved wording replaces it.
+  - changeSet:
+      id: 135-group-demo-wording
+      author: nsure
+      context: demo
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO doc_wording (record_ref, version_no, product, clause_type, title, body, status, effective_from, created_by, created_at, approved_by, approved_at)
+              SELECT seed.r, 1, 'Group Life', seed.c, seed.t, seed.b, 'APPROVED', DATE '2026-01-01', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP FROM (
+                SELECT 'WRD-G001' r, 'MASTER_POLICY' c, 'Group life master policy (demo wording)' t, 'Demo wording, not approved insurer text. The insurer covers each eligible member of the scheme for the benefits of the member''s category, from the later of the scheme inception and the member''s entry date, subject to the free-cover limit, the actively-at-work condition and the underwriting of cover above it.' b UNION ALL
+                SELECT 'WRD-G002', 'MEMBER_CERTIFICATE', 'Group member certificate (demo wording)', 'Demo wording, not approved insurer text. This certificate confirms the cover accepted for the member under the master policy. Cover awaiting underwriting is not in force until the insurer accepts it in writing.'
+              ) seed
