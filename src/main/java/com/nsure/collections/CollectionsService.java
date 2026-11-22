@@ -87,6 +87,15 @@ public class CollectionsService {
             throw new IllegalArgumentException("Kind must be RETURNED, REVERSED or CHARGEBACK.");
         }
         String reason = required(body, "reason", 10, 500);
+        return reverseConfirmed(receiptRef, kind, reason, user.getUsername());
+    }
+
+    /**
+     * Carries out a reversal already authorised: a bank return read from the rail, or a staff reversal a second person
+     * approved. The caller has checked who may do it.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public CollectionsViews.ReversalView reverseConfirmed(String receiptRef, String kind, String reason, String actor) {
         PremiumPayment payment = em.createQuery("select p from PremiumPayment p where p.receiptRef = :ref",
                         PremiumPayment.class)
                 .setParameter("ref", receiptRef).getResultStream().findFirst()
@@ -97,7 +106,7 @@ public class CollectionsService {
         InsurancePolicy policy = policies.policy(payment.getPolicyRef());
         em.lock(policy, LockModeType.PESSIMISTIC_WRITE);
         String reversalRef = references.next("REV-", 6, () -> 0L);
-        billing.reverseAllocations(receiptRef, reversalRef, user.getUsername());
+        billing.reverseAllocations(receiptRef, reversalRef, actor);
         payment.reverse();
         em.createQuery("select r from PremiumReceipt r where r.ref = :ref", PremiumReceipt.class)
                 .setParameter("ref", receiptRef).getResultStream().findFirst()
@@ -105,23 +114,28 @@ public class CollectionsService {
         if (payment.getTransactionId() != null) {
             PaymentTransaction transaction = em.find(PaymentTransaction.class, payment.getTransactionId());
             if (transaction != null && PaymentTransaction.SETTLED.equals(transaction.getStatus())) {
-                transaction.returned(kind + ": " + reason);
+                // NS-SH04-002: an unpaid return and a reversal or chargeback are distinct transaction states.
+                if (ReceiptReversal.RETURNED.equals(kind)) {
+                    transaction.returned(kind + ": " + reason);
+                } else {
+                    transaction.reversed(kind + ": " + reason);
+                }
             }
         }
         ReceiptReversal reversal = new ReceiptReversal(reversalRef, receiptRef, policy.getRef(), kind,
-                payment.getAmount(), reason, payment.getTransactionId(), user.getUsername());
+                payment.getAmount(), reason, payment.getTransactionId(), clip(actor, 100));
         em.persist(reversal);
 
         LocalDate unpaidFrom = billing.firstUnsettledStart(policy.getRef());
         if (unpaidFrom != null) {
             policies.reviewCoverAfterReversal(policy, unpaidFrom, "Receipt " + receiptRef + " "
-                    + kind.toLowerCase(Locale.ROOT) + ": " + reason, user.getUsername());
+                    + kind.toLowerCase(Locale.ROOT) + ": " + reason, clip(actor, 100));
         }
         alerts.raise("COVER_REVIEW", "UPDATE_POLICY", "Cover review: premium reversed on " + policy.getRef(),
                 "Receipt " + receiptRef + " (BWP " + payment.getAmount().toPlainString() + ") was "
                         + kind.toLowerCase(Locale.ROOT) + ". " + reason + " The policy is now " + policy.getStatus()
                         + (unpaidFrom == null ? "." : ", paid to " + unpaidFrom.minusDays(1) + "."),
-                "COVER_REVIEW:" + reversalRef, user.getUsername());
+                "COVER_REVIEW:" + reversalRef, clip(actor, 100));
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("policyRef", policy.getRef());
@@ -129,9 +143,9 @@ public class CollectionsService {
         data.put("reversalRef", reversalRef);
         data.put("kind", kind);
         data.put("amount", payment.getAmount().toPlainString());
-        outbox.publish(Events.PAYMENT_RETURNED, policy.getRef(), data, user.getUsername());
+        outbox.publish(Events.PAYMENT_RETURNED, policy.getRef(), data, clip(actor, 100));
         return new CollectionsViews.ReversalView(reversalRef, receiptRef, policy.getRef(), kind, payment.getAmount(),
-                reason, user.getUsername(), reversal.getReversedAt(),
+                reason, reversal.getReversedBy(), reversal.getReversedAt(),
                 unpaidFrom == null ? null : unpaidFrom.minusDays(1), policy.getStatus());
     }
 
@@ -204,6 +218,10 @@ public class CollectionsService {
             CollectionsViews.BillingRunView run = billingRun(asOf, actor);
             return new com.nsure.integration.Operations.Outcome("BILLING-RUN-" + asOf, run);
         });
+    }
+
+    private static String clip(String value, int max) {
+        return value == null || value.length() <= max ? value : value.substring(0, max);
     }
 
     private static String required(JsonNode body, String field, int min, int max) {

@@ -182,6 +182,12 @@ public class BillingService {
                 .getResultStream()
                 .forEach(m -> found.add("Receipt " + m.getProviderRef() + " (BWP " + m.getAmount().toPlainString()
                         + ") is in suspense"));
+        em.createQuery("select c from CollectionInstruction c where c.policyRef = :ref and c.status in :waiting",
+                        CollectionInstruction.class)
+                .setParameter("ref", policyRef).setParameter("waiting", CollectionInstruction.AWAITING_BANK)
+                .getResultStream()
+                .forEach(c -> found.add("Collection " + c.getRef() + " (BWP " + c.getAmount().toPlainString()
+                        + ") is " + c.getStatus().toLowerCase() + " at the bank"));
         return found;
     }
 
@@ -232,8 +238,17 @@ public class BillingService {
                             r == null ? null : r.getReason());
                 })
                 .toList();
+        CollectionsViews.MandateView mandate = em.createQuery("select m from CollectionMandate m"
+                        + " where m.activePolicyRef = :ref", CollectionMandate.class)
+                .setParameter("ref", policy.getRef()).getResultStream().findFirst().map(CollectionRuns::view)
+                .orElse(null);
+        List<CollectionsViews.InstructionView> instructions = em.createQuery("select c from CollectionInstruction c"
+                        + " join fetch c.batch where c.policyRef = :ref order by c.id desc", CollectionInstruction.class)
+                .setParameter("ref", policy.getRef()).setMaxResults(50).getResultStream().map(CollectionRuns::view)
+                .toList();
         return new CollectionsViews.AccountView(policy.getRef(), policy.getStatus(), paidTo,
-                policy.getNextPremiumDue(), arrears, overdue, unresolvedPayments(policy.getRef()), views, receipts);
+                policy.getNextPremiumDue(), arrears, overdue, unresolvedPayments(policy.getRef()), views, receipts,
+                mandate, instructions);
     }
 
     ReceiptReversal reversal(String receiptRef) {
@@ -273,6 +288,11 @@ public class BillingService {
         }
         instalment.status(outstanding.signum() <= 0 ? Instalment.PAID
                 : allocated.signum() > 0 ? Instalment.PART_PAID : Instalment.DUE);
+    }
+
+    /** What is still owed on an instalment: billed plus adjustments less live allocations. */
+    BigDecimal outstandingOf(Instalment instalment) {
+        return outstanding(instalment);
     }
 
     private BigDecimal outstanding(Instalment instalment) {

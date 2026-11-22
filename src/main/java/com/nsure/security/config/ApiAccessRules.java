@@ -428,6 +428,19 @@ public final class ApiAccessRules {
             rule(GET, "/collections/reconciliation", anyOf("READ_FINANCE")),
             rule(POST, "/collections/reconciliation/*/assign", anyOf("MANAGE_FINANCE")),
             rule(POST, "/collections/reconciliation/*/resolve", anyOf("MANAGE_FINANCE")),
+            // ── SH04 debit-order / mobile-money collection (NS-SH04-002): prepared and sent by Finance, approved by
+            // the finance checker ──
+            rule(GET, "/collections/mandates", anyOf("READ_POLICY", "READ_FINANCE")),
+            rule(POST, "/collections/mandates", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/mandates/*/cancel", anyOf("MANAGE_FINANCE")),
+            rule(GET, "/collections/batches", anyOf("READ_POLICY", "READ_FINANCE")),
+            rule(GET, "/collections/batches/*", anyOf("READ_POLICY", "READ_FINANCE")),
+            rule(POST, "/collections/batches", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/batches/*/approve", anyOf("APPROVE_JOURNAL")),
+            rule(POST, "/collections/batches/*/cancel", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/batches/*/submit", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/batches/*/bank-response", anyOf("MANAGE_FINANCE")),
+            rule(POST, "/collections/instructions/*/bank-return", anyOf("MANAGE_FINANCE")),
 
             // ── integration and operational control SH12 (Operations Manager) ──────────────────────────
             rule(GET, "/integration/**", anyOf("READ_INTEGRATION")),

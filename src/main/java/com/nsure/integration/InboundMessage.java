@@ -104,6 +104,25 @@ public class InboundMessage {
         this.receivedAt = LocalDateTime.now();
     }
 
+    /**
+     * Money a collection rail confirmed that could not be applied to its policy (NS-SH04-002/003): held in suspense
+     * for allocation or refund, never lost. Keyed like any receipt by provider and provider reference.
+     */
+    public static InboundMessage heldInSuspense(String provider, String providerRef, String messageType,
+            String policyRef, BigDecimal amount, String reason, String actor) {
+        String hash;
+        try {
+            hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(
+                    String.join("|", provider, providerRef, policyRef, amount.toPlainString(), messageType)
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
+        }
+        InboundMessage message = new InboundMessage(provider, providerRef, messageType, hash, policyRef, amount, actor);
+        message.outcome(SUSPENSE, null, reason);
+        return message;
+    }
+
     void outcome(String status, String resultRef, String detail) {
         this.status = status;
         this.resultRef = resultRef;

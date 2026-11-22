@@ -121,7 +121,8 @@ public class StatementReconciliation {
                         + " :provider and t.status in :settled and t.settledAt >= :from and t.settledAt < :to",
                         PaymentTransaction.class)
                 .setParameter("provider", provider.toLowerCase(Locale.ROOT))
-                .setParameter("settled", Set.of(PaymentTransaction.SETTLED, PaymentTransaction.RETURNED))
+                .setParameter("settled", Set.of(PaymentTransaction.SETTLED, PaymentTransaction.RETURNED,
+                        PaymentTransaction.REVERSED))
                 .setParameter("from", from.atStartOfDay()).setParameter("to", to.plusDays(1).atStartOfDay())
                 .getResultList()) {
             if (!matchedTransactions.contains(tx.getProviderReference())) {

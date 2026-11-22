@@ -95,6 +95,16 @@ nsure:
   # Where claim and policy documents are kept, one folder per reference (data/ is git-ignored).
   documents:
     dir: ${NSURE_DOCUMENTS_DIR:data/documents}
+  # Money modules (SH04, SH06, SH07, SH08). These are DEMO DEFAULTS standing in for insurer decisions D02, D07-D10
+  # and D12; change them here (or with the environment) once the insurer approves its own values.
+  collections:
+    # A collection run takes instalments due up to this many days after its collection date.
+    collection-window-days: 7
+    # The simulated debit-order rail (no provider yet, D12): an account ending in fail-suffix is unpaid, one ending
+    # in pending-suffix stays pending; any other account is collected.
+    simulator:
+      fail-suffix: "99"
+      pending-suffix: "98"
 
 management:
   endpoints:
