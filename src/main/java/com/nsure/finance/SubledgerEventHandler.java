@@ -17,7 +17,9 @@ public class SubledgerEventHandler implements DomainEventHandler {
             Events.RISK_CEDED, Events.RECOVERY_RECOGNISED, Events.SUSPENSE_CLEARED, Events.PAYMENT_RETURNED,
             Events.BENEFIT_PAID, Events.PREMIUM_REFUNDED, Events.GROUP_PREMIUM_REFUNDED,
             // NS-SH04-005: a premium refund paid through the refund controls (ledgerAmount; zero when posted elsewhere).
-            Events.REFUND_SETTLED);
+            Events.REFUND_SETTLED,
+            // NS-SH08-002 / NS-SH07-005: cash from the reinsurer, and an approved write-off of a recovery.
+            Events.RECOVERY_RECEIVED, Events.RECOVERY_WRITTEN_OFF);
 
     private final Subledger subledger;
 

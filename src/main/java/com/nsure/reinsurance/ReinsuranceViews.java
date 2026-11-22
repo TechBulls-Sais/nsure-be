@@ -28,8 +28,27 @@ public final class ReinsuranceViews {
             String approvedBy,
             LocalDateTime approvedAt,
             long cessionCount,
-            BigDecimal totalCededPremium
+            BigDecimal totalCededPremium,
+            // NS-SH07-002: most ceded per life (null = no limit); the policy of a facultative arrangement.
+            BigDecimal capacity,
+            String policyRef
     ) {
+    }
+
+    /** One version of a policy's ceded exposure (NS-SH07-002/003). */
+    public record ExposureView(String ref, String policyRef, String customerRef, String product, int version,
+            BigDecimal sumAssured, BigDecimal aggregateSum, BigDecimal retainedSum, BigDecimal cededSum,
+            BigDecimal cededShare, String treatyRef, String treatyName, String facultativeRef, String facultativeStatus,
+            String status, LocalDate effectiveFrom, LocalDate endedOn, String sourceEventType, String reason,
+            String supersedesRef, LocalDateTime createdAt) {
+    }
+
+    /** A facultative referral and its placement (NS-SH07-002). */
+    public record FacultativeView(String ref, String policyRef, String customerRef, String product,
+            BigDecimal sumAssured, BigDecimal aggregateSum, BigDecimal excessSum, String treatyRef, String status,
+            String referredReason, LocalDateTime referredAt, String reinsurer, BigDecimal offeredSum, String offeredBy,
+            LocalDateTime offeredAt, BigDecimal acceptedSum, String acceptanceRef, String decisionNote,
+            String decidedBy, LocalDateTime decidedAt, String facTreatyRef) {
     }
 
     public record CessionView(
@@ -45,7 +64,13 @@ public final class ReinsuranceViews {
             BigDecimal cededShare,
             String bordereauRef,
             String sourceEventId,
-            LocalDateTime createdAt
+            LocalDateTime createdAt,
+            // NS-SH07-003: what a cession came from or adjusts, and the exposure version applied.
+            String receiptRef,
+            String adjustsRef,
+            String exposureRef,
+            LocalDate eventDate,
+            String reason
     ) {
     }
 
@@ -65,7 +90,22 @@ public final class ReinsuranceViews {
             String receivedReference,
             String receivedNote,
             String receivedBy,
-            LocalDateTime receivedAt
+            LocalDateTime receivedAt,
+            // NS-SH07-005: the recovery ledger.
+            String stage,
+            LocalDate eventDate,
+            BigDecimal claimPaidAmount,
+            BigDecimal originalAmount,
+            String disputeReason,
+            String disputedBy,
+            LocalDateTime disputedAt,
+            BigDecimal writeOffAmount,
+            String writeOffReason,
+            String writeOffRequestedBy,
+            LocalDateTime writeOffRequestedAt,
+            String writeOffDecidedBy,
+            LocalDateTime writeOffDecidedAt,
+            long ageDays
     ) {
     }
 

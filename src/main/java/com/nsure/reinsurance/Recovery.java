@@ -23,6 +23,12 @@ public class Recovery {
 
     public static final String EXPECTED = "EXPECTED";
     public static final String RECEIVED = "RECEIVED";
+    /** Approved as not recoverable (NS-SH07-005); the gross claim stays paid in full. */
+    public static final String WRITTEN_OFF = "WRITTEN_OFF";
+    // Stages of an expected recovery: nothing pending, disputed by the reinsurer, or a write-off awaiting approval.
+    public static final String NONE = "NONE";
+    public static final String DISPUTED = "DISPUTED";
+    public static final String WRITE_OFF_PENDING = "WRITE_OFF_PENDING";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -75,7 +81,160 @@ public class Recovery {
     @Column(name = "received_at")
     private LocalDateTime receivedAt;
 
+    // NS-SH07-005: the recovery ledger — disputes, approved write-offs, the event date and the claim as paid.
+    @Column(nullable = false, length = 20)
+    private String stage = NONE;
+
+    @Column(name = "event_date")
+    private java.time.LocalDate eventDate;
+
+    @Column(name = "claim_paid_amount", precision = 15, scale = 2)
+    private BigDecimal claimPaidAmount;
+
+    @Column(name = "original_amount", precision = 15, scale = 2)
+    private BigDecimal originalAmount;
+
+    @Column(name = "dispute_reason", length = 500)
+    private String disputeReason;
+
+    @Column(name = "disputed_by", length = 100)
+    private String disputedBy;
+
+    @Column(name = "disputed_at")
+    private LocalDateTime disputedAt;
+
+    @Column(name = "write_off_amount", precision = 15, scale = 2)
+    private BigDecimal writeOffAmount;
+
+    @Column(name = "write_off_reason", length = 500)
+    private String writeOffReason;
+
+    @Column(name = "write_off_requested_by", length = 100)
+    private String writeOffRequestedBy;
+
+    @Column(name = "write_off_requested_at")
+    private LocalDateTime writeOffRequestedAt;
+
+    @Column(name = "write_off_decided_by", length = 100)
+    private String writeOffDecidedBy;
+
+    @Column(name = "write_off_decided_at")
+    private LocalDateTime writeOffDecidedAt;
+
     protected Recovery() {
+    }
+
+    Recovery dated(java.time.LocalDate eventDate) {
+        this.eventDate = eventDate;
+        return this;
+    }
+
+    void claimPaid(BigDecimal paid) {
+        this.claimPaidAmount = paid;
+    }
+
+    /** The claim was paid at a different amount than approved: the expectation follows it, keeping the first one. */
+    void reexpect(BigDecimal claimAmount, BigDecimal recoveryAmount) {
+        if (originalAmount == null) {
+            originalAmount = this.recoveryAmount;
+        }
+        this.claimAmount = claimAmount;
+        this.recoveryAmount = recoveryAmount;
+    }
+
+    void dispute(String reason, String actor) {
+        this.stage = DISPUTED;
+        this.disputeReason = reason;
+        this.disputedBy = actor;
+        this.disputedAt = LocalDateTime.now();
+    }
+
+    void resolveDispute(BigDecimal agreed, String note) {
+        if (agreed != null && agreed.compareTo(recoveryAmount) != 0) {
+            if (originalAmount == null) {
+                originalAmount = recoveryAmount;
+            }
+            this.recoveryAmount = agreed;
+        }
+        this.stage = NONE;
+        this.disputeReason = disputeReason + " · resolved: " + note;
+        if (this.disputeReason.length() > 500) {
+            this.disputeReason = this.disputeReason.substring(0, 500);
+        }
+    }
+
+    void requestWriteOff(BigDecimal amount, String reason, String actor) {
+        this.stage = WRITE_OFF_PENDING;
+        this.writeOffAmount = amount;
+        this.writeOffReason = reason;
+        this.writeOffRequestedBy = actor;
+        this.writeOffRequestedAt = LocalDateTime.now();
+    }
+
+    void decideWriteOff(boolean approved, String actor) {
+        this.writeOffDecidedBy = actor;
+        this.writeOffDecidedAt = LocalDateTime.now();
+        this.stage = NONE;
+        if (approved) {
+            this.status = WRITTEN_OFF;
+        } else {
+            this.writeOffReason = writeOffReason + " · rejected by " + actor;
+            if (this.writeOffReason.length() > 500) {
+                this.writeOffReason = this.writeOffReason.substring(0, 500);
+            }
+        }
+    }
+
+    public String getStage() {
+        return stage;
+    }
+
+    public java.time.LocalDate getEventDate() {
+        return eventDate;
+    }
+
+    public BigDecimal getClaimPaidAmount() {
+        return claimPaidAmount;
+    }
+
+    public BigDecimal getOriginalAmount() {
+        return originalAmount;
+    }
+
+    public String getDisputeReason() {
+        return disputeReason;
+    }
+
+    public String getDisputedBy() {
+        return disputedBy;
+    }
+
+    public LocalDateTime getDisputedAt() {
+        return disputedAt;
+    }
+
+    public BigDecimal getWriteOffAmount() {
+        return writeOffAmount;
+    }
+
+    public String getWriteOffReason() {
+        return writeOffReason;
+    }
+
+    public String getWriteOffRequestedBy() {
+        return writeOffRequestedBy;
+    }
+
+    public LocalDateTime getWriteOffRequestedAt() {
+        return writeOffRequestedAt;
+    }
+
+    public String getWriteOffDecidedBy() {
+        return writeOffDecidedBy;
+    }
+
+    public LocalDateTime getWriteOffDecidedAt() {
+        return writeOffDecidedAt;
     }
 
     Recovery(Treaty treaty, String claimRef, String policyRef, String sourceEventId, BigDecimal claimAmount,

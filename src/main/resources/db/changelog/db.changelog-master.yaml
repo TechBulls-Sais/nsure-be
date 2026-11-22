@@ -311,3 +311,6 @@ databaseChangeLog:
   - include:
       file: changes/181-reversal-approval-and-refund-payouts.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/182-reinsurance-exposure-and-recovery-ledger.yaml
+      relativeToChangelogFile: true

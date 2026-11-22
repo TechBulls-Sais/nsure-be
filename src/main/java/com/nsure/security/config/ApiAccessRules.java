@@ -390,6 +390,13 @@ public final class ApiAccessRules {
             rule(POST, "/reinsurance/treaties/*/approve", anyOf("APPROVE_TREATY")),
             rule(POST, "/reinsurance/bordereaux", anyOf("MANAGE_REINSURANCE")),
             rule(POST, "/reinsurance/recoveries/*/receipt", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/facultative/*/offer", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/facultative/*/decision", anyOf("APPROVE_TREATY")),
+            rule(POST, "/reinsurance/recoveries/*/dispute", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/recoveries/*/resolve-dispute", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/recoveries/*/write-off", anyOf("MANAGE_REINSURANCE")),
+            rule(POST, "/reinsurance/recoveries/*/write-off/approve", anyOf("APPROVE_TREATY")),
+            rule(POST, "/reinsurance/recoveries/*/write-off/reject", anyOf("APPROVE_TREATY")),
 
             // ── communications SH09B (Service Agent, Operations Manager) ───────────────────────────────
             rule(GET, "/communications/**", anyOf("READ_COMMUNICATION")),

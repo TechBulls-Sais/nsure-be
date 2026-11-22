@@ -60,6 +60,25 @@ public class Cession {
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
+    // NS-SH07-003 / AT-SH07-02: the receipt a premium cession came from, the cession an adjustment adjusts, the
+    // exposure version whose share was applied, the business date, and why an adjustment was made.
+    @Column(name = "receipt_ref", length = 20)
+    private String receiptRef;
+
+    @jakarta.persistence.ManyToOne(fetch = FetchType.LAZY)
+    @jakarta.persistence.JoinColumn(name = "adjusts_id")
+    private Cession adjusts;
+
+    @jakarta.persistence.ManyToOne(fetch = FetchType.LAZY)
+    @jakarta.persistence.JoinColumn(name = "exposure_id")
+    private Exposure exposure;
+
+    @Column(name = "event_date")
+    private java.time.LocalDate eventDate;
+
+    @Column(length = 60)
+    private String reason;
+
     protected Cession() {
     }
 
@@ -80,6 +99,35 @@ public class Cession {
 
     void numbered() {
         this.ref = String.format("CES-%05d", id);
+    }
+
+    Cession trace(String receiptRef, Cession adjusts, Exposure exposure, java.time.LocalDate eventDate, String reason) {
+        this.receiptRef = receiptRef;
+        this.adjusts = adjusts;
+        this.exposure = exposure;
+        this.eventDate = eventDate;
+        this.reason = reason;
+        return this;
+    }
+
+    public String getReceiptRef() {
+        return receiptRef;
+    }
+
+    public Cession getAdjusts() {
+        return adjusts;
+    }
+
+    public Exposure getExposure() {
+        return exposure;
+    }
+
+    public java.time.LocalDate getEventDate() {
+        return eventDate;
+    }
+
+    public String getReason() {
+        return reason;
     }
 
     void reportedOn(Bordereau bordereau) {
