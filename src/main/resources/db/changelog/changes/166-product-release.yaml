@@ -1,0 +1,79 @@
+databaseChangeLog:
+  # SH02 product release (NS-SH02-001/002/003/005/006, AT-SH02-01/03, NS-SH03-006). A product configuration names the
+  # catalogue product and plan it is sold as, carries typed rules (each with an owner), an optional rate table it is
+  # priced from, and, once approved, a frozen release manifest with its checksum. Activation publishes it to the
+  # catalogue (plan, eligibility, contract terms) so quoting and issue use it; withdrawal takes the plan off sale.
+  - changeSet:
+      id: 166-product-config-release
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ins_product_config
+            columns:
+              - column: {name: catalogue_product, type: varchar(100)}
+              - column: {name: plan_name, type: varchar(60)}
+              - column: {name: rules, type: varchar(4000)}
+              - column: {name: rate_table_ref, type: varchar(20)}
+              - column: {name: manifest, type: varchar(4000)}
+              - column: {name: manifest_checksum, type: varchar(64)}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+              - column: {name: released_by, type: varchar(100)}
+              - column: {name: released_at, type: datetime}
+              - column: {name: withdrawn_by, type: varchar(100)}
+              - column: {name: withdrawn_at, type: datetime}
+              - column: {name: release_note, type: varchar(500)}
+              - column: {name: published_tier_id, type: bigint}
+              - column: {name: product_version_id, type: bigint}
+              - column: {name: imported_from, type: varchar(200)}
+  # NS-SH03-006: golden cases with actuarial approval. A changed expected value is a new baseline (baseline_no + 1)
+  # that a second person approves; the one it replaces is kept as SUPERSEDED.
+  - changeSet:
+      id: 166-product-golden-cases
+      author: nsure
+      changes:
+        - createTable:
+            tableName: ins_product_golden_case
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ins_product_golden_case}}
+              - column: {name: config_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: label, type: varchar(120), constraints: {nullable: false}}
+              - column: {name: date_of_birth, type: date, constraints: {nullable: false}}
+              - column: {name: priced_on, type: date, constraints: {nullable: false}}
+              - column: {name: expected_premium, type: "decimal(15,2)"}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: baseline_no, type: int, constraints: {nullable: false}}
+              - column: {name: supersedes_id, type: bigint}
+              - column: {name: reason, type: varchar(300)}
+              - column: {name: proposed_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: proposed_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+              - column: {name: last_result, type: varchar(10)}
+              - column: {name: last_actual, type: varchar(200)}
+              - column: {name: last_run_at, type: datetime}
+        - createIndex:
+            tableName: ins_product_golden_case
+            indexName: ix_golden_case_config
+            columns:
+              - column: {name: config_ref}
+  # Demo data: the seeded Family Funeral Plus and Care Cash Flex configurations become new plans of the existing
+  # Family Funeral and Care Cash products when they are released, so a demo can take one through review, golden cases,
+  # approval and activation and then quote it.
+  - changeSet:
+      id: 166-demo-config-catalogue-targets
+      author: nsure
+      context: demo
+      changes:
+        - update:
+            tableName: ins_product_config
+            columns:
+              - column: {name: catalogue_product, value: Family Funeral}
+              - column: {name: plan_name, value: Plus}
+            where: "record_ref = 'CFG-002' AND catalogue_product IS NULL"
+        - update:
+            tableName: ins_product_config
+            columns:
+              - column: {name: catalogue_product, value: Care Cash}
+              - column: {name: plan_name, value: Flex}
+            where: "record_ref = 'CFG-003' AND catalogue_product IS NULL"

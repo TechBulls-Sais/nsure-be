@@ -95,6 +95,33 @@ public class InsuranceProduct {
     @Column(name = "max_beneficiaries", nullable = false)
     private int maxBeneficiaries = 5;
 
+    protected InsuranceProduct() {
+    }
+
+    /**
+     * A catalogue product first released from a product configuration (NS-SH02-001): it is offered for sale with the
+     * plan the configuration publishes. Display fields get neutral defaults a marketing user can change later.
+     */
+    static InsuranceProduct released(String name, String description, String productType, String benefits,
+            int waitingDays, int graceDays, int maxBeneficiaries) {
+        InsuranceProduct p = new InsuranceProduct();
+        p.name = name;
+        p.icon = "ShieldCheck";
+        p.color = "green";
+        p.description = description.length() <= 300 ? description : description.substring(0, 300);
+        p.cover = "";
+        p.premium = "";
+        p.liveCount = 0;
+        p.displayOrder = 50;
+        p.summary = p.description;
+        p.benefits = benefits;
+        p.productType = productType;
+        p.waitingPeriodDays = waitingDays;
+        p.gracePeriodDays = graceDays;
+        p.maxBeneficiaries = maxBeneficiaries;
+        return p;
+    }
+
     public Long getId() {
         return id;
     }

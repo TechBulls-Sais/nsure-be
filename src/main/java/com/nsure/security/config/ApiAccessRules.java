@@ -188,6 +188,21 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/product-configs", anyOf("CREATE_PRODUCT")),
             rule(PUT, "/portfolio/product-configs/*", anyOf("UPDATE_PRODUCT")),
             rule(GET, "/portfolio/product-configs/*/versions", anyOf("READ_PRODUCT")),
+            // SH02 release: checklist, lifecycle, golden cases (actuarial approval) and signed packages.
+            rule(GET, "/portfolio/product-rules", anyOf("READ_PRODUCT")),
+            rule(GET, "/portfolio/product-configs/*/checklist", anyOf("READ_PRODUCT")),
+            rule(GET, "/portfolio/product-configs/*/package", anyOf("READ_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/import", anyOf("CREATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/submit", anyOf("UPDATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/rollback", anyOf("UPDATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/approve", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/reject", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/activate", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/withdraw", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/golden-cases", anyOf("UPDATE_PRODUCT", "UPDATE_RATE_TABLE")),
+            rule(POST, "/portfolio/product-configs/*/golden-cases/run", anyOf("READ_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/golden-cases/*/approve", anyOf("PUBLISH_RATE_TABLE")),
+            rule(POST, "/portfolio/product-configs/*/golden-cases/*/reject", anyOf("PUBLISH_RATE_TABLE")),
 
             // ── rate tables (Actuary, Product Configurator): function code or capability ───────────────
             rule(GET, "/admin/rate-tables", anyOf("READ_RATE_TABLE")),

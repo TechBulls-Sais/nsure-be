@@ -63,6 +63,8 @@ public class PortfolioService {
     private final org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting;
     /** Customer sign-up codes: per request, expiring, attempt-limited; the fixed demo code only in dev/demo. */
     private final OneTimeCodes codes;
+    /** SH02: product configurations are released to the catalogue and constrain what a released plan sells. */
+    private final ProductRelease productRelease;
 
     public PortfolioService(
             EntityManager em,
@@ -81,7 +83,8 @@ public class PortfolioService {
             com.fasterxml.jackson.databind.ObjectMapper mapper, com.nsure.integration.Outbox outbox,
             ApplicationCapture capture, ProductConfigHistory configHistory,
             org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting,
-            OneTimeCodes codes) {
+            OneTimeCodes codes, ProductRelease productRelease) {
+        this.productRelease = productRelease;
         this.codes = codes;
         this.underwriting = underwriting;
         this.configHistory = configHistory;
@@ -1390,7 +1393,8 @@ public class PortfolioService {
                 : one(ProductConfiguration.class, ref, "Product configuration");
         // Spec 04 §3: activating or deactivating a catalogue entity is product.activate, separate from editing it
         // (an Actuary may edit products but not switch them on or off).
-        String requested = defaultText(body, "status", "Draft");
+        // NS-SH02-003: the release statuses only; Approved and Scheduled come from their own actions.
+        String requested = ProductRelease.requireSaveStatus(defaultText(body, "status", "Draft"));
         String current = ref == null ? "Draft" : row.getStatus();
         boolean activationChange = !requested.equalsIgnoreCase(current == null ? "" : current)
                 && (requested.toLowerCase(java.util.Locale.ROOT).contains("active")
@@ -1425,15 +1429,29 @@ public class PortfolioService {
         row.setChannels(join(body.get("channels")));
         row.setWording(defaultText(body, "wording", "Standard life wording · v1.0"));
         row.setApprovals(body.path("approvals").asBoolean(false));
-        row.setStatus(defaultText(body, "status", "Draft"));
+        // SH02 release fields (catalogue product, plan, typed rules, rate table), validated against their schema.
+        productRelease.applyReleaseFields(row, body);
+        row.setStatus(requested);
         JsonNode after = configHistory.content(row);
         boolean active = "active".equalsIgnoreCase(requested);
-        if (active && (!"active".equalsIgnoreCase(current) || before == null || !before.equals(after))) {
+        boolean changed = before == null || !before.equals(after);
+        if (active && (!"active".equalsIgnoreCase(current) || changed)) {
             // Maker-checker: content reaches Active only as reviewed, and only by someone who did not write it.
             configHistory.requireIndependentActivation(ref, current, before, after, actor.getUsername());
         }
+        if (changed && ref != null) {
+            // An approval and its frozen manifest describe the content as approved, not as it is now.
+            productRelease.contentChanged(row);
+        }
         if (ref == null) {
             em.persist(row);
+        }
+        if (active && !"active".equalsIgnoreCase(current)) {
+            // NS-SH02-001/003: activation passes the release checklist and publishes the plan to the catalogue.
+            productRelease.activateFromSave(row, actor.getUsername());
+        } else if (!active && current != null && ("active".equalsIgnoreCase(current)
+                || ProductRelease.SCHEDULED.equalsIgnoreCase(current))) {
+            productRelease.withdrawFromSave(row, actor.getUsername());
         }
         configHistory.record(row, before, actor.getUsername());
         configHistory.publishStatusChange(row, current, actor.getUsername());
@@ -1541,6 +1559,8 @@ public class PortfolioService {
         List<RateTableService.LifeToPrice> lives = new ArrayList<>();
         lives.add(new RateTableService.LifeToPrice(selfRelationship(), customer.getName(), customer.getDateOfBirth()));
         lives.addAll(others);
+        // A plan released from a product configuration sells only within its configured entry ages (NS-SH02-001).
+        productRelease.requireEligible(tier, lives, null);
         Optional<RateTableService.PolicyPrice> price = rates.pricePolicy(tier, lives, null);
         if (price.isEmpty() && !others.isEmpty()) {
             throw new IllegalArgumentException("The " + tier.getName() + " plan has a flat premium and covers the "
@@ -1880,12 +1900,7 @@ public class PortfolioService {
     }
 
     private PortfolioViews.ConfigView config(ProductConfiguration row) {
-        return new PortfolioViews.ConfigView(
-                row.getRef(), row.getName(), row.getCode(), row.getDomain(), row.getCurrency(), row.getDescription(),
-                row.getEffectiveOn(), row.getMinAge(), row.getMaxAge(), row.getWaitingMonths(), row.getCoverAmount(),
-                row.getPremiumAmount(), row.getFrequency(), row.getGraceDays(), row.getUnderwriting(),
-                split(row.getBenefits()), split(row.getChannels()), row.getWording(), row.isApprovals(),
-                row.getStatus(), row.getVersionNo(), configHistory.madeBy(row));
+        return productRelease.view(row);
     }
 
     private static List<String> split(String value) {

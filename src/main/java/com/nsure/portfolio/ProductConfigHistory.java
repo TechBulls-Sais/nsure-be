@@ -69,6 +69,23 @@ public class ProductConfigHistory {
         node.put("benefits", row.getBenefits());
         node.put("channels", row.getChannels());
         node.put("wording", row.getWording());
+        // Release content (SH02), only once set, so content saved before releases existed keeps its hash.
+        if (row.getCatalogueProduct() != null) {
+            node.put("catalogueProduct", row.getCatalogueProduct());
+        }
+        if (row.getPlanName() != null) {
+            node.put("plan", row.getPlanName());
+        }
+        if (row.getRateTableRef() != null) {
+            node.put("rateTableRef", row.getRateTableRef());
+        }
+        if (row.getRules() != null) {
+            try {
+                node.set("rules", mapper.readTree(row.getRules()));
+            } catch (JsonProcessingException ex) {
+                node.put("rules", row.getRules());
+            }
+        }
         return node;
     }
 
@@ -87,7 +104,8 @@ public class ProductConfigHistory {
             throw new IllegalArgumentException("Activation cannot include changes. Save the changes for review first;"
                     + " another user then activates the configuration as reviewed.");
         }
-        if (!IN_REVIEW.equalsIgnoreCase(currentStatus) && !"active".equalsIgnoreCase(currentStatus)) {
+        if (!IN_REVIEW.equalsIgnoreCase(currentStatus) && !"active".equalsIgnoreCase(currentStatus)
+                && !ProductRelease.APPROVED.equalsIgnoreCase(currentStatus)) {
             throw new IllegalArgumentException(ref + " is " + (currentStatus == null ? "not submitted" : currentStatus)
                     + ". Only a configuration in review can be activated: submit it for review first, then another"
                     + " user activates it.");

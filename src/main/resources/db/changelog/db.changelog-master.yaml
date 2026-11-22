@@ -308,3 +308,6 @@ databaseChangeLog:
   - include:
       file: changes/165-payout-instructions.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/166-product-release.yaml
+      relativeToChangelogFile: true

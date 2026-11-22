@@ -419,7 +419,24 @@ public final class PortfolioViews {
             String status,
             int version,
             // Who made the content as it stands (the maker); they cannot activate it (NS-SH02-003). Null if unknown.
-            String madeBy
+            String madeBy,
+            // SH02 release: where it is sold, typed rules, dependencies, approval, publication and withdrawal.
+            String catalogueProduct,
+            String plan,
+            com.fasterxml.jackson.databind.JsonNode rules,
+            String rateTableRef,
+            String approvedBy,
+            java.time.LocalDateTime approvedAt,
+            String releasedBy,
+            java.time.LocalDateTime releasedAt,
+            String withdrawnBy,
+            java.time.LocalDateTime withdrawnAt,
+            String releaseNote,
+            String manifestChecksum,
+            boolean published,
+            String sellsAs,
+            String sellsAsPlan,
+            String importedFrom
     ) {
     }
 }
