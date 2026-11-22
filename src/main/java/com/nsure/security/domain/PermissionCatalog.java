@@ -91,6 +91,8 @@ public enum PermissionCatalog {
     UPDATE_CUSTOMER("customer.write"),
     KYC_CUSTOMER("customer.write"),
     EDD_CUSTOMER("customer.write"),
+    // SH01 data steward: approves a merge someone else asked for.
+    APPROVE_PARTY_MERGE(null),
     DELETE_CUSTOMER(null),
     READ_PRODUCT("product.read"),
     CREATE_PRODUCT("product.write"),

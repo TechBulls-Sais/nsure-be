@@ -63,7 +63,8 @@ public class WorkQueueService {
      * approval screen across the modules (SH10 workspace).
      */
     private static final Set<String> APPROVALS = Set.of("ENDORSEMENT", "BENEFIT", "CARE_CASH", "SCHEME_EVENT",
-            "GROUP_QUOTE", "CLAIM_DECISION", "MANUAL_JOURNAL", "TREATY", "TEMPLATE", "ACCESS_APPROVAL");
+            "GROUP_QUOTE", "CLAIM_DECISION", "MANUAL_JOURNAL", "TREATY", "TEMPLATE", "ACCESS_APPROVAL", "PARTY_MERGE",
+            "CONTACT_CHANGE");
 
     /**
      * One kind of open work: the workflow definition it follows, the page that handles it, the query that finds it
@@ -121,6 +122,36 @@ public class WorkQueueService {
                     + " sender as subject, channel as detail, received_at as opened, verification_status as status"
                     + " from com_inbound where verification_status = 'REQUIRED'", List.of("MANAGE_COMMUNICATION"),
                     Map.of("REQUIRED", "Verify the sender, then link the reply to the customer")),
+            // SH01: KYC reviews ready to decide (evidence sent or screening run), screening hits for authorised review
+            // by someone other than who screened, verifications due for periodic review, merges for a data steward
+            // and verified contact changes for a second person.
+            source("KYC_REVIEW", "customers", "select c.record_ref as ref, c.name as subject,"
+                    + " coalesce(k.screening_status, 'NOT_SCREENED') as detail, coalesce((select max(d.uploaded_at) from"
+                    + " pty_identity_document d where d.customer_ref = c.record_ref), k.screened_at) as opened,"
+                    + " c.kyc_status as status, c.record_ref as contract_ref from ins_customer c left join pty_kyc k on"
+                    + " k.customer_ref = c.record_ref where c.kyc_status = 'PENDING' and (k.screening_status is null or"
+                    + " k.screening_status not in ('HIT', 'HIT_CONFIRMED')) and (k.id is not null or exists (select 1"
+                    + " from pty_identity_document d2 where d2.customer_ref = c.record_ref))", List.of("KYC_CUSTOMER"),
+                    Map.of("PENDING", "Check the evidence and screening, then verify or reject")),
+            source("SCREENING_HIT", "customers", "select k.customer_ref as ref, c.name as subject, k.screening_detail as"
+                    + " detail, k.screened_at as opened, k.screening_status as status, k.customer_ref as contract_ref,"
+                    + " k.screened_by as maker from pty_kyc k join ins_customer c on c.record_ref = k.customer_ref"
+                    + " where k.screening_status = 'HIT'", List.of("EDD_CUSTOMER"),
+                    Map.of("HIT", "Clear a false match or confirm it, with a reason")),
+            source("KYC_RENEWAL", "customers", "select k.customer_ref as ref, c.name as subject, k.expires_on as detail,"
+                    + " k.review_due_at as opened, c.kyc_status as status, k.customer_ref as contract_ref from pty_kyc k"
+                    + " join ins_customer c on c.record_ref = k.customer_ref where c.kyc_status = 'VERIFIED' and"
+                    + " k.review_due_at <= CURRENT_TIMESTAMP", List.of("KYC_CUSTOMER"),
+                    Map.of("VERIFIED", "Collect current evidence, screen again and re-verify before expiry")),
+            source("PARTY_MERGE", "customers", "select record_ref as ref, concat(merged_ref, concat(' into ',"
+                    + " surviving_ref)) as subject, match_detail as detail, requested_at as opened, status,"
+                    + " surviving_ref as contract_ref, requested_by as maker from pty_merge_request where status ="
+                    + " 'PENDING'", List.of("APPROVE_PARTY_MERGE"),
+                    Map.of("PENDING", "Compare both records, then approve or reject the merge")),
+            source("CONTACT_CHANGE", "customers", "select record_ref as ref, customer_ref as subject, field as detail,"
+                    + " verified_at as opened, status, customer_ref as contract_ref, requested_by as maker from"
+                    + " pty_contact_change where status = 'AWAITING_APPROVAL'", List.of("KYC_CUSTOMER"),
+                    Map.of("AWAITING_APPROVAL", "Approve or reject the verified contact change")),
             source("GROUP_QUOTE", "scheme-lifecycle", "select record_ref as ref, sponsor_name as subject, benefits as"
                     + " detail, created_at as opened, status, scheme_ref as contract_ref from grp_quote where status ="
                     + " 'SUBMITTED'", List.of("MANAGE_SCHEME", "UNDERWRITE_MEMBER"),

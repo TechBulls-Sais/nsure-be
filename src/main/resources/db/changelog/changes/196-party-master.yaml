@@ -1,0 +1,239 @@
+databaseChangeLog:
+  # SH01 party master (work package e): KYC/AML screening state with verification source and expiry, steward-approved
+  # merges that move every transaction reference, contact changes verified and approved independently, addresses,
+  # alternative identifiers, and dated party roles with delegation. Values seeded here are demo defaults (D06).
+  - changeSet:
+      id: 196-party-kyc
+      author: nsure
+      comment: >-
+        NS-SH01-004: one KYC record per customer. Screening by the (simulated) provider is CLEAR, HIT or
+        PROVIDER_ERROR; a hit waits for an authorised review (HIT_CLEARED or HIT_CONFIRMED); a provider error is never
+        clearance. A verification records its source, reference, who and when, and when it expires.
+      changes:
+        - createTable:
+            tableName: pty_kyc
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_pty_kyc}}
+              - column: {name: customer_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_pty_kyc_customer}}
+              - column: {name: screening_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: screening_provider, type: varchar(60)}
+              - column: {name: screening_reference, type: varchar(40)}
+              - column: {name: screening_detail, type: varchar(500)}
+              - column: {name: screened_by, type: varchar(100)}
+              - column: {name: screened_at, type: timestamp(6)}
+              - column: {name: hit_reviewed_by, type: varchar(100)}
+              - column: {name: hit_reviewed_at, type: timestamp(6)}
+              - column: {name: hit_reason, type: varchar(500)}
+              - column: {name: verification_source, type: varchar(30)}
+              - column: {name: verification_reference, type: varchar(100)}
+              - column: {name: verified_by, type: varchar(100)}
+              - column: {name: verified_at, type: timestamp(6)}
+              - column: {name: expires_on, type: date}
+              - column: {name: review_due_at, type: timestamp(6)}
+              - column: {name: updated_at, type: timestamp(6), constraints: {nullable: false}}
+        - createTable:
+            tableName: pty_watchlist
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_pty_watchlist}}
+              - column: {name: full_name, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: list_name, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: detail, type: varchar(300), constraints: {nullable: false}}
+  - changeSet:
+      id: 196-party-watchlist-demo
+      author: nsure
+      context: demo
+      comment: >-
+        The simulated screening provider's list (fictional names). UNAVAILABLE makes the simulated provider fail for
+        that name, so the "provider failure is never clearance" path can be shown.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO pty_watchlist (full_name, list_name, detail) VALUES
+              ('Kgosi Rantao', 'PEP', 'Simulated PEP list: former district councillor (fictional)'),
+              ('Gaolatlhe Ntshole', 'SANCTIONS', 'Simulated sanctions list: asset freeze (fictional)'),
+              ('Kelesitse Ramotswa', 'UNAVAILABLE', 'Simulated provider timeout for this name');
+  - changeSet:
+      id: 196-party-merge-requests
+      author: nsure
+      comment: >-
+        NS-SH01-002 / AT-SH01-02: a merge is requested by one person and approved by a data steward
+        (APPROVE_PARTY_MERGE) who is someone else. moved_detail lists how many records of each kind moved.
+      changes:
+        - createTable:
+            tableName: pty_merge_request
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_pty_merge_request}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_pty_merge_request_ref}}
+              - column: {name: surviving_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: merged_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: match_detail, type: varchar(500)}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: timestamp(6)}
+              - column: {name: decision_note, type: varchar(500)}
+              - column: {name: moved_detail, type: varchar(1000)}
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT 'customers', 'APPROVE_PARTY_MERGE', 'PARTY', 'APPROVE_MERGE', TRUE, 'Approve or reject a requested party merge (data steward)'
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = 'APPROVE_PARTY_MERGE');
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code = 'APPROVE_PARTY_MERGE'
+              WHERE r.name IN ('Super Admin', 'Compliance & Auditor')
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+  - changeSet:
+      id: 196-party-contacts
+      author: nsure
+      comment: >-
+        NS-SH01-005: addresses with validity dates and verification, alternative identifiers with country of issue and
+        evidence (NS-SH01-001), and contact changes: an email or phone change is verified with a one-time code sent to
+        the new contact and applied only once someone other than the requester approves it.
+      changes:
+        - createTable:
+            tableName: pty_address
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_pty_address}}
+              - column: {name: customer_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: kind, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: line1, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: line2, type: varchar(150)}
+              - column: {name: city, type: varchar(80), constraints: {nullable: false}}
+              - column: {name: country, type: varchar(2), constraints: {nullable: false}}
+              - column: {name: postal_code, type: varchar(20)}
+              - column: {name: valid_from, type: date, constraints: {nullable: false}}
+              - column: {name: valid_to, type: date}
+              - column: {name: verification, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+        - createIndex:
+            tableName: pty_address
+            indexName: ix_pty_address_customer
+            columns:
+              - column: {name: customer_ref}
+        - createTable:
+            tableName: pty_identifier
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_pty_identifier}}
+              - column: {name: customer_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: id_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: id_number, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: country, type: varchar(2), constraints: {nullable: false}}
+              - column: {name: evidence_document_id, type: bigint}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: pty_identifier
+            columnNames: id_type, id_number, country
+            constraintName: uk_pty_identifier
+        - createTable:
+            tableName: pty_contact_change
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_pty_contact_change}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_pty_contact_change_ref}}
+              - column: {name: customer_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: field, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: old_masked, type: varchar(150)}
+              - column: {name: new_value, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(300)}
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: verified_at, type: timestamp(6)}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: timestamp(6)}
+              - column: {name: decision_note, type: varchar(300)}
+        - createIndex:
+            tableName: pty_contact_change
+            indexName: ix_pty_contact_change_customer
+            columns:
+              - column: {name: customer_ref}
+  - changeSet:
+      id: 196-party-relationships
+      author: nsure
+      comment: >-
+        NS-SH01-003 / AT-SH01-03: recorded party roles and relationships with their dates and authority, including a
+        delegation that lets one customer act on another's policy until it expires. Roles that follow from
+        transactions (owner, claimant, intermediary, lender) are derived on read and not stored twice. A partner portal
+        login gets an end date too.
+      changes:
+        - createTable:
+            tableName: pty_relationship
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_pty_relationship}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_pty_relationship_ref}}
+              - column: {name: party_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: role, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: related_kind, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: related_ref, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: authority, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: valid_from, type: date, constraints: {nullable: false}}
+              - column: {name: valid_to, type: date}
+              - column: {name: note, type: varchar(300)}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: ended_by, type: varchar(100)}
+              - column: {name: ended_at, type: timestamp(6)}
+        - createIndex:
+            tableName: pty_relationship
+            indexName: ix_pty_relationship_party
+            columns:
+              - column: {name: party_ref}
+        - createIndex:
+            tableName: pty_relationship
+            indexName: ix_pty_relationship_related
+            columns:
+              - column: {name: related_ref}
+        - addColumn:
+            tableName: portal_account
+            columns:
+              - column: {name: valid_until, type: date}
+  - changeSet:
+      id: 196-party-demo-records
+      author: nsure
+      context: demo
+      comment: >-
+        Demo records for the SH01 journeys (fictional): a likely duplicate of a seeded customer (misspelt name, same
+        date of birth and phone), a customer on the simulated PEP list, one whose screening the simulated provider
+        cannot complete, a verified customer's KYC record with its source and expiry, and an address. References below
+        CUS-1000 keep the customer number series where it was.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO ins_customer (record_ref, name, email, phone, product, policy_count, status, color, display_order, kyc_status, poi_type, poi_number, date_of_birth, row_version)
+              SELECT 'CUS-0901', 'Lerato Ndlovo', 'lerato.n@example.com', '+267 75 678 945', '', 0, 'Pending KYC', 'amber', 0, 'PENDING', NULL, NULL, '1988-06-08', 0
+              WHERE NOT EXISTS (SELECT 1 FROM ins_customer x WHERE x.record_ref = 'CUS-0901');
+              INSERT INTO ins_customer (record_ref, name, email, phone, product, policy_count, status, color, display_order, kyc_status, poi_type, poi_number, date_of_birth, row_version)
+              SELECT 'CUS-0902', 'Kgosi Rantao', 'kgosi.rantao@example.com', '+267 74 900 902', '', 0, 'Pending KYC', 'amber', 0, 'PENDING', 'Omang', '700101123', '1970-01-01', 0
+              WHERE NOT EXISTS (SELECT 1 FROM ins_customer x WHERE x.record_ref = 'CUS-0902');
+              INSERT INTO ins_customer (record_ref, name, email, phone, product, policy_count, status, color, display_order, kyc_status, poi_type, poi_number, date_of_birth, row_version)
+              SELECT 'CUS-0903', 'Kelesitse Ramotswa', 'k.ramotswa@example.com', '+267 75 900 903', '', 0, 'Pending KYC', 'amber', 0, 'PENDING', 'Omang', '880202456', '1988-02-02', 0
+              WHERE NOT EXISTS (SELECT 1 FROM ins_customer x WHERE x.record_ref = 'CUS-0903');
+              INSERT INTO pty_kyc (customer_ref, screening_status, screening_provider, screening_reference, screening_detail, screened_by, screened_at, verification_source, verification_reference, verified_by, verified_at, expires_on, review_due_at, updated_at)
+              SELECT 'CUS-1004', 'CLEAR', 'Simulated screening provider', 'SCR-DEMO-1004', 'No match on the simulated lists', 'onboarding', CURRENT_TIMESTAMP, 'DOCUMENT_REVIEW', 'Omang 830712101 seen', 'onboarding', CURRENT_TIMESTAMP, '2030-11-01', '2030-10-02 00:00:00', CURRENT_TIMESTAMP
+              WHERE NOT EXISTS (SELECT 1 FROM pty_kyc x WHERE x.customer_ref = 'CUS-1004');
+              INSERT INTO pty_address (customer_ref, kind, line1, line2, city, country, postal_code, valid_from, verification, created_by, created_at)
+              SELECT 'CUS-1001', 'RESIDENTIAL', 'Plot 1234, Block 6', NULL, 'Gaborone', 'BW', NULL, '2024-01-01', 'DOCUMENT', 'onboarding', CURRENT_TIMESTAMP
+              WHERE NOT EXISTS (SELECT 1 FROM pty_address x WHERE x.customer_ref = 'CUS-1001');
+  - changeSet:
+      id: 196-party-work
+      author: nsure
+      comment: >-
+        Party work in the queue (SH01 with SH10): KYC reviews ready to decide, screening hits for authorised review,
+        KYC records due for periodic review, merge requests for a data steward and contact changes for a second person.
+        SLA hours are demo defaults, editable in Operations > Workflow.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO wf_definition (code, name, team, sla_hours, steps, version_no, priority)
+              SELECT seed.c, seed.n, seed.t, seed.h, seed.s, 1, seed.p FROM (
+                SELECT 'KYC_REVIEW' c, 'KYC review' n, 'Onboarding' t, 16 h, 'Check the identity evidence > Confirm screening is clear > Record the verification source, or reject with a reason' s, 'NORMAL' p UNION ALL
+                SELECT 'SCREENING_HIT', 'Screening hit review', 'Compliance', 8, 'Compare the match with the customer > Clear a false match or confirm it, with a reason', 'HIGH' UNION ALL
+                SELECT 'KYC_RENEWAL', 'KYC periodic review', 'Onboarding', 40, 'Ask for current evidence > Screen again > Verify again before the expiry date', 'NORMAL' UNION ALL
+                SELECT 'PARTY_MERGE', 'Party merge approval', 'Data stewards', 16, 'Compare both records > Approve the merge (every reference moves) or reject it', 'NORMAL' UNION ALL
+                SELECT 'CONTACT_CHANGE', 'Contact change approval', 'Onboarding', 8, 'Check the code was verified on the new contact > Approve or reject the change', 'NORMAL'
+              ) seed WHERE NOT EXISTS (SELECT 1 FROM wf_definition x WHERE x.code = seed.c);

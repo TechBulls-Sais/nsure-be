@@ -308,3 +308,6 @@ databaseChangeLog:
   - include:
       file: changes/195-communication-delivery-rules.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/196-party-master.yaml
+      relativeToChangelogFile: true
