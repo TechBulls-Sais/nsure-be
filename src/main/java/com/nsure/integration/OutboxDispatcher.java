@@ -44,11 +44,13 @@ public class OutboxDispatcher {
     private final Map<String, DomainEventHandler> handlers;
     private final int maxAttempts;
     private final com.nsure.controls.StaffAlertService alerts;
+    private final InterfaceRegistry interfaces;
 
     public OutboxDispatcher(EntityManager em, ObjectMapper mapper, PlatformTransactionManager transactions,
             ObjectProvider<DomainEventHandler> handlers, @Value("${nsure.integration.max-attempts:5}") int maxAttempts,
-            com.nsure.controls.StaffAlertService alerts) {
+            com.nsure.controls.StaffAlertService alerts, InterfaceRegistry interfaces) {
         this.alerts = alerts;
+        this.interfaces = interfaces;
         this.em = em;
         this.mapper = mapper;
         this.tx = new TransactionTemplate(transactions);
@@ -132,17 +134,26 @@ public class OutboxDispatcher {
                     delivery.ignored("Ignored: " + ignore);
                     return;
                 }
+                // AT-SH12-02: an unavailable interface is a transient failure; the event stays committed and queued.
+                String down = interfaces.outage(handler.name());
+                if (down != null) {
+                    throw new InterfaceUnavailableException(down);
+                }
                 handler.handle(event);
                 delivery.delivered();
             });
             return held[0] ? HELD : DELIVERED;
         } catch (RuntimeException ex) {
             String message = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
-            log.warn("Delivery {} failed: {}", deliveryId, message);
+            String failureClass = classify(ex);
+            log.warn("Delivery {} failed ({}): {}", deliveryId, failureClass, message);
             tx.executeWithoutResult(status -> {
                 EventDelivery delivery = em.find(EventDelivery.class, deliveryId);
                 if (delivery != null) {
-                    delivery.failed(message, maxAttempts);
+                    delivery.failed(message, maxAttempts, failureClass);
+                    if (EventDelivery.FAILED.equals(delivery.getStatus())) {
+                        deadLetterAlert(delivery);
+                    }
                 }
             });
             return FAILED;
@@ -188,6 +199,82 @@ public class OutboxDispatcher {
         alerts.raise("EVENT_SEQUENCE_GAP", "READ_INTEGRATION", "Events held behind a failed delivery",
                 waiting + ". Later events of " + delivery.getEvent().getAggregateRef() + " for " + delivery.getHandler()
                         + " wait until it is replayed or reconciled (Integration monitor).",
+                key.length() <= 120 ? key : key.substring(0, 120), "system");
+    }
+
+    /**
+     * NS-SH12-003: an outage, a timeout or a database hiccup is worth retrying; an event whose stored payload cannot
+     * even be read never will be, so it is dead-lettered at once with the reason.
+     */
+    static String classify(RuntimeException ex) {
+        if (ex instanceof InterfaceUnavailableException) {
+            return EventDelivery.TRANSIENT;
+        }
+        if (ex instanceof IllegalStateException && ex.getCause() instanceof JsonProcessingException) {
+            return EventDelivery.PERMANENT;
+        }
+        return EventDelivery.TRANSIENT;
+    }
+
+    /**
+     * AT-SH12-02: the interface is back, so its consumers' transient dead letters go back in the queue and its pending
+     * retries are due now. Returns how many deliveries were resumed. Permanent failures stay for an operator.
+     */
+    public int resume(List<String> handlerNames) {
+        if (handlerNames.isEmpty()) {
+            return 0;
+        }
+        Integer resumed = tx.execute(status -> {
+            int count = 0;
+            for (EventDelivery d : em.createQuery("select d from EventDelivery d where d.handler in :handlers"
+                            + " and ((d.status = :failed and (d.failureClass is null or d.failureClass = :transient))"
+                            + " or (d.status = :pending and d.attempts > 0))", EventDelivery.class)
+                    .setParameter("handlers", handlerNames)
+                    .setParameter("failed", EventDelivery.FAILED)
+                    .setParameter("pending", EventDelivery.PENDING)
+                    .setParameter("transient", EventDelivery.TRANSIENT)
+                    .getResultList()) {
+                if (EventDelivery.FAILED.equals(d.getStatus())) {
+                    d.replay();
+                } else {
+                    d.expedite();
+                }
+                count++;
+            }
+            return count;
+        });
+        return resumed == null ? 0 : resumed;
+    }
+
+    /** An operator asks for a waiting retry to run now instead of after its backoff. */
+    public void expedite(Long deliveryId) {
+        tx.executeWithoutResult(status -> {
+            EventDelivery delivery = em.find(EventDelivery.class, deliveryId);
+            if (delivery == null) {
+                throw new NotFoundException("Delivery " + deliveryId + " not found");
+            }
+            if (!EventDelivery.PENDING.equals(delivery.getStatus()) || delivery.getAttempts() == 0) {
+                throw new ConflictException("Only a pending delivery that has already failed can be retried now; this"
+                        + " one is " + delivery.getStatus() + " after " + delivery.getAttempts() + " attempt(s).");
+            }
+            delivery.expedite();
+        });
+    }
+
+    /**
+     * NS-SH12-003 / AT-SH12-02: a dead-lettered delivery is alerted to integration staff with its owner and reason,
+     * once each time it is dead-lettered.
+     */
+    private void deadLetterAlert(EventDelivery delivery) {
+        String owner = interfaces.forHandler(delivery.getHandler()).map(InterfaceRegistry.Entry::exceptionOwner)
+                .orElse("Integration engineering");
+        String key = "dead-letter:" + delivery.getId() + ":" + delivery.getDeadLetteredAt().withNano(0);
+        String body = delivery.getEvent().getAggregateRef() + " after " + delivery.getAttempts() + " attempt(s) ("
+                + delivery.getFailureClass() + "). Business owner: " + owner
+                + ". Replay it from the Integration monitor once the cause is fixed. Reason: " + delivery.getLastError();
+        alerts.raise("DELIVERY_DEAD_LETTERED", "READ_INTEGRATION", "Delivery dead-lettered: "
+                        + delivery.getEvent().getEventType() + " to " + delivery.getHandler(),
+                body.length() <= 1000 ? body : body.substring(0, 1000),
                 key.length() <= 120 ? key : key.substring(0, 120), "system");
     }
 

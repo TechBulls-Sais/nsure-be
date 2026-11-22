@@ -22,6 +22,8 @@ public class EventDelivery {
     public static final String FAILED = "FAILED";
     /** Not handled because the handler judged it irrelevant (superseded); the reason stays as evidence. */
     public static final String IGNORED = "IGNORED";
+    public static final String TRANSIENT = "TRANSIENT";
+    public static final String PERMANENT = "PERMANENT";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -51,6 +53,14 @@ public class EventDelivery {
 
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
+
+    /** TRANSIENT (worth retrying: an outage, a timeout) or PERMANENT (will never succeed as it stands), NS-SH12-003. */
+    @Column(name = "failure_class", length = 20)
+    private String failureClass;
+
+    /** When the delivery was dead-lettered: retries exhausted, or refused as permanent. */
+    @Column(name = "dead_lettered_at")
+    private LocalDateTime deadLetteredAt;
 
     protected EventDelivery() {
     }
@@ -82,11 +92,21 @@ public class EventDelivery {
 
     /** A failed attempt: retried with backoff until maxAttempts, then left Failed for an operator to replay. */
     void failed(String error, int maxAttempts) {
+        failed(error, maxAttempts, TRANSIENT);
+    }
+
+    /**
+     * A failed attempt of the given class. A transient failure is retried with backoff until maxAttempts and then
+     * dead-lettered; a permanent one is dead-lettered at once, since retrying cannot help (NS-SH12-003).
+     */
+    void failed(String error, int maxAttempts, String failureClass) {
         attempts++;
         lastError = error == null ? "Handler failed" : error.length() <= 1000 ? error : error.substring(0, 1000);
         updatedAt = LocalDateTime.now();
-        if (attempts >= maxAttempts) {
+        this.failureClass = failureClass;
+        if (attempts >= maxAttempts || PERMANENT.equals(failureClass)) {
             status = FAILED;
+            deadLetteredAt = updatedAt;
         } else {
             nextAttemptAt = updatedAt.plusSeconds(5L << Math.min(attempts, 6));
         }
@@ -114,6 +134,8 @@ public class EventDelivery {
     void refused(String reason) {
         attempts++;
         status = FAILED;
+        failureClass = PERMANENT;
+        deadLetteredAt = LocalDateTime.now();
         lastError = reason.length() <= 1000 ? reason : reason.substring(0, 1000);
         updatedAt = LocalDateTime.now();
     }
@@ -121,6 +143,13 @@ public class EventDelivery {
     void replay() {
         status = PENDING;
         attempts = 0;
+        nextAttemptAt = dueNow();
+        updatedAt = LocalDateTime.now();
+        deadLetteredAt = null;
+    }
+
+    /** An operator asks for the next retry of a pending delivery now rather than after its backoff. */
+    void expedite() {
         nextAttemptAt = dueNow();
         updatedAt = LocalDateTime.now();
     }
@@ -159,5 +188,13 @@ public class EventDelivery {
 
     public LocalDateTime getUpdatedAt() {
         return updatedAt;
+    }
+
+    public String getFailureClass() {
+        return failureClass;
+    }
+
+    public LocalDateTime getDeadLetteredAt() {
+        return deadLetteredAt;
     }
 }

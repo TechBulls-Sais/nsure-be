@@ -2,9 +2,11 @@ package com.nsure.integration;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
+import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -17,12 +19,14 @@ public class IntegrationController {
     private final IntegrationService integration;
     private final PaymentNotifications payments;
     private final ProviderStatusClient providerStatus;
+    private final InterfaceCatalogue catalogue;
 
     public IntegrationController(IntegrationService integration, PaymentNotifications payments,
-            ProviderStatusClient providerStatus) {
+            ProviderStatusClient providerStatus, InterfaceCatalogue catalogue) {
         this.integration = integration;
         this.payments = payments;
         this.providerStatus = providerStatus;
+        this.catalogue = catalogue;
     }
 
     @GetMapping("/dashboard")
@@ -46,9 +50,47 @@ public class IntegrationController {
         return integration.dispatchNow();
     }
 
+    /** {reason}: a failed delivery goes back to its consumer with its original payload. */
     @PostMapping("/deliveries/{id}/replay")
-    public IntegrationViews.DispatchView replay(@PathVariable Long id) {
-        return integration.replay(id);
+    public IntegrationViews.DispatchView replay(@PathVariable Long id, @RequestBody(required = false) JsonNode body) {
+        return integration.replay(id, text(body, "reason"));
+    }
+
+    /** {reason?}: a pending retry runs now instead of after its backoff. */
+    @PostMapping("/deliveries/{id}/retry-now")
+    public IntegrationViews.DispatchView retryNow(@PathVariable Long id, @RequestBody(required = false) JsonNode body) {
+        return integration.retryNow(id, text(body, "reason"));
+    }
+
+    @GetMapping("/dead-letters")
+    public List<IntegrationViews.DeadLetterView> deadLetters() {
+        return integration.deadLetters();
+    }
+
+    @GetMapping("/interfaces")
+    public Map<String, Object> interfaces() {
+        return catalogue.catalogue();
+    }
+
+    /** {available, reason}: the provider simulator's availability switch for one interface. */
+    @PutMapping("/interfaces/{code}/availability")
+    public Map<String, Object> availability(@PathVariable String code, @RequestBody JsonNode body) {
+        return catalogue.setAvailability(code, body);
+    }
+
+    @GetMapping("/batches")
+    public List<Map<String, Object>> batches() {
+        return catalogue.batches();
+    }
+
+    @GetMapping("/reconciliation")
+    public List<Map<String, Object>> reconciliation() {
+        return catalogue.reconciliation();
+    }
+
+    @GetMapping("/operator-actions")
+    public List<Map<String, Object>> operatorActions() {
+        return catalogue.operatorActions();
     }
 
     /** A provider's payment confirmation: {provider, providerReference, policyRef, amount, currency?, method?}. */

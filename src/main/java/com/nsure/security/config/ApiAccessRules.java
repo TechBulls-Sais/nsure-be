@@ -433,6 +433,8 @@ public final class ApiAccessRules {
             rule(GET, "/integration/**", anyOf("READ_INTEGRATION")),
             rule(POST, "/integration/outbox/dispatch", anyOf("MANAGE_INTEGRATION")),
             rule(POST, "/integration/deliveries/*/replay", anyOf("MANAGE_INTEGRATION")),
+            rule(POST, "/integration/deliveries/*/retry-now", anyOf("MANAGE_INTEGRATION")),
+            rule(PUT, "/integration/interfaces/*/availability", anyOf("MANAGE_INTEGRATION")),
             rule(POST, "/integration/payment-notifications", anyOf("MANAGE_INTEGRATION")),
             rule(POST, "/integration/simulator/provider-receipts", anyOf("MANAGE_INTEGRATION")),
 

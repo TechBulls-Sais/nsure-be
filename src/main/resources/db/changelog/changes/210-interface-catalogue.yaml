@@ -1,0 +1,92 @@
+databaseChangeLog:
+  # SH12 workspace (NS-SH12-005, NS-SH12-007, AT-SH12-02): the interface catalogue, the operator action log and the
+  # simulated outbound transmissions, plus the failure class and dead-letter time on each outbox delivery.
+  - changeSet:
+      id: 210-interface-catalogue
+      author: nsure
+      comment: >-
+        One row per interface the insurer depends on: owner, authentication, contract, direction, frequency, SLA,
+        reconciliation, retention, runbook and the outbox consumers that belong to it. "available" is the simulated
+        availability switch (provider simulator only) used to demonstrate an outage, a monitored backlog and recovery.
+      changes:
+        - createTable:
+            tableName: int_interface
+            columns:
+              - column: {name: code, type: varchar(40), constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_int_interface}}
+              - column: {name: name, type: varchar(120), constraints: {nullable: false}}
+              - column: {name: kind, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: direction, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: counterpart, type: varchar(160), constraints: {nullable: false}}
+              - column: {name: pattern, type: varchar(400), constraints: {nullable: false}}
+              - column: {name: authentication, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: data_contract, type: varchar(200), constraints: {nullable: false}}
+              - column: {name: frequency, type: varchar(120), constraints: {nullable: false}}
+              - column: {name: sla, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: reconciliation, type: varchar(400), constraints: {nullable: false}}
+              - column: {name: retention, type: varchar(200), constraints: {nullable: false}}
+              - column: {name: runbook, type: varchar(1000), constraints: {nullable: false}}
+              - column: {name: system_owner, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: exception_owner, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: connection_mode, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: handlers, type: varchar(400)}
+              - column: {name: available, type: boolean, defaultValueBoolean: true, constraints: {nullable: false}}
+              - column: {name: availability_note, type: varchar(300)}
+              - column: {name: availability_changed_by, type: varchar(100)}
+              - column: {name: availability_changed_at, type: datetime}
+              - column: {name: sort_order, type: int, constraints: {nullable: false}}
+        - createTable:
+            tableName: int_operator_action
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_int_operator_action}}
+              - column: {name: action, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: interface_code, type: varchar(40)}
+              - column: {name: target_ref, type: varchar(80)}
+              - column: {name: reason, type: varchar(500)}
+              - column: {name: outcome, type: varchar(500)}
+              - column: {name: actor, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: acted_at, type: datetime, constraints: {nullable: false}}
+        - createTable:
+            tableName: int_outbound_message
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_int_outbound_message}}
+              - column: {name: interface_code, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: handler_name, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: event_id, type: varchar(36), constraints: {nullable: false}}
+              - column: {name: event_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: aggregate_ref, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: payload_hash, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: signature, type: varchar(80), constraints: {nullable: false}}
+              - column: {name: ack_ref, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: transmitted_at, type: datetime, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: int_outbound_message
+            columnNames: handler_name, event_id
+            constraintName: uk_int_outbound_handler_event
+        - addColumn:
+            tableName: int_event_delivery
+            columns:
+              - column: {name: failure_class, type: varchar(20)}
+              - column: {name: dead_lettered_at, type: datetime}
+        - sql:
+            comment: >-
+              The register values (SLA, retention, frequency) are demo defaults pending decisions D10/D12/D14: the
+              insurer confirms them per interface before release. Connection says honestly what this build has.
+            sql: |
+              INSERT INTO int_interface (code, name, kind, direction, counterpart, pattern, authentication, data_contract, frequency, sla, reconciliation, retention, runbook, system_owner, exception_owner, connection_mode, handlers, available, sort_order) VALUES
+              ('BANK_PAYMENTS', 'Bank and wallet payments', 'EXTERNAL', 'Inbound and outbound', 'Banks, DPO card gateway, Orange Money, MyZaka', 'Signed payment callbacks, provider status query before allocation, bank statement files', 'HMAC-SHA256 signature (X-Nsure-Signature) and timestamp within a 5-minute replay window', 'PaymentNotification v1; statement lines v1', 'Real time callbacks; daily statements', 'Callback acknowledged within 5 seconds; unknown outcomes re-queried within 15 minutes (demo default)', 'Amounts and currency, provider references, receipt counts against statement totals', '7 years (demo default)', 'Provider down: notifications stay UNKNOWN and are re-queried, never re-submitted. Duplicates return the first result. Mismatches go to suspense for Finance.', 'Integration engineering', 'Finance', 'SIMULATED', NULL, TRUE, 10),
+              ('EMAIL_WHATSAPP', 'Email and WhatsApp provider', 'EXTERNAL', 'Inbound and outbound', 'Email/WhatsApp messaging provider', 'Outbound queue to the provider API; signed delivery and reply callbacks', 'HMAC-SHA256 signed callbacks', 'Message v1; delivery status v1; inbound reply v1', 'Real time', 'Delivery report within 1 hour (demo default)', 'Messages queued, delivered and failed per channel', '2 years (demo default)', 'Failed delivery: the service team retries from Communications. Unsigned callbacks are refused.', 'Integration engineering', 'Customer service', 'SIMULATED', NULL, TRUE, 20),
+              ('KYC_AML', 'Identity, KYC and AML screening', 'EXTERNAL', 'Outbound request, inbound result', 'Screening provider (to be selected, D06/D12)', 'Request/response screening with evidence reference and expiry; provider outages stay pending', 'Mutual TLS and API key (planned)', 'ScreeningRequest v1; ScreeningResult v1', 'On demand at onboarding; re-screen on expiry', 'Result within 1 minute; pending checks retried every 15 minutes (demo default)', 'Every requested check matched to an outcome; pending and referred counts', '7 years after the relationship ends (demo default)', 'Provider down: checks stay PENDING and are re-sent when it returns. Hits become compliance referrals; Compliance decides.', 'Integration engineering', 'Compliance', 'SIMULATED', NULL, TRUE, 30),
+              ('EMPLOYER_LENDER', 'Employer and lender batches', 'EXTERNAL', 'Inbound', 'Scheme employers and credit lenders', 'Versioned census and loan batches uploaded by staff, staged, previewed and committed', 'Staff sign-in (partner API planned)', 'Census CSV v1; loan bordereau v1', 'Monthly or on change', 'Batch validated on upload; committed within 2 working days (demo default)', 'Header/row counts, accepted and rejected rows', '7 years (demo default)', 'Rejected rows are corrected by the scheme or credit team and sent as a new batch; a re-upload never duplicates committed rows.', 'Group administration', 'Scheme and credit teams', 'MANUAL', NULL, TRUE, 40),
+              ('ERP_GL', 'ERP general ledger', 'EXTERNAL', 'Outbound batches, inbound acknowledgements', 'Insurer ERP / general ledger', 'Approved journal batches out; acknowledgement and reconciliation results back', 'Not connected: batches are prepared here and acknowledgements keyed in by Finance', 'GL batch v1', 'Daily', 'Batch acknowledged by the next working day (demo default)', 'Batch and line references, debit and credit totals', '7 years (demo default)', 'Rejected batch: Finance corrects and re-exports the rejected journals; period treatment by Finance.', 'Finance systems', 'Finance', 'MANUAL', NULL, TRUE, 50),
+              ('ACTUARIAL', 'Actuarial and IFRS 17 extracts', 'EXTERNAL', 'Outbound', 'Actuarial valuation engine (external)', 'Versioned extracts with record counts, control totals and checksum', 'Not connected: extracts are downloaded by authorised staff', 'Policies v1; premiums v1; claims v1', 'Monthly', 'Extract available by working day 3 (demo default)', 'As-of date, record counts and premium/claim control totals', '10 years (demo default)', 'A disputed extract is re-run; each run keeps its own counts and checksum.', 'Actuarial', 'Actuarial and Finance', 'MANUAL', NULL, TRUE, 60),
+              ('REINSURER', 'Reinsurer bordereaux', 'EXTERNAL', 'Outbound files, inbound acknowledgements', 'Treaty reinsurers', 'Monthly bordereau transmission per treaty with acknowledgement', 'Signed transmission (simulated)', 'Bordereau v1', 'Monthly', 'Acknowledged within 5 working days (demo default)', 'Bordereaux submitted against transmitted and acknowledged; ceded totals', '10 years (demo default)', 'Reinsurer unavailable: transmissions queue and retry; exhausted ones are replayed by integration staff. Disputes stay with Reinsurance.', 'Integration engineering', 'Reinsurance', 'SIMULATED', 'reinsurer.bordereau-feed', TRUE, 70),
+              ('PARTNER_WEBHOOKS', 'Partner event notifications', 'EXTERNAL', 'Outbound', 'Intermediaries, employers and lenders', 'Signed webhooks for policy, member cover and claim settlement events', 'HMAC-SHA256 signature per partner (simulated)', 'Canonical event envelope v1 (references only)', 'Real time', 'Delivered within 5 minutes; retried with backoff, dead-lettered after 5 attempts (demo default)', 'Events published against notifications transmitted', '1 year (demo default)', 'Partner down: notifications queue with backoff; after the last attempt they are dead-lettered and resumed automatically when the partner is back, or replayed by integration staff.', 'Integration engineering', 'Distribution and scheme teams', 'SIMULATED', 'partner.webhooks', TRUE, 80),
+              ('SIGNING_OCR', 'Signing, rendering and OCR services', 'EXTERNAL', 'Outbound request, inbound evidence', 'E-signature and OCR provider (none selected, D12/D15)', 'Approved signature requests with completion evidence; OCR where selected', 'Not connected', 'None agreed', 'On demand', 'Not agreed', 'Document hash and version, signer and completion status', 'Not agreed', 'Not connected in this build: documents are signed and read by people.', 'Operations', 'Operations', 'NOT_CONNECTED', NULL, TRUE, 90),
+              ('IDENTITY_MONITORING', 'Insurer identity and monitoring', 'EXTERNAL', 'Both', 'Insurer identity provider and monitoring stack', 'Federated sign-in, user lifecycle, telemetry and health checks', 'Not connected: local sign-in with one-time codes; health endpoint only', 'None agreed', 'Continuous', 'Not agreed', 'Access revocations and health checks', 'Not agreed', 'Not connected in this build.', 'Platform operations', 'Security', 'NOT_CONNECTED', NULL, TRUE, 100),
+              ('SUBLEDGER', 'Insurance subledger posting', 'INTERNAL', 'Event consumer', 'Finance module', 'Posts journals from monetary events', 'In process', 'Monetary events v1', 'Every dispatcher run (5 s)', 'Posted within 1 minute (demo default)', 'Monetary events against posted journals; unposted events are financial exceptions', 'Permanent', 'A failed posting is retried, then replayed from the monitor; the event and its business change stay committed.', 'Finance systems', 'Finance', 'LIVE', 'finance.subledger', TRUE, 110),
+              ('COMMISSION', 'Commission accrual', 'INTERNAL', 'Event consumer', 'Distribution module', 'Accrues and claws back commission from premium events', 'In process', 'Premium events v1', 'Every dispatcher run (5 s)', 'Within 1 minute (demo default)', 'Premiums against commission accrued', 'Permanent', 'Retry, then replay from the monitor.', 'Distribution', 'Distribution', 'LIVE', 'distribution.commission', TRUE, 120),
+              ('CESSION', 'Reinsurance cession', 'INTERNAL', 'Event consumer', 'Reinsurance module', 'Cedes premium and recognises recoveries under approved treaties', 'In process', 'Premium and claim events v1', 'Every dispatcher run (5 s)', 'Within 1 minute (demo default)', 'Premiums and claims against cessions and recoveries', 'Permanent', 'Retry, then replay from the monitor.', 'Reinsurance', 'Reinsurance', 'LIVE', 'reinsurance.cession', TRUE, 130),
+              ('MESSAGING', 'Customer messaging', 'INTERNAL', 'Event consumer', 'Communications module', 'Queues customer messages for business events', 'In process', 'Business events v1', 'Every dispatcher run (5 s)', 'Within 1 minute (demo default)', 'Events against messages queued', 'Permanent', 'Retry, then replay from the monitor.', 'Customer service', 'Customer service', 'LIVE', 'communications.notify', TRUE, 140),
+              ('POLICY_DOCUMENTS', 'Policy documents', 'INTERNAL', 'Event consumer', 'Documents', 'Generates the policy schedule on issue', 'In process', 'PolicyIssued v1', 'Every dispatcher run (5 s)', 'Within 1 minute (demo default)', 'Policies issued against schedules generated', 'Permanent', 'Retry, then replay from the monitor.', 'Operations', 'Operations', 'LIVE', 'documents.policy-schedule', TRUE, 150),
+              ('INSURED_LIVES', 'Insured lives register', 'INTERNAL', 'Event consumer', 'Servicing module', 'Keeps the insured lives of each policy', 'In process', 'PolicyIssued, PolicyTerminated v1', 'Every dispatcher run (5 s)', 'Within 1 minute (demo default)', 'Policies against insured lives', 'Permanent', 'Retry, then replay from the monitor.', 'Operations', 'Operations', 'LIVE', 'servicing.insured-lives', TRUE, 160),
+              ('CREDIT', 'Credit life cover', 'INTERNAL', 'Event consumer', 'Credit life module', 'Single premiums and cover ends for credit policies', 'In process', 'PolicyIssued, PolicyTerminated v1', 'Every dispatcher run (5 s)', 'Within 1 minute (demo default)', 'Credit policies against loans', 'Permanent', 'Retry, then replay from the monitor.', 'Credit', 'Credit', 'LIVE', 'credit.single-premium,credit.cover-ended', TRUE, 170);

@@ -305,3 +305,6 @@ databaseChangeLog:
   - include:
       file: changes/111-mysql-new-booleans.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/210-interface-catalogue.yaml
+      relativeToChangelogFile: true
