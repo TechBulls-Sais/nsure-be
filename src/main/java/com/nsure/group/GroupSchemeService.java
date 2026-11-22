@@ -177,6 +177,7 @@ public class GroupSchemeService {
         count(activity, "claim(s)", "select count(c) from GroupClaim c where c.scheme = :s", scheme);
         countByRef(activity, "credit loan(s)", "select count(l) from GroupCreditLoan l where l.schemeRef = :ref", ref);
         countByRef(activity, "lifecycle request(s)", "select count(e) from SchemeEvent e where e.schemeRef = :ref", ref);
+        count(activity, "renewal review(s)", "select count(r) from SchemeRenewal r where r.scheme = :s", scheme);
         if (!activity.isEmpty()) {
             throw new ConflictException("Scheme " + ref + " cannot be deleted: " + String.join(", ", activity)
                     + ". Close it instead; its cover history is kept.");
@@ -184,6 +185,9 @@ public class GroupSchemeService {
         em.createQuery("delete from SchemeBenefit b where b.schemeRef = :ref").setParameter("ref", ref).executeUpdate();
         em.createQuery("delete from GroupBenefitTerms t where t.schemeRef = :ref").setParameter("ref", ref).executeUpdate();
         em.createQuery("delete from GroupCategoryVersion v where v.category in (select c from BenefitCategory c"
+                + " where c.scheme = :s)").setParameter("s", scheme).executeUpdate();
+        // Category rate versions for billing (GL04/GL05 cover history) go with their categories.
+        em.createQuery("delete from CategoryVersion v where v.category in (select c from BenefitCategory c"
                 + " where c.scheme = :s)").setParameter("s", scheme).executeUpdate();
         em.createQuery("delete from BenefitCategory c where c.scheme = :s").setParameter("s", scheme).executeUpdate();
         em.remove(scheme);
