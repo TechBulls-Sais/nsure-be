@@ -268,6 +268,8 @@ public class CensusService {
             v.put("action", row.getAction());
             v.put("memberId", row.getMemberId());
             v.put("changeId", row.getChangeId());
+            v.put("adjustments", row.getAdjustmentRefs());
+            v.put("reviewedBy", row.getReviewedBy());
             MemberChange change = row.getChangeId() == null ? null : changes.get(row.getChangeId());
             if (change != null) {
                 traced++;

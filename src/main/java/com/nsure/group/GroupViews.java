@@ -82,7 +82,12 @@ public final class GroupViews {
             LocalDateTime underwrittenAt,
             String sourceBatchRef,
             Boolean activelyAtWork,
-            long version) {
+            long version,
+            // GL03 workspace: membership (on the scheme, left, suspended) apart from the cover status of the benefit.
+            String membershipStatus,
+            String coverStatus,
+            // NS-GL04-003: the party the member was resolved to by national id, when one matched.
+            String partyRef) {
     }
 
     public record CensusBatchSummaryView(
@@ -239,7 +244,9 @@ public final class GroupViews {
             BigDecimal amount,
             BigDecimal outstandingAfter,
             String receivedBy,
-            LocalDateTime receivedAt) {
+            LocalDateTime receivedAt,
+            // GL05: policy-year reference on every bill and receipt.
+            Integer policyYear) {
     }
 
     /** A claim on a member's group cover (GL claim register). */

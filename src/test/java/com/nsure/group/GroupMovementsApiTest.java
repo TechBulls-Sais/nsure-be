@@ -62,7 +62,9 @@ class GroupMovementsApiTest {
         String scheme = scheme("2026-01-01");
         category(scheme, "STAFF", "2", "500000", "0.50");
         category(scheme, "MGMT", "4", "500000", "0.60");
-        commit(upload(scheme, "MV-1", HEADER + "\nT1,Tumi,Mover,1985-01-01,STAFF,100000,JOIN," + LocalDate.now().minusDays(40)));
+        // NS-GL04-003: a national id that one customer holds resolves the member to that party (CUS-1003 is seeded).
+        commit(upload(scheme, "MV-1", HEADER + ",nationalId\nT1,Tumi,Mover,1985-01-01,STAFF,100000,JOIN,"
+                + LocalDate.now().minusDays(40) + ",770305202"));
         String transfer = upload(scheme, "MV-2", HEADER + "\nT1,,,,MGMT,,CATEGORY," + LocalDate.now().minusDays(10));
         mockMvc.perform(get("/group/census-batches/" + transfer).with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$.rows[0].status").value("VALID"))
@@ -73,6 +75,12 @@ class GroupMovementsApiTest {
         assertThat((List<String>) JsonPath.read(detail, "$.members[?(@.memberKey == 'T1')].category")).containsExactly("MGMT");
         assertThat((List<Double>) JsonPath.read(detail, "$.members[?(@.memberKey == 'T1')].acceptedCover"))
                 .containsExactly(400000.0);
+        assertThat((List<String>) JsonPath.read(detail, "$.members[?(@.memberKey == 'T1')].membershipStatus"))
+                .containsExactly("ON_SCHEME");
+        assertThat((List<String>) JsonPath.read(detail, "$.members[?(@.memberKey == 'T1')].coverStatus"))
+                .containsExactly("IN_FORCE");
+        assertThat((List<String>) JsonPath.read(detail, "$.members[?(@.memberKey == 'T1')].partyRef"))
+                .containsExactly("CUS-1003");
         Integer member = ((List<Integer>) JsonPath.read(detail, "$.members[?(@.memberKey == 'T1')].id")).get(0);
         mockMvc.perform(get("/group/members/" + member + "/cover-history").with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$.length()").value(2))

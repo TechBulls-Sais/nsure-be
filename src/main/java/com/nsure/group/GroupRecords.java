@@ -268,7 +268,30 @@ public class GroupRecords {
                 m.fullName(), m.getDateOfBirth(), c.getCode(), c.getName(), m.getSalary(), m.getStatus(),
                 m.getJoinDate(), m.getExitDate(), m.getRequestedCover(), m.getAcceptedCover(), m.getPendingCover(),
                 premium, m.getUnderwritingDecision(), m.getUnderwritingReason(), m.getUnderwrittenBy(),
-                m.getUnderwrittenAt(), m.getSourceBatchRef(), m.getActivelyAtWork(), m.getRowVersion());
+                m.getUnderwrittenAt(), m.getSourceBatchRef(), m.getActivelyAtWork(), m.getRowVersion(),
+                membershipStatus(m), coverStatus(m), m.getPartyRef());
+    }
+
+    /** Membership of the scheme, separate from cover (GL03 workspace): on the scheme, suspended with it, or left. */
+    static String membershipStatus(SchemeMember m) {
+        return SchemeMember.CEASED.equals(m.getStatus()) ? "LEFT"
+                : SchemeMember.SUSPENDED.equals(m.getStatus()) ? "SUSPENDED" : "ON_SCHEME";
+    }
+
+    /** The benefit's cover status: in force, partly pending underwriting, pending, declined or ended. */
+    static String coverStatus(SchemeMember m) {
+        if (SchemeMember.CEASED.equals(m.getStatus())) {
+            return "ENDED";
+        }
+        if (SchemeMember.SUSPENDED.equals(m.getStatus())) {
+            return "SUSPENDED";
+        }
+        boolean accepted = m.getAcceptedCover().signum() > 0;
+        boolean pending = m.getPendingCover().signum() > 0;
+        if (!accepted && !pending) {
+            return "DECLINED";
+        }
+        return accepted && pending ? "IN_FORCE_PART_PENDING" : pending ? "PENDING_UNDERWRITING" : "IN_FORCE";
     }
 
     static GroupViews.CensusBatchSummaryView batchSummary(CensusBatch b) {
@@ -375,6 +398,6 @@ public class GroupRecords {
 
     static GroupViews.ReceiptView receiptView(SponsorReceipt r) {
         return new GroupViews.ReceiptView(r.getRef(), r.getReference(), r.getAmount(), r.getOutstandingAfter(),
-                r.getReceivedBy(), r.getReceivedAt());
+                r.getReceivedBy(), r.getReceivedAt(), r.getInvoice().getPolicyYear());
     }
 }
