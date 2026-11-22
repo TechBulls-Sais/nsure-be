@@ -46,6 +46,11 @@ public class OneTimeCodes {
 
     static final Profiles DEMO_CODE_PROFILES = Profiles.of("(dev | demo) & !prod");
 
+    /** Whether this installation answers one-time codes with {@link #DEMO_CODE} (a dev or demo profile, never prod). */
+    public static boolean demoCodeIn(Environment environment) {
+        return environment.acceptsProfiles(DEMO_CODE_PROFILES);
+    }
+
     /** A challenge to answer. {@code demoCode} is set only in a dev or demo installation. */
     public record Issued(String challenge, LocalDateTime expiresAt, int attemptsAllowed, String demoCode) {
     }
