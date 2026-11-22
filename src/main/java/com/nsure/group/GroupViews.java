@@ -74,7 +74,16 @@ public final class GroupViews {
             Integer lateEntryDays,
             int activeMembers,
             String updatedBy,
-            LocalDateTime updatedAt) {
+            LocalDateTime updatedAt,
+            // NS-GL02-001: approved factors, cessation, waiting period, cap, eligibility; the current version.
+            String employmentClass,
+            String occupationClass,
+            String salaryBasis,
+            Integer exitAge,
+            Integer waitingDays,
+            BigDecimal maxCover,
+            String eligibilityRule,
+            int version) {
     }
 
     public record MemberView(

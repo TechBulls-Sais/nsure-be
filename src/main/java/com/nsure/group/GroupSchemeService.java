@@ -1,6 +1,7 @@
 package com.nsure.group;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.nsure.common.exception.ConflictException;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.portfolio.GroupScheme;
@@ -14,6 +15,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,9 +32,11 @@ public class GroupSchemeService {
     private final PlatformSecurityContext security;
     private final GroupRecords records;
     private final com.nsure.audit.evidence.EvidenceChain audit;
+    private final BenefitRules benefitRules;
 
     public GroupSchemeService(EntityManager em, PlatformSecurityContext security, GroupRecords records,
-            com.nsure.audit.evidence.EvidenceChain audit) {
+            com.nsure.audit.evidence.EvidenceChain audit, BenefitRules benefitRules) {
+        this.benefitRules = benefitRules;
         this.em = em;
         this.security = security;
         this.records = records;
@@ -56,7 +60,7 @@ public class GroupSchemeService {
             if (SchemeMember.UNDERWRITING_PENDING.equals(m.getStatus())) {
                 counts[1]++;
             }
-            premium.merge(schemeId, m.getCategory().monthlyPremium(m.getAcceptedCover()), BigDecimal::add);
+            premium.merge(schemeId, m.monthlyPremium(), BigDecimal::add);
         }
         Map<Long, BigDecimal> outstanding = new HashMap<>();
         for (Object[] row : em.createQuery("select i.scheme.id, sum(i.outstanding) from SchemeInvoice i"
@@ -176,6 +180,9 @@ public class GroupSchemeService {
                     + ". Close it instead; its cover history is kept.");
         }
         em.createQuery("delete from SchemeBenefit b where b.schemeRef = :ref").setParameter("ref", ref).executeUpdate();
+        em.createQuery("delete from GroupBenefitTerms t where t.schemeRef = :ref").setParameter("ref", ref).executeUpdate();
+        em.createQuery("delete from GroupCategoryVersion v where v.category in (select c from BenefitCategory c"
+                + " where c.scheme = :s)").setParameter("s", scheme).executeUpdate();
         em.createQuery("delete from BenefitCategory c where c.scheme = :s").setParameter("s", scheme).executeUpdate();
         em.remove(scheme);
         audit.record(user.getUsername(), "Scheme deleted", "Scheme", ref, "No contractual or financial activity");
@@ -227,7 +234,7 @@ public class GroupSchemeService {
             if (m.onCover()) {
                 active++;
                 perCategory.merge(m.getCategory().getCode(), 1, Integer::sum);
-                premium = premium.add(m.getCategory().monthlyPremium(m.getAcceptedCover()));
+                premium = premium.add(m.monthlyPremium());
                 if (SchemeMember.UNDERWRITING_PENDING.equals(m.getStatus())) {
                     pending++;
                 }
@@ -274,6 +281,8 @@ public class GroupSchemeService {
         BenefitCategory category = new BenefitCategory(scheme, code);
         define(category, body, user.getUsername());
         em.persist(category);
+        // Version 1 applies from the scheme's inception (GL02: categories carry dated versions).
+        em.persist(category.snapshot(scheme.getInceptionDate(), "Category added", null, user.getUsername()));
         termsChanged(scheme, category, "ADDED", user.getUsername());
         return GroupRecords.categoryView(category, 0);
     }
@@ -290,7 +299,18 @@ public class GroupSchemeService {
         if (category == null) {
             throw new NotFoundException("Category " + code + " not found on scheme " + schemeRef);
         }
+        LocalDate effective = amendmentDate(scheme, category, body, user);
+        Map<String, Object> impact = categoryImpact(scheme, category, body, effective);
+        if (category.getVersions().isEmpty()) {
+            // Terms set up before versions were kept become version 1, from the scheme's inception.
+            em.persist(category.snapshot(scheme.getInceptionDate(), "Terms before versions were kept", null,
+                    category.getUpdatedBy()));
+        }
         define(category, body, user.getUsername());
+        @SuppressWarnings("unchecked")
+        List<String> notes = (List<String>) impact.get("notes");
+        em.persist(category.snapshot(effective, GroupRecords.text(body, "reason"), String.join(" ", notes),
+                user.getUsername()));
         Long active = em.createQuery("select count(m) from SchemeMember m where m.category = :category"
                         + " and m.status in :statuses", Long.class)
                 .setParameter("category", category)
@@ -369,6 +389,263 @@ public class GroupSchemeService {
             throw new IllegalArgumentException("Late-entry window must be between 0 and 3650 days");
         }
         category.lateEntry(lateEntryDays);
+        // NS-GL02-001: the approved factors the category is defined by, its cessation age, waiting period, cap and
+        // eligibility rule (all optional; none set means no such rule).
+        String employmentClass = GroupRecords.text(body, "employmentClass");
+        if (employmentClass != null && employmentClass.length() > 60) {
+            throw new IllegalArgumentException("Employment class must be at most 60 characters");
+        }
+        String occupationClass = upper(GroupRecords.text(body, "occupationClass"));
+        if (occupationClass != null && !Set.of("CLASS_1", "CLASS_2", "CLASS_3", "CLASS_4").contains(occupationClass)) {
+            throw new IllegalArgumentException("Occupation class must be CLASS_1, CLASS_2, CLASS_3 or CLASS_4");
+        }
+        String salaryBasis = upper(GroupRecords.text(body, "salaryBasis"));
+        if (salaryBasis != null && !Set.of("BASIC", "PENSIONABLE", "TOTAL_EARNINGS").contains(salaryBasis)) {
+            throw new IllegalArgumentException("Salary basis must be BASIC, PENSIONABLE or TOTAL_EARNINGS");
+        }
+        Integer exitAge = GroupRecords.integer(body, "exitAge", "Exit age");
+        if (exitAge != null && (exitAge <= maxAge || exitAge > 80)) {
+            throw new IllegalArgumentException("Exit age must be above the maximum entry age and at most 80");
+        }
+        Integer waitingDays = GroupRecords.integer(body, "waitingDays", "Waiting period");
+        if (waitingDays != null && (waitingDays < 0 || waitingDays > 730)) {
+            throw new IllegalArgumentException("Waiting period must be between 0 and 730 days");
+        }
+        BigDecimal maxCover = GroupRecords.decimal(body, "maxCover", "Maximum cover");
+        if (maxCover != null) {
+            maxCover = GroupRecords.money(maxCover, "Maximum cover", false);
+        }
+        String eligibility = GroupRecords.text(body, "eligibilityRule");
+        if (eligibility != null && eligibility.length() > 300) {
+            throw new IllegalArgumentException("Eligibility rule must be at most 300 characters");
+        }
+        category.factors(employmentClass, occupationClass, salaryBasis, exitAge, waitingDays, maxCover, eligibility);
+    }
+
+    private static String upper(String v) {
+        return v == null ? null : v.toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * The date an amendment applies from (NS-GL02-006): today by default; an earlier date needs the underwriting
+     * authority and a reason, and cannot go back before the category's latest version or the scheme's inception.
+     */
+    private LocalDate amendmentDate(GroupScheme scheme, BenefitCategory category, JsonNode body, AppUser user) {
+        LocalDate today = LocalDate.now();
+        LocalDate effective = GroupRecords.text(body, "effectiveFrom") == null ? today
+                : GroupRecords.date(body, "effectiveFrom", "Effective date");
+        if (effective.isAfter(today)) {
+            throw new IllegalArgumentException("An amendment applies from today; enter it on its effective date.");
+        }
+        if (effective.isBefore(scheme.getInceptionDate())) {
+            throw new IllegalArgumentException("The effective date cannot be before the scheme's inception on "
+                    + scheme.getInceptionDate());
+        }
+        List<PlanRecords.CategoryVersion> versions = category.getVersions();
+        if (!versions.isEmpty() && effective.isBefore(versions.get(versions.size() - 1).effectiveFrom)) {
+            throw new IllegalArgumentException("The effective date cannot be before version "
+                    + versions.get(versions.size() - 1).versionNo + " of " + category.getCode() + " ("
+                    + versions.get(versions.size() - 1).effectiveFrom + ")");
+        }
+        String reason = GroupRecords.text(body, "reason");
+        if (reason != null && reason.length() > 500) {
+            throw new IllegalArgumentException("Reason must be at most 500 characters");
+        }
+        if (effective.isBefore(today)) {
+            user.validateHasPermissionTo("UNDERWRITE_MEMBER");
+            if (reason == null) {
+                throw new IllegalArgumentException("A backdated amendment needs a reason (the authority for it)");
+            }
+        }
+        return effective;
+    }
+
+    /**
+     * What amending the category as proposed would do (NS-GL02-006), with nothing changed: members on cover, their
+     * cover now and on the new formula at their next change, the monthly premium on the current and proposed rate,
+     * members whose new cover would need evidence above the free-cover limit, and certificates to reissue.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> previewCategoryChange(String schemeRef, String code, JsonNode body) {
+        security.authenticatedUser().validateHasPermissionTo("MANAGE_SCHEME");
+        GroupScheme scheme = records.scheme(schemeRef);
+        BenefitCategory category = findCategory(scheme, code.toUpperCase(Locale.ROOT));
+        if (category == null) {
+            throw new NotFoundException("Category " + code + " not found on scheme " + schemeRef);
+        }
+        LocalDate effective = GroupRecords.text(body, "effectiveFrom") == null ? LocalDate.now()
+                : GroupRecords.date(body, "effectiveFrom", "Effective date");
+        return categoryImpact(scheme, category, body, effective);
+    }
+
+    private Map<String, Object> categoryImpact(GroupScheme scheme, BenefitCategory category, JsonNode body,
+            LocalDate effective) {
+        BenefitCategory proposed = new BenefitCategory(scheme, category.getCode());
+        ObjectNode merged = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+        if (body != null) {
+            merged.setAll((ObjectNode) body.deepCopy());
+        }
+        if (!merged.hasNonNull("name")) {
+            merged.put("name", category.getName());
+        }
+        define(proposed, merged, "preview");
+        List<SchemeMember> members = em.createQuery("select m from SchemeMember m where m.category = :c"
+                + " and m.status in :statuses", SchemeMember.class).setParameter("c", category)
+                .setParameter("statuses", SchemeMember.ON_COVER).getResultList();
+        BigDecimal coverNow = BigDecimal.ZERO;
+        BigDecimal coverNew = BigDecimal.ZERO;
+        BigDecimal premiumNow = BigDecimal.ZERO;
+        BigDecimal premiumNew = BigDecimal.ZERO;
+        int needEvidence = 0;
+        int changedCover = 0;
+        for (SchemeMember m : members) {
+            BigDecimal next = proposed.coverFor(m.getSalary());
+            coverNow = coverNow.add(m.getAcceptedCover());
+            coverNew = coverNew.add(next);
+            premiumNow = premiumNow.add(category.monthlyPremium(m.getAcceptedCover()));
+            premiumNew = premiumNew.add(proposed.monthlyPremium(m.getAcceptedCover()));
+            BigDecimal ceiling = m.getUnderwrittenCover() != null && m.getUnderwrittenCover()
+                    .compareTo(proposed.getFreeCoverLimit()) > 0 ? m.getUnderwrittenCover() : proposed.getFreeCoverLimit();
+            if (next.compareTo(ceiling) > 0) {
+                needEvidence++;
+            }
+            if (next.compareTo(m.getRequestedCover()) != 0) {
+                changedCover++;
+            }
+        }
+        Map<String, Object> v = new java.util.LinkedHashMap<>();
+        v.put("category", category.getCode());
+        v.put("effectiveFrom", effective);
+        v.put("backdated", effective.isBefore(LocalDate.now()));
+        v.put("membersOnCover", members.size());
+        v.put("coverInForce", coverNow.setScale(2, java.math.RoundingMode.HALF_UP));
+        v.put("coverOnNewFormula", coverNew.setScale(2, java.math.RoundingMode.HALF_UP));
+        v.put("monthlyPremiumNow", premiumNow.setScale(2, java.math.RoundingMode.HALF_UP));
+        v.put("monthlyPremiumProposed", premiumNew.setScale(2, java.math.RoundingMode.HALF_UP));
+        v.put("membersNeedingEvidence", needEvidence);
+        v.put("certificatesToReissue", members.stream().filter(m -> m.getAcceptedCover().signum() > 0).count());
+        List<String> notes = new java.util.ArrayList<>();
+        notes.add(members.size() + " member(s) on cover keep their recorded cover; " + changedCover + " would get a"
+                + " different amount on the new formula at their next change dated from " + effective + ".");
+        notes.add("Monthly premium on cover in force: " + com.nsure.common.Money.display(premiumNow) + " now, "
+                + com.nsure.common.Money.display(premiumNew) + " at the proposed rate (future invoices).");
+        if (needEvidence > 0) {
+            notes.add(needEvidence + " member(s) would need underwriting evidence for cover above the free-cover limit.");
+        }
+        if (effective.isBefore(LocalDate.now())) {
+            notes.add("Backdated to " + effective + ": joins and salary changes dated from then use the new formula.");
+        }
+        v.put("notes", notes);
+        return v;
+    }
+
+    // ── benefit cessation (section 08 GLA: separate from scheme renewal; NS-GL03-005 eligibility changes) ──
+
+    /**
+     * Members on cover who have reached their cessation age by {@code asAt}: the category's exit age, else the scheme's
+     * resolved GLA cessation age. Cover ceases on its own date, not with the scheme's renewal.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> cessations(String schemeRef, String asAtText) {
+        security.authenticatedUser().validateHasPermissionTo("READ_SCHEME");
+        GroupScheme scheme = records.scheme(schemeRef);
+        LocalDate asAt = asAtText == null || asAtText.isBlank() ? LocalDate.now() : LocalDate.parse(asAtText.trim());
+        return dueForCessation(scheme, asAt).stream().map(d -> {
+            Map<String, Object> v = new java.util.LinkedHashMap<>();
+            v.put("memberId", d.member().getId());
+            v.put("memberKey", d.member().getMemberKey());
+            v.put("name", d.member().fullName());
+            v.put("category", d.member().getCategory().getCode());
+            v.put("dateOfBirth", d.member().getDateOfBirth());
+            v.put("cessationAge", d.age());
+            v.put("ceasesOn", d.lastDay());
+            v.put("acceptedCover", d.member().getAcceptedCover());
+            v.put("rule", d.rule());
+            return v;
+        }).toList();
+    }
+
+    /** {asAt?}: ceases the cover of every member due (see {@link #cessations}); each keeps their history. */
+    @Transactional
+    public List<Map<String, Object>> applyCessations(String schemeRef, JsonNode body) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("MANAGE_SCHEME");
+        GroupScheme scheme = records.lockedScheme(schemeRef);
+        GroupRecords.requireActive(scheme, "a cessation run");
+        String asAtText = GroupRecords.text(body, "asAt");
+        LocalDate asAt = asAtText == null ? LocalDate.now() : GroupRecords.date(body, "asAt", "As-at date");
+        if (asAt.isAfter(LocalDate.now())) {
+            throw new IllegalArgumentException("Cessation runs up to today, not ahead of it.");
+        }
+        List<Map<String, Object>> done = cessations(schemeRef, asAt.toString());
+        for (Due d : dueForCessation(scheme, asAt)) {
+            BigDecimal cover = d.member().getAcceptedCover();
+            d.member().cease(d.lastDay());
+            records.memberChanged(new MemberChange(d.member(), "CESSATION", d.lastDay().plusDays(1),
+                    d.member().getSalary(), cover, null, "Reached the cessation age of " + d.age() + " (" + d.rule()
+                            + "); cover ended " + d.lastDay(), user.getUsername()));
+        }
+        records.refreshTotals(scheme);
+        audit.record(user.getUsername(), "Benefit cessation run", "Scheme", schemeRef, done.size() + " member(s) as at "
+                + asAt);
+        return done;
+    }
+
+    private record Due(SchemeMember member, int age, LocalDate lastDay, String rule) {
+    }
+
+    private List<Due> dueForCessation(GroupScheme scheme, LocalDate asAt) {
+        List<Due> out = new java.util.ArrayList<>();
+        for (SchemeMember m : em.createQuery("select m from SchemeMember m join fetch m.category where m.scheme = :s"
+                + " and m.status in :statuses order by m.memberKey", SchemeMember.class).setParameter("s", scheme)
+                .setParameter("statuses", SchemeMember.ON_COVER).getResultList()) {
+            BenefitCategory c = m.getCategory();
+            Integer age = c.getExitAge();
+            String rule = "category " + c.getCode() + " exit age";
+            if (age == null) {
+                String resolved = benefitRules.resolved(scheme.getRef(), c.getCode(), "GLA", asAt).get("CESSATION_AGE");
+                age = resolved == null ? null : Integer.valueOf(resolved);
+                rule = "GLA cessation age";
+            }
+            if (age == null || m.getDateOfBirth() == null) {
+                continue;
+            }
+            LocalDate birthday = m.getDateOfBirth().plusYears(age);
+            if (!birthday.isAfter(asAt)) {
+                LocalDate last = birthday.minusDays(1);
+                out.add(new Due(m, age, last.isBefore(m.getJoinDate()) ? m.getJoinDate() : last, rule));
+            }
+        }
+        return out;
+    }
+
+    /** The category's dated versions, newest first (GL02 workspace). */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> categoryVersions(String schemeRef, String code) {
+        security.authenticatedUser().validateHasPermissionTo("READ_SCHEME");
+        GroupScheme scheme = records.scheme(schemeRef);
+        BenefitCategory category = findCategory(scheme, code.toUpperCase(Locale.ROOT));
+        if (category == null) {
+            throw new NotFoundException("Category " + code + " not found on scheme " + schemeRef);
+        }
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (PlanRecords.CategoryVersion cv : category.getVersions()) {
+            Map<String, Object> v = new java.util.LinkedHashMap<>();
+            v.put("version", cv.versionNo);
+            v.put("effectiveFrom", cv.effectiveFrom);
+            v.put("benefitBasis", cv.benefitBasis);
+            v.put("salaryMultiple", cv.salaryMultiple);
+            v.put("fixedCover", cv.fixedCover);
+            v.put("maxCover", cv.maxCover);
+            v.put("freeCoverLimit", cv.freeCoverLimit);
+            v.put("ratePerMille", cv.ratePerMille);
+            v.put("reason", cv.changeReason);
+            v.put("impact", cv.impact);
+            v.put("changedBy", cv.changedBy);
+            v.put("changedAt", cv.changedAt);
+            out.add(0, v);
+        }
+        return out;
     }
 
     /**

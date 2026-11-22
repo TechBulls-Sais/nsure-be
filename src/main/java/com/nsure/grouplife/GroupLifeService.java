@@ -255,12 +255,10 @@ public class GroupLifeService {
         }
         BigDecimal fixed = optional(body, "fixedAmount") == null ? null
                 : Money.of(new BigDecimal(optional(body, "fixedAmount")));
-        // AT-GL02-01: a scheme may not go above the product's maximum for the benefit.
-        BigDecimal max = PRODUCT_MAXIMUM.get(type);
-        if (max != null && fixed != null && fixed.compareTo(max) > 0) {
-            throw new IllegalArgumentException(label(type) + " cannot exceed the product maximum of " + Money.text(max)
-                    + "; " + Money.text(fixed) + " was asked for.");
-        }
+        // AT-GL02-01: a scheme may not go above the product's maximums for the benefit (grp_product_rule).
+        setup.checkBenefit(type, basis, optional(body, "multiple") == null ? null : new BigDecimal(optional(body,
+                "multiple")), fixed, optional(body, "waitingMonths") == null ? null : Integer.valueOf(optional(body,
+                "waitingMonths")));
         Benefit b = em.createQuery("select b from SchemeBenefit b where b.schemeRef = :ref and b.benefitType = :t",
                 Benefit.class).setParameter("ref", schemeRef).setParameter("t", type).getResultStream().findFirst()
                 .orElseGet(Benefit::new);
@@ -694,7 +692,7 @@ public class GroupLifeService {
         for (Benefit b : em.createQuery("select b from SchemeBenefit b where b.schemeRef = :ref order by b.benefitType",
                 Benefit.class).setParameter("ref", schemeRef).getResultList()) {
             Map<String, Object> v = benefitView(b);
-            BigDecimal max = PRODUCT_MAXIMUM.get(b.benefitType);
+            BigDecimal max = setup.productMaximum(b.benefitType);
             v.put("source", max != null && b.fixedAmount != null && b.fixedAmount.compareTo(max) < 0
                     ? "Scheme override below the product maximum" : b.terms != null && b.terms.equals(defaultTerms(
                     b.benefitType)) ? "Product default terms" : "Scheme terms");
@@ -1020,7 +1018,7 @@ public class GroupLifeService {
         v.put("fixedAmount", b.fixedAmount);
         v.put("waitingMonths", b.waitingMonths);
         v.put("terms", b.terms);
-        v.put("productMaximum", PRODUCT_MAXIMUM.get(b.benefitType));
+        v.put("productMaximum", setup.productMaximum(b.benefitType));
         v.put("updatedBy", b.updatedBy);
         v.put("updatedAt", b.updatedAt);
         v.put("approvalStatus", b.approvalStatus);

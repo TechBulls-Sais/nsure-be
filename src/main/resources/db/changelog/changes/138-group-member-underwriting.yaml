@@ -1,0 +1,56 @@
+databaseChangeLog:
+  # Group member underwriting (NS-GL03-001..006, AT-GL03-02, GL03 events):
+  # - grp_member_evidence: the evidence requirements generated for a referral (excess cover, late entry, not actively
+  #   at work, risk exceptions), restricted medical evidence kept to assessors, each with its validity;
+  # - grp_member_decision: per-member, per-benefit decisions with accepted and pending amounts, loading, exclusions
+  #   and effective date, the second-underwriter (senior authority) confirmation and the member's acceptance of an offer
+  #   on modified terms, kept as history;
+  # - a member's premium loading and the date cover deferred for not being at work started.
+  - changeSet:
+      id: 138-group-member-underwriting
+      author: nsure
+      changes:
+        - createTable:
+            tableName: grp_member_evidence
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: member_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_grp_member_evidence, references: grp_member(id)}}
+              - column: {name: requirement, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: restricted, type: varchar(3), constraints: {nullable: false}}
+              - column: {name: evidence_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: note, type: varchar(500)}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: received_by, type: varchar(100)}
+              - column: {name: received_on, type: date}
+              - column: {name: valid_until, type: date}
+        - createTable:
+            tableName: grp_member_decision
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: member_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_grp_member_decision, references: grp_member(id)}}
+              - column: {name: benefit_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: decision, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: requested_amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: accepted_amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: pending_amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: loading_percent, type: 'decimal(7,2)'}
+              - column: {name: exclusions, type: varchar(500)}
+              - column: {name: effective_date, type: date, constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500)}
+              - column: {name: decision_status, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: decided_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: authorised_by, type: varchar(100)}
+              - column: {name: authorised_at, type: timestamp(6)}
+              - column: {name: offer_expires_on, type: date}
+              - column: {name: member_response, type: varchar(20)}
+              - column: {name: member_response_note, type: varchar(500)}
+              - column: {name: member_response_at, type: timestamp(6)}
+        - addColumn:
+            tableName: grp_member
+            columns:
+              - column: {name: loading_percent, type: 'decimal(7,2)'}
+              - column: {name: uw_exclusions, type: varchar(500)}
+              - column: {name: deferred_until_at_work, type: varchar(3)}

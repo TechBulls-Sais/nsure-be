@@ -1,0 +1,139 @@
+databaseChangeLog:
+  # Group plans, categories and benefits (NS-GL02-001..006, AT-GL02-01/02, section 08 packs):
+  # - grp_product_rule: the product's default for each benefit parameter, its bounds and whether a scheme or category
+  #   may override it (explicit precedence: product default, then scheme terms, then category terms);
+  # - grp_benefit_terms: versioned scheme- and category-level benefit terms (structured parameters, inclusion), each
+  #   version approved by a second person before it applies;
+  # - category factors (employment class, occupation class, salary basis), exit age, waiting period, cover cap and
+  #   eligibility rule, and dated category versions so a change applies from its effective date.
+  - changeSet:
+      id: 137-group-benefit-rules
+      author: nsure
+      changes:
+        - createTable:
+            tableName: grp_product_rule
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: benefit_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: param_code, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: label, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: value_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: default_value, type: varchar(100)}
+              - column: {name: min_value, type: varchar(30)}
+              - column: {name: max_value, type: varchar(30)}
+              - column: {name: allowed_values, type: varchar(200)}
+              - column: {name: overridable, type: varchar(3), constraints: {nullable: false}}
+              - column: {name: source, type: varchar(200), constraints: {nullable: false}}
+              - column: {name: display_order, type: int, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: grp_product_rule
+            columnNames: benefit_type, param_code
+            constraintName: uk_grp_product_rule
+        - createTable:
+            tableName: grp_benefit_terms
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: scheme_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: benefit_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: category_code, type: varchar(20)}
+              - column: {name: version_no, type: int, constraints: {nullable: false}}
+              - column: {name: included, type: varchar(3), constraints: {nullable: false}}
+              - column: {name: parameters, type: clob}
+              - column: {name: effective_from, type: date, constraints: {nullable: false}}
+              - column: {name: approval_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: change_reason, type: varchar(500)}
+              - column: {name: impact, type: clob}
+              - column: {name: updated_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: updated_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: timestamp(6)}
+        - addColumn:
+            tableName: grp_benefit_category
+            columns:
+              - column: {name: employment_class, type: varchar(60)}
+              - column: {name: occupation_class, type: varchar(20)}
+              - column: {name: salary_basis, type: varchar(20)}
+              - column: {name: exit_age, type: int}
+              - column: {name: waiting_days, type: int}
+              - column: {name: max_cover, type: 'decimal(15,2)'}
+              - column: {name: eligibility_rule, type: varchar(300)}
+              - column: {name: version_no, type: int, defaultValueNumeric: 1, constraints: {nullable: false}}
+        - createTable:
+            tableName: grp_category_version
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: category_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_grp_category_version, references: grp_benefit_category(id)}}
+              - column: {name: version_no, type: int, constraints: {nullable: false}}
+              - column: {name: effective_from, type: date, constraints: {nullable: false}}
+              - column: {name: benefit_basis, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: salary_multiple, type: 'decimal(9,4)'}
+              - column: {name: fixed_cover, type: 'decimal(15,2)'}
+              - column: {name: max_cover, type: 'decimal(15,2)'}
+              - column: {name: free_cover_limit, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: rate_per_mille, type: 'decimal(9,4)', constraints: {nullable: false}}
+              - column: {name: change_reason, type: varchar(500)}
+              - column: {name: impact, type: varchar(2000)}
+              - column: {name: changed_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: changed_at, type: timestamp(6), constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: grp_category_version
+            columnNames: category_id, version_no
+            constraintName: uk_grp_category_version
+  - changeSet:
+      id: 137-h2-benefit-terms-longvarchar
+      author: nsure
+      dbms: h2
+      changes:
+        - modifyDataType: {tableName: grp_benefit_terms, columnName: parameters, newDataType: longvarchar}
+        - modifyDataType: {tableName: grp_benefit_terms, columnName: impact, newDataType: longvarchar}
+  # The product rules: section 08 source values where the specification gives them (awaiting the insurer's
+  # confirmation, D03/D09), demo defaults elsewhere, each labelled with its source. Change a row to change the rule.
+  - changeSet:
+      id: 137-group-product-rules
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO grp_product_rule (benefit_type, param_code, label, value_type, default_value, min_value, max_value, allowed_values, overridable, source, display_order)
+              SELECT r.b, r.p, r.l, r.t, r.d, r.mn, r.mx, r.a, r.o, r.s, r.n FROM (
+                SELECT 'GLA' b, 'MAX_SALARY_MULTIPLE' p, 'Largest salary multiple' l, 'NUMBER' t, '3' d, '0.5' mn, '10' mx, CAST(NULL AS CHAR(200)) a, 'YES' o, 'Demo default (D03)' s, 1 n UNION ALL
+                SELECT 'GLA', 'CESSATION_AGE', 'Cover ceases at age', 'NUMBER', '65', '55', '75', NULL, 'YES', 'Demo default (D03); a scheme rule', 2 UNION ALL
+                SELECT 'GLA', 'CONTINUE_DURING_DISABILITY', 'Cover continues while a disability or income benefit is paid', 'CHOICE', 'YES', NULL, NULL, 'YES,NO', 'YES', 'Section 08 (continuity during disability); value demo default', 3 UNION ALL
+                SELECT 'GLA', 'DEATH_EVIDENCE', 'Death evidence required', 'TEXT', 'Death certificate, claimant identity, proof of membership', NULL, NULL, NULL, 'YES', 'Demo default (D03)', 4 UNION ALL
+                SELECT 'LUMP_SUM_DISABILITY', 'DEFINITION', 'Disability definition', 'CHOICE', 'OWN_OCCUPATION', NULL, NULL, 'OWN_OCCUPATION,ANY_OCCUPATION', 'YES', 'Section 08 (occupational disability)', 1 UNION ALL
+                SELECT 'LUMP_SUM_DISABILITY', 'ASSESSMENT_MONTHS', 'Evidence and assessment period (months)', 'NUMBER', '6', '3', '24', NULL, 'YES', 'Demo default (D03)', 2 UNION ALL
+                SELECT 'LUMP_SUM_DISABILITY', 'PARTIAL_PERCENT', 'Partial benefit for limited duties (%)', 'NUMBER', '50', '50', '50', NULL, 'NO', 'Section 08 source value (50%), awaiting confirmation', 3 UNION ALL
+                SELECT 'LUMP_SUM_DISABILITY', 'PARTIAL_REDUCES_COVER', 'A partial payment reduces the remaining cover', 'CHOICE', 'YES', NULL, NULL, 'YES,NO', 'NO', 'Demo default (D03): confirm effect on remaining cover', 4 UNION ALL
+                SELECT 'LUMP_SUM_DISABILITY', 'CESSATION_AGE', 'Cover ceases at age', 'NUMBER', '65', '55', '70', NULL, 'YES', 'Demo default (D03)', 5 UNION ALL
+                SELECT 'LUMP_SUM_DISABILITY', 'MAX_SALARY_MULTIPLE', 'Largest salary multiple', 'NUMBER', '3', '0.5', '5', NULL, 'YES', 'Demo default (D03)', 6 UNION ALL
+                SELECT 'CRITICAL_ILLNESS', 'CONDITION_SET', 'Condition set', 'CHOICE', 'CORE', NULL, NULL, 'CORE,COMPREHENSIVE,EXTENSIVE', 'YES', 'Section 08 (Core, Comprehensive, Extensive)', 1 UNION ALL
+                SELECT 'CRITICAL_ILLNESS', 'CONDITION_SET_VERSION', 'Condition-set version', 'TEXT', 'DEMO-2026.1', NULL, NULL, NULL, 'NO', 'Demo default: the insurer publishes the condition lists', 2 UNION ALL
+                SELECT 'CRITICAL_ILLNESS', 'SURVIVAL_DAYS', 'Survival period (days)', 'NUMBER', '30', '30', '30', NULL, 'NO', 'Section 08 source value (30 days for major conditions)', 3 UNION ALL
+                SELECT 'CRITICAL_ILLNESS', 'CAP_PER_CONDITION_PERCENT', 'Unrelated claims capped per insured condition (%)', 'NUMBER', '100', '100', '100', NULL, 'NO', 'Section 08 source value (100%)', 4 UNION ALL
+                SELECT 'CRITICAL_ILLNESS', 'ACCELERATES_GLA', 'Accelerates (reduces) the life cover', 'CHOICE', 'NO', NULL, NULL, 'YES,NO', 'YES', 'Section 08 (accelerated benefit reduction); value demo default', 5 UNION ALL
+                SELECT 'CRITICAL_ILLNESS', 'REINSTATEMENT_RULE', 'Reinstatement of accelerated cover', 'CHOICE', 'NOT_CONFIGURED', NULL, NULL, 'NOT_CONFIGURED,AFTER_12_MONTHS', 'NO', 'Awaiting the insurer''s approved rule (AT-GL02-03, D09)', 6 UNION ALL
+                SELECT 'CRITICAL_ILLNESS', 'RELATED_CONDITIONS', 'Related conditions', 'CHOICE', 'ONE_PAYMENT_PER_GROUP', NULL, NULL, 'ONE_PAYMENT_PER_GROUP', 'NO', 'Demo default (D09): related conditions share one payment', 7 UNION ALL
+                SELECT 'FAMILY', 'MEMBER_AMOUNT', 'Member benefit', 'AMOUNT', '40000', '1', '40000', NULL, 'YES', 'Section 08 source value (40,000)', 1 UNION ALL
+                SELECT 'FAMILY', 'SPOUSE_AMOUNT', 'Spouse benefit', 'AMOUNT', '20000', '0', '20000', NULL, 'YES', 'Section 08 source value (20,000)', 2 UNION ALL
+                SELECT 'FAMILY', 'CHILD_AMOUNT', 'Child benefit', 'AMOUNT', '20000', '0', '20000', NULL, 'YES', 'Section 08 source value (20,000)', 3 UNION ALL
+                SELECT 'FAMILY', 'FUNERAL_SUPPORT', 'Funeral support per event', 'AMOUNT', '2000', '0', '2000', NULL, 'YES', 'Section 08 source value (2,000)', 4 UNION ALL
+                SELECT 'FAMILY', 'MAX_SPOUSES', 'Spouses covered', 'NUMBER', '2', '1', '2', NULL, 'YES', 'Section 08 source value (up to two)', 5 UNION ALL
+                SELECT 'FAMILY', 'STILLBIRTH_WEEKS', 'Stillbirth covered from week', 'NUMBER', '26', '26', '26', NULL, 'NO', 'Section 08 source value (26 weeks)', 6 UNION ALL
+                SELECT 'FAMILY', 'CHILD_MAX_AGE', 'Children covered to age', 'NUMBER', '21', '18', '25', NULL, 'YES', 'Demo default (D03): confirm child rules', 7 UNION ALL
+                SELECT 'FAMILY', 'LIMIT_BASIS', 'Limits apply', 'CHOICE', 'PER_LIFE', NULL, NULL, 'PER_LIFE,PER_EVENT', 'YES', 'Demo default (D03): confirm per-event/life/family interpretation', 8 UNION ALL
+                SELECT 'FAMILY', 'SUPPORT_BENEFICIARY', 'Funeral support paid to', 'CHOICE', 'MEMBER', NULL, NULL, 'MEMBER,ESTATE', 'YES', 'Demo default (D03)', 9 UNION ALL
+                SELECT 'INCOME_PROTECTION', 'VARIANT', 'Variant', 'CHOICE', 'GIP', NULL, NULL, 'GIP,TIP', 'YES', 'Section 08 (GIP to retirement, TIP 3-24 months)', 1 UNION ALL
+                SELECT 'INCOME_PROTECTION', 'TIP_MONTHS', 'TIP benefit period (months)', 'NUMBER', '24', '3', '24', NULL, 'YES', 'Section 08 source value (3-24 months)', 2 UNION ALL
+                SELECT 'INCOME_PROTECTION', 'INCOME_PERCENT', 'Income replaced (%)', 'NUMBER', '75', '10', '75', NULL, 'YES', 'Demo default (D03)', 3 UNION ALL
+                SELECT 'INCOME_PROTECTION', 'DEFERRED_MONTHS', 'Waiting / deferred period (months)', 'NUMBER', '3', '1', '24', NULL, 'YES', 'Demo default (D03)', 4 UNION ALL
+                SELECT 'INCOME_PROTECTION', 'ESCALATION_PERCENT', 'Annual escalation in payment (%)', 'NUMBER', '5', '0', '10', NULL, 'YES', 'Demo default (D03)', 5 UNION ALL
+                SELECT 'INCOME_PROTECTION', 'EARNINGS_DEFINITION', 'Earnings definition', 'CHOICE', 'BASIC', NULL, NULL, 'BASIC,PENSIONABLE,TOTAL', 'YES', 'Demo default (D03)', 6 UNION ALL
+                SELECT 'INCOME_PROTECTION', 'PARTIAL_INCOME', 'Partial return to work', 'CHOICE', 'PROPORTIONATE', NULL, NULL, 'PROPORTIONATE,NONE', 'YES', 'Demo default (D03)', 7 UNION ALL
+                SELECT 'INCOME_PROTECTION', 'REVIEW_MONTHS', 'Review evidence every (months)', 'NUMBER', '12', '3', '24', NULL, 'YES', 'Demo default (D03)', 8 UNION ALL
+                SELECT 'INCOME_PROTECTION', 'RETIREMENT_AGE', 'Benefit ceases at retirement age', 'NUMBER', '65', '55', '70', NULL, 'YES', 'Section 08: a scheme rule; value demo default', 9 UNION ALL
+                SELECT 'INCOME_PROTECTION', 'BACKDATING_MONTHS', 'Claims may be backdated up to (months)', 'NUMBER', '3', '0', '6', NULL, 'YES', 'Demo default (D03)', 10 UNION ALL
+                SELECT 'CREDIT', 'DEATH_DISABILITY_MAX', 'Death and disability maximum', 'AMOUNT', '750000', '1', '750000', NULL, 'YES', 'Section 08 source value (750,000)', 1 UNION ALL
+                SELECT 'CREDIT', 'CI_MAX', 'Critical illness maximum', 'AMOUNT', '350000', '0', '350000', NULL, 'YES', 'Section 08 source value (350,000)', 2 UNION ALL
+                SELECT 'CREDIT', 'TEMP_DISABILITY_MONTHLY_MAX', 'Temporary disability monthly maximum', 'AMOUNT', '15000', '0', '15000', NULL, 'YES', 'Section 08 source value (15,000 a month)', 3 UNION ALL
+                SELECT 'CREDIT', 'PREMIUM_ARRANGEMENT', 'Premium arrangement', 'CHOICE', 'SINGLE', NULL, NULL, 'SINGLE,ANNUAL,MONTHLY', 'YES', 'Section 08 (single, annual or monthly)', 4
+              ) r

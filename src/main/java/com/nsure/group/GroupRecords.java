@@ -141,7 +141,7 @@ public class GroupRecords {
         BigDecimal premium = BigDecimal.ZERO;
         for (SchemeMember member : membersOnCover(scheme).values()) {
             members++;
-            premium = premium.add(member.getCategory().monthlyPremium(member.getAcceptedCover()));
+            premium = premium.add(member.monthlyPremium());
         }
         scheme.syncTotals(members, premium.setScale(0, RoundingMode.HALF_UP).intValue());
     }
@@ -266,12 +266,14 @@ public class GroupRecords {
     static GroupViews.CategoryView categoryView(BenefitCategory c, int activeMembers) {
         return new GroupViews.CategoryView(c.getCode(), c.getName(), c.getBenefitBasis(), c.getSalaryMultiple(),
                 c.getFixedCover(), c.getFreeCoverLimit(), c.getRatePerMille(), c.getMinEntryAge(), c.getMaxEntryAge(),
-                c.getLateEntryDays(), activeMembers, c.getUpdatedBy(), c.getUpdatedAt());
+                c.getLateEntryDays(), activeMembers, c.getUpdatedBy(), c.getUpdatedAt(), c.getEmploymentClass(),
+                c.getOccupationClass(), c.getSalaryBasis(), c.getExitAge(), c.getWaitingDays(), c.getMaxCover(),
+                c.getEligibilityRule(), c.getVersionNo());
     }
 
     static GroupViews.MemberView memberView(SchemeMember m) {
         BenefitCategory c = m.getCategory();
-        BigDecimal premium = m.onCover() ? c.monthlyPremium(m.getAcceptedCover()) : BigDecimal.ZERO.setScale(2);
+        BigDecimal premium = m.onCover() ? m.monthlyPremium() : BigDecimal.ZERO.setScale(2);
         return new GroupViews.MemberView(m.getId(), m.getMemberKey(), m.getFirstName(), m.getLastName(),
                 m.fullName(), m.getDateOfBirth(), c.getCode(), c.getName(), m.getSalary(), m.getStatus(),
                 m.getJoinDate(), m.getExitDate(), m.getRequestedCover(), m.getAcceptedCover(), m.getPendingCover(),

@@ -60,6 +60,8 @@ public class SchemeSetup {
     private final GroupSchemeService schemes;
     private final ObjectMapper mapper;
     private final GroupRating rating;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.nsure.group.BenefitRules benefitRules;
     /** Demo default (D06/D11 open): the inception conditions every activation must confirm. */
     private final List<String> requiredConditions;
     /** Demo defaults (D01/D02 open): days a quotation stays open for acceptance, and its default loadings. */
@@ -350,12 +352,15 @@ public class SchemeSetup {
             Benefit b = new Benefit();
             b.schemeRef = schemeRef;
             b.benefitType = type;
-            b.basis = "GLA".equals(type) || "LUMP_SUM_DISABILITY".equals(type) ? "SALARY_MULTIPLE"
+            b.basis = "GLA".equals(type) || "LUMP_SUM_DISABILITY".equals(type) || "CRITICAL_ILLNESS".equals(type)
+                    ? "SALARY_MULTIPLE"
                     : "INCOME_PROTECTION".equals(type) ? "MONTHLY_INCOME_PERCENT"
                     : "CREDIT".equals(type) ? "LOAN_BALANCE" : "FIXED";
-            b.multiple = "SALARY_MULTIPLE".equals(b.basis) ? q.salaryMultiple
+            // Critical illness is a multiple of salary (demo default: 1x); 350,000 is the group credit CI cap only.
+            b.multiple = "CRITICAL_ILLNESS".equals(type) ? BigDecimal.ONE.setScale(2)
+                    : "SALARY_MULTIPLE".equals(b.basis) ? q.salaryMultiple
                     : "MONTHLY_INCOME_PERCENT".equals(b.basis) ? new BigDecimal("75.00") : null;
-            b.fixedAmount = "FIXED".equals(b.basis) ? GroupLifeService.PRODUCT_MAXIMUM.get(type) : null;
+            b.fixedAmount = "FIXED".equals(b.basis) ? benefitRules.productMaximum(type) : null;
             b.terms = GroupLifeService.defaultTerms(type);
             b.updatedBy = actor;
             b.updatedAt = LocalDateTime.now();
@@ -684,6 +689,16 @@ public class SchemeSetup {
         } catch (NumberFormatException ex) {
             throw new IllegalArgumentException(field + " must be a number.");
         }
+    }
+
+    // ── benefit rules (NS-GL02-002, AT-GL02-01) ───────────────────────────────────────────────────
+
+    void checkBenefit(String type, String basis, BigDecimal multiple, BigDecimal fixed, Integer waitingMonths) {
+        benefitRules.checkSchemeBenefit(type, basis, multiple, fixed, waitingMonths);
+    }
+
+    BigDecimal productMaximum(String type) {
+        return benefitRules.productMaximum(type);
     }
 
     // ── wording, sponsors ──────────────────────────────────────────────────────────────────────────

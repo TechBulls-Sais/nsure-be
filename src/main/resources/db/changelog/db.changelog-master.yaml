@@ -311,3 +311,9 @@ databaseChangeLog:
   - include:
       file: changes/136-group-quote-pricing.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/137-group-benefit-rules.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/138-group-member-underwriting.yaml
+      relativeToChangelogFile: true

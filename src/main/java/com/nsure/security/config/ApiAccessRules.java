@@ -265,6 +265,12 @@ public final class ApiAccessRules {
             rule(POST, "/group-life/sponsors", anyOf("MANAGE_SCHEME")),
             rule(POST, "/group-life/rate-tables", anyOf("CREATE_RATE_TABLE")),
             rule(POST, "/group-life/rate-tables/*/versions/*/approval", anyOf("PUBLISH_RATE_TABLE")),
+            rule(PUT, "/group-life/schemes/*/benefit-terms", anyOf("MANAGE_SCHEME")),
+            rule(POST, "/group-life/schemes/*/plan-approval", anyOf("UNDERWRITE_MEMBER")),
+            rule(POST, "/group/schemes/*/categories/*/impact", anyOf("MANAGE_SCHEME")),
+            rule(GET, "/group/schemes/*/categories/*/versions", anyOf("READ_SCHEME")),
+            rule(GET, "/group/schemes/*/cessations", anyOf("READ_SCHEME")),
+            rule(POST, "/group/schemes/*/cessations", anyOf("MANAGE_SCHEME")),
 
             // ── insurance subledger SH08 (Finance Controller) ──────────────────────────────────────────
             rule(GET, "/finance/**", anyOf("READ_FINANCE")),

@@ -324,14 +324,21 @@ class GroupAdministrationApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.salaryMultiple").value(3.0))
                 .andExpect(jsonPath("$.activeMembers").value(1));
-        commit(upload(scheme, "C-2", "PARTIAL", "S2,Sam,New,1990-01-01,STAFF,100000,JOIN,2026-02-01"));
+        // AT-GL02-02: the amendment applies from today. A join dated before it uses the formula then in force; a join
+        // dated from it uses the new one.
+        commit(upload(scheme, "C-2", "PARTIAL", "S2,Sam,New,1990-01-01,STAFF,100000,JOIN,2026-02-01\n"
+                + "S4,Sue,Today,1990-01-01,STAFF,100000,JOIN," + java.time.LocalDate.now()));
         mockMvc.perform(get("/group/schemes/" + scheme).with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$.members[?(@.memberKey == 'S1')].acceptedCover").value(200000.0))
-                .andExpect(jsonPath("$.members[?(@.memberKey == 'S2')].acceptedCover").value(300000.0));
-        // A salary change recalculates S1 from its effective date with the category formula now in force.
+                .andExpect(jsonPath("$.members[?(@.memberKey == 'S2')].acceptedCover").value(200000.0))
+                .andExpect(jsonPath("$.members[?(@.memberKey == 'S4')].acceptedCover").value(300000.0));
+        // A salary change recalculates S1 from its effective date with the category formula in force on that date.
         commit(upload(scheme, "C-3", "PARTIAL", "S1,,,,,120000,SALARY,2026-03-01"));
         mockMvc.perform(get("/group/schemes/" + scheme).with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$.members[?(@.memberKey == 'S1')].salary").value(120000.0))
+                .andExpect(jsonPath("$.members[?(@.memberKey == 'S1')].acceptedCover").value(240000.0));
+        commit(upload(scheme, "C-4", "PARTIAL", "S1,,,,,120000,SALARY," + java.time.LocalDate.now()));
+        mockMvc.perform(get("/group/schemes/" + scheme).with(signedIn("grpadmin", "password")))
                 .andExpect(jsonPath("$.members[?(@.memberKey == 'S1')].acceptedCover").value(360000.0));
     }
 

@@ -107,7 +107,7 @@ public class SchemeBillingService {
             if (days <= 0) {
                 continue;
             }
-            BigDecimal rate = member.getCategory().getRatePerMille();
+            BigDecimal rate = member.ratePerMille(); // the category rate plus any underwriting loading (NS-GL03-004)
             // Pending cover is never billed: only the accepted (authorised) amount (AT-GL03-01).
             BigDecimal premium = member.getAcceptedCover()
                     .multiply(rate)

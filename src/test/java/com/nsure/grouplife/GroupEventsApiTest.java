@@ -107,8 +107,9 @@ class GroupEventsApiTest {
 
         com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme);
         String batch = JsonPath.read(mockMvc.perform(json(post("/group/schemes/" + scheme + "/census-batches"), "admin",
-                        "{\"externalBatchId\":\"EV-1\",\"csv\":\"" + HEADER + "\\nE1,Eve,One,1985-01-01,STAFF,,JOIN,2026-01-01"
-                                + "\\nE2,Eli,Two,1985-01-01,NOPE,,JOIN,2026-01-01\"}"))
+                        // Joining from today, under the amended category terms (a join dated earlier uses the version then in force).
+                        "{\"externalBatchId\":\"EV-1\",\"csv\":\"" + HEADER + "\\nE1,Eve,One,1985-01-01,STAFF,,JOIN," + LocalDate.now()
+                                + "\\nE2,Eli,Two,1985-01-01,NOPE,,JOIN," + LocalDate.now() + "\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.ref");
         assertThat(events(Events.CENSUS_BATCH_VALIDATED, scheme)).singleElement()
                 .satisfies(e -> assertThat(e.getPayload()).contains("\"validRows\":1").contains("\"invalidRows\":1"));

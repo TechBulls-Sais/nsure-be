@@ -306,7 +306,7 @@ public class CensusService {
         if (LEAVE.equals(action)) {
             member.cease(effective);
         } else {
-            member.changeSalary(amount(row.getSalary()), activelyAtWork);
+            member.changeSalary(amount(row.getSalary()), activelyAtWork, effective);
             if (Boolean.FALSE.equals(activelyAtWork) && member.getPendingCover().signum() > 0) {
                 note = "Not actively at work on the increase date: the increase is referred to underwriting";
             }
