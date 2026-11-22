@@ -63,8 +63,10 @@ public class ServicingService {
     public static final String ADD_LIFE = "ADD_LIFE";
     public static final String REMOVE_LIFE = "REMOVE_LIFE";
     public static final String REPLACE_LIFE = "REPLACE_LIFE";
+    /** NS-IL03-002: the policyholder's contact details (email, mobile) changed as an effective-dated endorsement. */
+    public static final String CONTACT = "CONTACT";
     static final List<String> TYPES = List.of(PAYER, OWNERSHIP, SUM_ASSURED, FREQUENCY, ADD_LIFE, REMOVE_LIFE,
-            REPLACE_LIFE);
+            REPLACE_LIFE, CONTACT);
 
     static final String APPLIED = "APPLIED";
     static final String PENDING_APPROVAL = "PENDING_APPROVAL";
@@ -559,6 +561,29 @@ public class ServicingService {
         changes.put("type", type);
         changes.put("effectiveDate", effective.toString());
         switch (type) {
+            case CONTACT -> {
+                CustomerAccount holder = customer(policy.getCustomerRef());
+                String email = optional(body, "email");
+                String phone = optional(body, "phone");
+                if (email == null && phone == null) {
+                    throw new IllegalArgumentException("Give the new email address, mobile number, or both.");
+                }
+                if (email != null && !email.matches("[^@\\s]+@[^@\\s]+\\.[^@\\s]+")) {
+                    throw new IllegalArgumentException(email + " is not an email address.");
+                }
+                if (phone != null && phone.replaceAll("\\D", "").length() < 7) {
+                    throw new IllegalArgumentException("Give a mobile number with at least 7 digits.");
+                }
+                before = "Contact: " + holder.getEmail() + " · " + holder.getPhone();
+                after = "Contact: " + (email == null ? holder.getEmail() : email) + " · "
+                        + (phone == null ? holder.getPhone() : phone);
+                if (email != null) {
+                    changes.put("email", clip(email, 150));
+                }
+                if (phone != null) {
+                    changes.put("phone", clip(phone, 40));
+                }
+            }
             case PAYER -> {
                 String name = required(body, "payerName", 100);
                 String relationship = required(body, "payerRelationship", 60);
@@ -700,6 +725,15 @@ public class ServicingService {
     private void apply(InsurancePolicy policy, Endorsement e, JsonNode changes, String actor) {
         switch (e.type) {
             case PAYER -> policy.setPayer(changes.path("payerName").asText(), changes.path("payerRelationship").asText());
+            case CONTACT -> {
+                CustomerAccount holder = customer(policy.getCustomerRef());
+                if (changes.hasNonNull("email")) {
+                    holder.setEmail(changes.get("email").asText());
+                }
+                if (changes.hasNonNull("phone")) {
+                    holder.setPhone(changes.get("phone").asText());
+                }
+            }
             case OWNERSHIP -> {
                 CustomerAccount owner = customer(changes.path("newCustomerRef").asText());
                 policy.setCustomerRef(owner.getRef());

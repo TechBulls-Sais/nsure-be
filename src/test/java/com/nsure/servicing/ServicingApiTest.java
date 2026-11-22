@@ -349,6 +349,18 @@ class ServicingApiTest {
                 .andExpect(jsonPath("$.inceptionSnapshot.tier").value("Bronze"))
                 .andExpect(jsonPath("$.inceptionSnapshot.productVersion").isNotEmpty())
                 .andExpect(jsonPath("$.inceptionSha256").isNotEmpty());
+        // NS-IL03-002: contact details change as an endorsement, previewed and recorded on the policy's history.
+        mockMvc.perform(json(post(base + "/endorsements"), "admin",
+                        "{\"type\":\"CONTACT\",\"email\":\"not-an-email\",\"reason\":\"New email address\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post(base + "/endorsements"), "admin",
+                        "{\"type\":\"CONTACT\",\"email\":\"mpho.new@example.com\",\"phone\":\"+267 71 999 001\","
+                                + "\"reason\":\"Customer phoned with new details\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPLIED"));
+        String customerRef = jdbc.queryForObject("select customer_ref from ins_policy where record_ref = ?", String.class, policy);
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select email from ins_customer where record_ref = ?",
+                String.class, customerRef)).isEqualTo("mpho.new@example.com");
         // NS-IL03-002: once the contract has ended, its beneficiaries no longer change.
         mockMvc.perform(json(post(base + "/termination"), "admin", "{\"reason\":\"DEATH\",\"note\":\"Death certificate received\"}"))
                 .andExpect(status().isOk());
