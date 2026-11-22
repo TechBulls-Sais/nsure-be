@@ -322,6 +322,29 @@ class CommunicationDeliveryRulesApiTest {
                 .andExpect(status().isUnprocessableEntity());
     }
 
+    @Test
+    void aCustomerManagesTheirOwnChoicesInThePortal() throws Exception {
+        String ref = customer("Pako Portal", "pakoportal", "+267 71 200 306");
+        mockMvc.perform(get("/portfolio/shop/preferences").with(signedIn("pakoportal", "password1")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.customerRef").value(ref));
+        mockMvc.perform(json(put("/portfolio/shop/preferences"), "pakoportal",
+                        "{\"channel\":\"WHATSAPP\",\"status\":\"OPTED_IN\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.channels[1].status").value("OPTED_IN"))
+                .andExpect(jsonPath("$.channels[1].verified").value("Y"));
+        mockMvc.perform(json(put("/portfolio/shop/preferences/purposes"), "pakoportal",
+                        "{\"purpose\":\"MARKETING\",\"channel\":\"EMAIL\",\"status\":\"OPTED_IN\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.purposes[?(@.purpose == 'MARKETING')].choices[0].consentSource")
+                        .value(org.hamcrest.Matchers.hasItem("PORTAL")));
+        mockMvc.perform(json(put("/portfolio/shop/preferences/purposes"), "pakoportal",
+                        "{\"purpose\":\"CLAIM_PROGRESS\",\"channel\":\"ALL\",\"status\":\"OPTED_OUT\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(get("/portfolio/shop/preferences").with(signedIn("service", "password")))
+                .andExpect(status().isForbidden());
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────────
 
     private void dispatch() throws Exception {

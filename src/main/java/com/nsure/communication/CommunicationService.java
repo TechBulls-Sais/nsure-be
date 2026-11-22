@@ -415,7 +415,49 @@ public class CommunicationService {
     @Transactional
     public CommunicationViews.CustomerPreferencesView setPreference(String customerRef, JsonNode body) {
         AppUser user = user("MANAGE_COMMUNICATION");
-        CustomerAccount customer = customerByRef(customerRef);
+        return applyPreference(customerByRef(customerRef), body, user.getUsername(), "STAFF");
+    }
+
+    // ── the customer's own choices (spec 04 customer workspace: manage preferences) ─────────────────────
+
+    /** The signed-in customer's channel and purpose choices. */
+    @Transactional(readOnly = true)
+    public CommunicationViews.CustomerPreferencesView ownPreferences(CustomerAccount me) {
+        return preferencesOf(customerByRef(me.getRef()));
+    }
+
+    /**
+     * {channel, status}: the customer changes a channel themselves. A WhatsApp or SMS opt-in uses the mobile verified at
+     * onboarding (a different number goes through a contact change), recorded with the portal as consent source.
+     */
+    @Transactional
+    public CommunicationViews.CustomerPreferencesView setOwnPreference(CustomerAccount me, JsonNode body) {
+        CustomerAccount customer = customerByRef(me.getRef());
+        com.fasterxml.jackson.databind.node.ObjectNode choice = com.fasterxml.jackson.databind.node.JsonNodeFactory
+                .instance.objectNode();
+        choice.put("channel", text(body, "channel"));
+        choice.put("status", text(body, "status"));
+        String channel = upper(text(body, "channel"));
+        if (WHATSAPP.equals(channel) || SMS.equals(channel)) {
+            choice.put("contact", customer.getPhone());
+        }
+        choice.put("evidence", "Chosen by the customer in the portal on " + java.time.LocalDate.now());
+        return applyPreference(customer, choice, security.authenticatedUser().getUsername(), "PORTAL");
+    }
+
+    /** {purpose, channel, status}: the customer's own purpose choice (marketing opt-in with the portal as evidence). */
+    @Transactional
+    public CommunicationViews.CustomerPreferencesView chooseOwnPurpose(CustomerAccount me, JsonNode body) {
+        CustomerAccount customer = customerByRef(me.getRef());
+        String actor = security.authenticatedUser().getUsername();
+        rules.choose(customer, upper(text(body, "purpose")), upper(text(body, "channel")), upper(text(body, "status")),
+                "PORTAL", "Recorded by the customer in the portal on " + java.time.LocalDateTime.now().withNano(0)
+                        + " (" + actor + ")", actor);
+        return preferencesOf(customer);
+    }
+
+    private CommunicationViews.CustomerPreferencesView applyPreference(CustomerAccount customer, JsonNode body,
+            String actorName, String defaultSource) {
         String channel = upper(text(body, "channel"));
         if (channel == null || !CHANNELS.contains(channel)) {
             throw new IllegalArgumentException(CHANNEL_CHOICE);
@@ -453,10 +495,10 @@ public class CommunicationService {
         String before = preference == null ? "not set" : preference.getStatus();
         if (preference == null) {
             preference = new ChannelPreference(customer.getRef(), channel);
-            preference.set(status, contact, verified, user.getUsername());
+            preference.set(status, contact, verified, actorName);
             em.persist(preference);
         } else {
-            preference.set(status, contact, verified, user.getUsername());
+            preference.set(status, contact, verified, actorName);
         }
         // NS-SH01-005 / NS-SH01-006: every choice is kept with how it was given, as verification and consent history.
         String source = upper(text(body, "consentSource"));
@@ -465,8 +507,8 @@ public class CommunicationService {
             throw new IllegalArgumentException("Keep the evidence to 300 characters.");
         }
         rules.history(customer.getRef(), channel, null, preference == null ? null : before, status, contact, verified,
-                source == null ? "STAFF" : source, evidence, user.getUsername());
-        audit.record(user.getUsername(), "Channel preference changed", "Customer", customer.getRef(),
+                source == null ? defaultSource : source, evidence, actorName);
+        audit.record(actorName, "Channel preference changed", "Customer", customer.getRef(),
                 label(channel) + ": " + before + " -> " + status + (verified ? " (verified contact)" : ""));
         return preferencesOf(customer);
     }
