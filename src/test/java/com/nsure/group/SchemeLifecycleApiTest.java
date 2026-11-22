@@ -183,6 +183,7 @@ class SchemeLifecycleApiTest {
                 .andExpect(jsonPath("$.members[?(@.memberKey == 'S2')].status").value("UNDERWRITING_PENDING"));
         mockMvc.perform(json(post("/group/schemes/" + scheme + "/invoices"), "admin", "{\"period\":\"2026-04\"}"))
                 .andExpect(jsonPath("$.amount").value(600.0));
+        com.nsure.testsupport.GroupSchemeSetup.receiveEvidence(mockMvc, pendingMember);
         mockMvc.perform(json(post("/group/members/" + pendingMember + "/underwriting"), "admin",
                         "{\"decision\":\"ACCEPT\",\"reason\":\"Evidence received\"}"))
                 .andExpect(status().isOk());

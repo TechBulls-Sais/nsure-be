@@ -109,7 +109,10 @@ public final class GroupViews {
             LocalDateTime underwrittenAt,
             String sourceBatchRef,
             Boolean activelyAtWork,
-            long version) {
+            long version,
+            // NS-GL03-004: the premium loading and exclusions of the member's underwriting decision.
+            BigDecimal loadingPercent,
+            String exclusions) {
     }
 
     public record CensusBatchSummaryView(

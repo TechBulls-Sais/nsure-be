@@ -55,4 +55,19 @@ public final class GroupSchemeSetup {
         }
         return quote;
     }
+
+    /**
+     * Records every outstanding evidence requirement of the member as received (NS-GL03-003): cover above the free-cover
+     * limit is only accepted once its evidence is in.
+     */
+    public static void receiveEvidence(MockMvc mvc, Object memberId) throws Exception {
+        String evidence = mvc.perform(get("/group/members/" + memberId + "/evidence").with(signedIn("admin", "password")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        java.util.List<Integer> open = JsonPath.read(evidence, "$[?(@.status == 'REQUESTED')].id");
+        for (Integer id : open) {
+            mvc.perform(post("/group/member-evidence/" + id).with(signedIn("admin", "password"))
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"RECEIVED\"}"))
+                    .andExpect(status().isOk());
+        }
+    }
 }

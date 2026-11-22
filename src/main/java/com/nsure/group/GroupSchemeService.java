@@ -33,10 +33,12 @@ public class GroupSchemeService {
     private final GroupRecords records;
     private final com.nsure.audit.evidence.EvidenceChain audit;
     private final BenefitRules benefitRules;
+    private final MemberUnderwriting underwriting;
 
     public GroupSchemeService(EntityManager em, PlatformSecurityContext security, GroupRecords records,
-            com.nsure.audit.evidence.EvidenceChain audit, BenefitRules benefitRules) {
+            com.nsure.audit.evidence.EvidenceChain audit, BenefitRules benefitRules, MemberUnderwriting underwriting) {
         this.benefitRules = benefitRules;
+        this.underwriting = underwriting;
         this.em = em;
         this.security = security;
         this.records = records;
@@ -689,71 +691,23 @@ public class GroupSchemeService {
             v.put("schemeCoverInForce", scheme[0]);
             v.put("schemeCoverPending", scheme[1]);
             v.put("version", m.getRowVersion());
+            // NS-GL03-003/004: evidence still outstanding and any decision waiting for authority or the member.
+            v.put("evidenceOutstanding", em.createQuery("select count(e) from GroupMemberEvidence e where e.member = :m"
+                    + " and e.status = 'REQUESTED'", Long.class).setParameter("m", m).getSingleResult());
+            v.put("decisionStatus", em.createQuery("select d.status from GroupMemberDecision d where d.member = :m"
+                    + " and d.status in ('AWAITING_AUTHORITY', 'OFFERED') order by d.id", String.class)
+                    .setParameter("m", m).setMaxResults(1).getResultStream().findFirst().orElse(null));
             out.add(v);
         }
         return out;
     }
 
-    // ── member underwriting (GL03-lite) ────────────────────────────────────────────────────────────
+    // ── member underwriting (GL03) ─────────────────────────────────────────────────────────────────
 
-    /**
-     * Decides the cover pending above the free-cover limit. ACCEPT authorises up to the requested cover (all of it
-     * by default); DECLINE needs a reason and keeps the free-cover portion in force.
-     */
+    /** Decides the cover pending underwriting, per benefit, within authority and offer rules: see MemberUnderwriting. */
     @Transactional
     public GroupViews.MemberView underwrite(Long memberId, JsonNode body) {
-        AppUser user = security.authenticatedUser();
-        user.validateHasPermissionTo("UNDERWRITE_MEMBER");
-        SchemeMember member = em.find(SchemeMember.class, memberId);
-        if (member == null) {
-            throw new NotFoundException("Member " + memberId + " not found");
-        }
-        GroupRecords.requireActive(records.lockedScheme(member.getScheme().getRef()), "an underwriting decision");
-        em.refresh(member);
-        com.nsure.common.ExpectedVersion.check("Member " + member.getMemberKey(), member.getRowVersion());
-        if (!SchemeMember.UNDERWRITING_PENDING.equals(member.getStatus())) {
-            throw new IllegalArgumentException("Member " + member.getMemberKey() + " has no cover pending underwriting");
-        }
-        String decision = GroupRecords.requiredText(body, "decision", "Decision", 20).toUpperCase(Locale.ROOT);
-        String reason = GroupRecords.text(body, "reason");
-        if (reason != null && reason.length() > 500) {
-            throw new IllegalArgumentException("Reason must be at most 500 characters");
-        }
-        BigDecimal coverBefore = member.getAcceptedCover();
-        if ("ACCEPT".equals(decision)) {
-            BigDecimal amount = GroupRecords.decimal(body, "acceptedAmount", "Accepted amount");
-            amount = amount == null ? member.getRequestedCover() : GroupRecords.money(amount, "Accepted amount", false);
-            if (amount.compareTo(member.getRequestedCover()) > 0) {
-                throw new IllegalArgumentException("Accepted amount cannot exceed the requested cover of "
-                        + member.getRequestedCover().toPlainString());
-            }
-            if (amount.compareTo(member.getAcceptedCover()) < 0) {
-                throw new IllegalArgumentException("Accepted amount cannot be below the free cover already in force ("
-                        + member.getAcceptedCover().toPlainString() + ")");
-            }
-            member.accept(amount, reason, user.getUsername());
-        } else if ("DECLINE".equals(decision)) {
-            if (reason == null) {
-                throw new IllegalArgumentException("Please enter a reason for declining the pending cover");
-            }
-            member.decline(reason, user.getUsername());
-        } else {
-            throw new IllegalArgumentException("Decision must be ACCEPT or DECLINE");
-        }
-        records.memberChanged(new MemberChange(member, "UNDERWRITING", LocalDate.now(), member.getSalary(), coverBefore,
-                null, decision + (reason == null ? "" : ": " + reason), user.getUsername()));
-        Map<String, Object> authorised = new java.util.LinkedHashMap<>();
-        authorised.put("schemeRef", member.getScheme().getRef());
-        authorised.put("memberKey", member.getMemberKey());
-        authorised.put("memberId", member.getId());
-        authorised.put("decision", decision);
-        authorised.put("acceptedCover", member.getAcceptedCover().toPlainString());
-        authorised.put("effectiveDate", LocalDate.now().toString());
-        records.publish(com.nsure.integration.Events.MEMBER_COVER_AUTHORISED, member.getMemberKey(), authorised,
-                user.getUsername());
-        records.refreshTotals(member.getScheme());
-        em.flush(); // so the view carries the member's new version (NS-TXN-001)
-        return GroupRecords.memberView(member);
+        return underwriting.decide(memberId, body);
     }
 
 }

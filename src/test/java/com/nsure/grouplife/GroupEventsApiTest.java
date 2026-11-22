@@ -125,6 +125,7 @@ class GroupEventsApiTest {
         assertThat(events(Events.MEMBER_UNDERWRITING_REFERRED, scheme)).singleElement()
                 .satisfies(e -> assertThat(e.getPayload()).contains("\"pendingCover\":\"200000.00\""));
         Integer member = JsonPath.read(committed, "$.rows[0].memberId");
+        com.nsure.testsupport.GroupSchemeSetup.receiveEvidence(mockMvc, member);
         mockMvc.perform(json(post("/group/members/" + member + "/underwriting"), "admin",
                         "{\"decision\":\"ACCEPT\",\"reason\":\"Evidence satisfactory\"}"))
                 .andExpect(status().isOk());

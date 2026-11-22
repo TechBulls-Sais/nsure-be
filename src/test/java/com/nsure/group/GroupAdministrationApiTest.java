@@ -180,6 +180,7 @@ class GroupAdministrationApiTest {
         String batch = upload(scheme, "UW-1", "PARTIAL", "E1,Ada,Moeng,1980-05-05,MGMT,250000,JOIN,2026-01-01");
         String committed = commit(batch);
         Integer member = JsonPath.read(committed, "$.rows[0].memberId");
+        com.nsure.testsupport.GroupSchemeSetup.receiveEvidence(mockMvc, member);
         mockMvc.perform(json(post("/group/members/" + member + "/underwriting"), "grpadmin",
                         "{\"decision\":\"ACCEPT\",\"reason\":\"Evidence satisfactory\"}"))
                 .andExpect(status().isOk())

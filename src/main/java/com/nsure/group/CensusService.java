@@ -290,7 +290,9 @@ public class CensusService {
                     GroupRecords.parseDate(row.getDateOfBirth().trim()), amount(row.getSalary()), effective,
                     batch.getRef(), activelyAtWork, notAtWork || lateEntrant);
             em.persist(member);
-            String joinNote = notAtWork ? "Not actively at work on the entry date: all cover is referred to underwriting"
+            String joinNote = notAtWork && SchemeMember.COVER_DEFERRED.equals(member.getStatus())
+                    ? "Not actively at work on the entry date: cover is deferred until the member is back at work"
+                    : notAtWork ? "Not actively at work on the entry date: all cover is referred to underwriting"
                     : lateEntrant ? "Late entrant (eligible " + eligible + ", outside the " + category.getLateEntryDays()
                             + "-day window): all cover is referred to underwriting"
                     : SchemeMember.UNDERWRITING_PENDING.equals(member.getStatus())

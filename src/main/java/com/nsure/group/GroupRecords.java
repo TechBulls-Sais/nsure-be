@@ -28,6 +28,14 @@ public class GroupRecords {
 
     private final EntityManager em;
     private final com.nsure.integration.Outbox outbox;
+    /** Demo defaults (D03/D06 open): pending cover from which an examination and blood profile are asked for, requested
+     * cover from which financial evidence is, and whether evidence still valid on an earlier episode is reused. */
+    @org.springframework.beans.factory.annotation.Value("${nsure.group.underwriting.exam-threshold:1000000}")
+    private BigDecimal examThreshold = new BigDecimal("1000000");
+    @org.springframework.beans.factory.annotation.Value("${nsure.group.underwriting.financial-threshold:2000000}")
+    private BigDecimal financialThreshold = new BigDecimal("2000000");
+    @org.springframework.beans.factory.annotation.Value("${nsure.group.underwriting.reuse-evidence:true}")
+    private boolean reuseEvidence = true;
 
     public GroupRecords(EntityManager em, com.nsure.integration.Outbox outbox) {
         this.em = em;
@@ -53,8 +61,9 @@ public class GroupRecords {
         data.put("status", m.getStatus());
         data.put("sourceRef", change.getBatchRef());
         outbox.publish(com.nsure.integration.Events.MEMBER_COVER_CHANGED, m.getMemberKey(), data, change.getChangedBy());
-        if (java.util.Set.of("JOIN", "SALARY", "TRANSFER_IN").contains(change.getChangeType())
+        if (java.util.Set.of("JOIN", "SALARY", "TRANSFER_IN", "BACK_AT_WORK", "CATEGORY_IN").contains(change.getChangeType())
                 && SchemeMember.UNDERWRITING_PENDING.equals(m.getStatus()) && m.getPendingCover().signum() > 0) {
+            evidenceFor(m, change);
             Map<String, Object> referral = new java.util.LinkedHashMap<>();
             referral.put("schemeRef", m.getScheme().getRef());
             referral.put("memberKey", m.getMemberKey());
@@ -66,6 +75,74 @@ public class GroupRecords {
             outbox.publish(com.nsure.integration.Events.MEMBER_UNDERWRITING_REFERRED, m.getMemberKey(), referral,
                     change.getChangedBy());
         }
+    }
+
+    /**
+     * The evidence a referral needs (NS-GL03-003): not actively at work, an employer's confirmation and a health
+     * declaration; a late entrant, a health declaration; cover above the free-cover limit, a medical questionnaire,
+     * with an examination and blood profile for large amounts and financial evidence for large cover. Medical evidence
+     * is restricted to assessors. A requirement already asked for is not asked again; one received on an earlier
+     * episode and still valid is reused where the insurer's rule allows it (NS-GL03-006).
+     */
+    private void evidenceFor(SchemeMember m, MemberChange change) {
+        String detail = change.getDetail() == null ? "" : change.getDetail();
+        java.util.List<String[]> needed = new java.util.ArrayList<>();
+        if (detail.startsWith("Not actively at work")) {
+            needed.add(new String[] {"AAW_CONFIRMATION", "NOT_AT_WORK"});
+            needed.add(new String[] {"HEALTH_DECLARATION", "NOT_AT_WORK"});
+        } else if (detail.startsWith("Late entrant")) {
+            needed.add(new String[] {"HEALTH_DECLARATION", "LATE_ENTRANT"});
+        }
+        if (m.getRequestedCover().compareTo(m.getCategory().getFreeCoverLimit()) > 0) {
+            needed.add(new String[] {"MEDICAL_QUESTIONNAIRE", "EXCESS_COVER"});
+            if (m.getPendingCover().compareTo(examThreshold) >= 0) {
+                needed.add(new String[] {"MEDICAL_EXAMINATION", "EXCESS_COVER"});
+                needed.add(new String[] {"BLOOD_PROFILE", "EXCESS_COVER"});
+            }
+            if (m.getRequestedCover().compareTo(financialThreshold) >= 0) {
+                needed.add(new String[] {"FINANCIAL_EVIDENCE", "EXCESS_COVER"});
+            }
+        }
+        java.time.LocalDate today = java.time.LocalDate.now();
+        java.util.List<UnderwritingRecords.MemberEvidence> held = em.createQuery("select e from GroupMemberEvidence e"
+                + " join fetch e.member x where x.scheme = :s and x.memberKey = :k", UnderwritingRecords.MemberEvidence.class)
+                .setParameter("s", m.getScheme()).setParameter("k", m.getMemberKey()).getResultList();
+        for (String[] n : needed) {
+            boolean open = held.stream().anyMatch(e -> e.member.getId().equals(m.getId()) && e.requirement.equals(n[0])
+                    && (UnderwritingRecords.MemberEvidence.REQUESTED.equals(e.status) || valid(e, today)));
+            if (open) {
+                continue;
+            }
+            UnderwritingRecords.MemberEvidence e = requirement(m, n[0], n[1], change.getChangedBy());
+            UnderwritingRecords.MemberEvidence earlier = reuseEvidence ? held.stream().filter(h -> h.requirement.equals(n[0])
+                    && valid(h, today)).findFirst().orElse(null) : null;
+            if (earlier != null) {
+                e.status = UnderwritingRecords.MemberEvidence.RECEIVED;
+                e.receivedOn = earlier.receivedOn;
+                e.receivedBy = earlier.receivedBy;
+                e.validUntil = earlier.validUntil;
+                e.note = "Reused: received " + earlier.receivedOn + ", valid until " + earlier.validUntil;
+            }
+            em.persist(e);
+        }
+    }
+
+    private static boolean valid(UnderwritingRecords.MemberEvidence e, java.time.LocalDate today) {
+        return UnderwritingRecords.MemberEvidence.RECEIVED.equals(e.status) && e.validUntil != null
+                && !e.validUntil.isBefore(today);
+    }
+
+    /** A new requirement for the member; medical evidence is restricted to assessors. */
+    static UnderwritingRecords.MemberEvidence requirement(SchemeMember m, String requirement, String reason, String actor) {
+        UnderwritingRecords.MemberEvidence e = new UnderwritingRecords.MemberEvidence();
+        e.member = m;
+        e.requirement = requirement;
+        e.reason = reason;
+        e.restricted = java.util.Set.of("FINANCIAL_EVIDENCE", "AAW_CONFIRMATION").contains(requirement) ? "NO" : "YES";
+        e.status = UnderwritingRecords.MemberEvidence.REQUESTED;
+        e.requestedBy = actor;
+        e.requestedAt = java.time.LocalDateTime.now();
+        return e;
     }
 
     void publish(String type, String ref, Map<String, ?> data, String actor) {
@@ -278,7 +355,8 @@ public class GroupRecords {
                 m.fullName(), m.getDateOfBirth(), c.getCode(), c.getName(), m.getSalary(), m.getStatus(),
                 m.getJoinDate(), m.getExitDate(), m.getRequestedCover(), m.getAcceptedCover(), m.getPendingCover(),
                 premium, m.getUnderwritingDecision(), m.getUnderwritingReason(), m.getUnderwrittenBy(),
-                m.getUnderwrittenAt(), m.getSourceBatchRef(), m.getActivelyAtWork(), m.getRowVersion());
+                m.getUnderwrittenAt(), m.getSourceBatchRef(), m.getActivelyAtWork(), m.getRowVersion(),
+                m.getLoadingPercent(), m.getExclusions());
     }
 
     static GroupViews.CensusBatchSummaryView batchSummary(CensusBatch b) {

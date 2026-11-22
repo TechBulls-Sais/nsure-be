@@ -271,6 +271,15 @@ public final class ApiAccessRules {
             rule(GET, "/group/schemes/*/categories/*/versions", anyOf("READ_SCHEME")),
             rule(GET, "/group/schemes/*/cessations", anyOf("READ_SCHEME")),
             rule(POST, "/group/schemes/*/cessations", anyOf("MANAGE_SCHEME")),
+            rule(GET, "/group/members/*/underwriting-file", anyOf("READ_SCHEME")),
+            rule(GET, "/group/members/*/evidence", anyOf("UNDERWRITE_MEMBER")),
+            rule(POST, "/group/members/*/evidence", anyOf("UNDERWRITE_MEMBER")),
+            rule(POST, "/group/member-evidence/*", anyOf("UNDERWRITE_MEMBER")),
+            rule(POST, "/group/members/*/underwriting/authority", anyOf("UNDERWRITE_MEMBER")),
+            rule(POST, "/group/members/*/underwriting/offer-response", anyOf("MANAGE_SCHEME")),
+            rule(POST, "/group/members/*/actively-at-work", anyOf("MANAGE_SCHEME")),
+            rule(POST, "/group/members/*/category-transfer", anyOf("MANAGE_SCHEME")),
+            rule(POST, "/group/underwriting/expiry-run", anyOf("UNDERWRITE_MEMBER")),
 
             // ── insurance subledger SH08 (Finance Controller) ──────────────────────────────────────────
             rule(GET, "/finance/**", anyOf("READ_FINANCE")),

@@ -194,6 +194,21 @@ public class SchemeMember {
         applyCover(requestedCover, ceiling);
     }
 
+    /**
+     * A category transfer (NS-GL03-005) keeps the cover already accepted on the previous episode, with its loading and
+     * exclusions, up to the new category's formula (the demo scheme rule); only what is above it is referred.
+     */
+    void carryOver(SchemeMember previous) {
+        this.activelyAtWork = previous.activelyAtWork;
+        BigDecimal kept = previous.acceptedCover.min(requestedCover);
+        if (kept.compareTo(acceptedCover) > 0) {
+            this.underwrittenCover = kept;
+            applyCover(requestedCover, kept);
+        }
+        this.loadingPercent = previous.loadingPercent;
+        this.exclusions = previous.exclusions;
+    }
+
     /** Moves the member's accepted cover onto the decision's terms: amount, loading and exclusions (NS-GL03-004). */
     void accept(BigDecimal amount, BigDecimal loading, String exclusions, String reason, String actor) {
         accept(amount, reason, actor);

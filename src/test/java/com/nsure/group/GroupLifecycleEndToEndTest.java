@@ -77,6 +77,7 @@ class GroupLifecycleEndToEndTest {
         // Member underwriting of the cover above the free-cover limit.
         String detail = detail(scheme);
         Integer manager = ((List<Integer>) JsonPath.read(detail, "$.members[?(@.memberKey == 'E2')].id")).get(0);
+        com.nsure.testsupport.GroupSchemeSetup.receiveEvidence(mockMvc, manager);
         mockMvc.perform(json(post("/group/members/" + manager + "/underwriting"), "admin",
                         "{\"decision\":\"ACCEPT\",\"acceptedAmount\":700000,\"reason\":\"Partial on evidence\"}"))
                 .andExpect(jsonPath("$.status").value("PARTIALLY_ACCEPTED"));
