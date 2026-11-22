@@ -252,11 +252,11 @@ public class InterfaceCatalogue {
                             rs.getString("file_hash")));
                 });
         jdbc.query("select s.record_ref, s.provider, s.period_from, s.period_to, s.uploaded_by, s.uploaded_at,"
-                + " (select count(*) from bil_recon_item i where i.statement_id = s.id) lines,"
+                + " (select count(*) from bil_recon_item i where i.statement_id = s.id) line_count,"
                 + " (select count(*) from bil_recon_item i where i.statement_id = s.id and i.status = 'MATCHED') matched,"
                 + " (select sum(i.amount) from bil_recon_item i where i.statement_id = s.id) total from bil_statement s",
                 rs -> {
-                    int lines = rs.getInt("lines");
+                    int lines = rs.getInt("line_count");
                     int matched = rs.getInt("matched");
                     out.add(batch("BANK_PAYMENTS", "Bank statement", rs.getString("record_ref"),
                             rs.getString("provider") + " " + rs.getDate("period_from") + " to " + rs.getDate("period_to"),

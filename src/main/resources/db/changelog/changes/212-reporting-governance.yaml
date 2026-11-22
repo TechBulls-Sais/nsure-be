@@ -45,7 +45,7 @@ databaseChangeLog:
               - column: {name: filters, type: varchar(400)}
               - column: {name: record_count, type: int, constraints: {nullable: false}}
               - column: {name: masked, type: boolean, constraints: {nullable: false}}
-              - column: {name: sensitive, type: boolean, constraints: {nullable: false}}
+              - column: {name: personal_data, type: boolean, constraints: {nullable: false}}
               - column: {name: large, type: boolean, constraints: {nullable: false}}
               - column: {name: exported_by, type: varchar(100), constraints: {nullable: false}}
               - column: {name: exported_at, type: datetime, constraints: {nullable: false}}

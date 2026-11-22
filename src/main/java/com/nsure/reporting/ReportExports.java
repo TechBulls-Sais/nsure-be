@@ -177,7 +177,7 @@ public class ReportExports {
             m.put("filters", rs.getString("filters"));
             m.put("recordCount", rs.getInt("record_count"));
             m.put("masked", rs.getBoolean("masked"));
-            m.put("sensitive", rs.getBoolean("sensitive"));
+            m.put("sensitive", rs.getBoolean("personal_data"));
             m.put("large", rs.getBoolean("large"));
             m.put("exportedBy", rs.getString("exported_by"));
             m.put("exportedAt", rs.getTimestamp("exported_at").toLocalDateTime());
@@ -190,8 +190,9 @@ public class ReportExports {
         Integer n = jdbc.queryForObject("select count(*) from rpt_export_log", Integer.class);
         String ref = String.format("RX-%06d", (n == null ? 0 : n) + 1);
         boolean large = count > largeRows;
+        // The column is personal_data: SENSITIVE is a reserved word in MySQL.
         jdbc.update("insert into rpt_export_log (record_ref, export_kind, subject, scope, filters, record_count, masked,"
-                + " sensitive, large, exported_by, exported_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ref, kind,
+                + " personal_data, large, exported_by, exported_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ref, kind,
                 clip(subject, 100), clip(scope, 200), clip(filters, 400), count, masked, sensitive, large,
                 user.getUsername(), LocalDateTime.now());
         if (sensitive || large) {
