@@ -81,6 +81,25 @@ public class GroupController {
         return census.commit(ref);
     }
 
+    /** The published, versioned census template (NS-GL04-001). */
+    @GetMapping("/census-template")
+    public java.util.Map<String, Object> censusTemplate() {
+        return census.template();
+    }
+
+    /** {decision APPLY|REJECT, note}: the authorised review of a held census row (AT-GL04-03). */
+    @PostMapping("/census-batches/{ref}/rows/{lineNo}/review")
+    public GroupViews.CensusBatchView reviewCensusRow(@PathVariable String ref, @PathVariable int lineNo,
+            @RequestBody JsonNode body) {
+        return census.review(ref, lineNo, body);
+    }
+
+    /** A member's effective-dated cover periods (NS-GL04-004). */
+    @GetMapping("/members/{id}/cover-history")
+    public List<java.util.Map<String, Object>> coverHistory(@PathVariable Long id) {
+        return census.coverHistory(id);
+    }
+
     @GetMapping("/underwriting-queue")
     public List<java.util.Map<String, Object>> underwritingQueue() {
         return schemes.underwritingQueue();

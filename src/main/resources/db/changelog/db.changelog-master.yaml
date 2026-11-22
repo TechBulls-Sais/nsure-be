@@ -305,3 +305,9 @@ databaseChangeLog:
   - include:
       file: changes/111-mysql-new-booleans.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/150-group-cover-history.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/151-group-supplementary-billing.yaml
+      relativeToChangelogFile: true

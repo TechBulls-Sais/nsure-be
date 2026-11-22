@@ -37,13 +37,15 @@ public class SchemeBillingService {
     private final PlatformSecurityContext security;
     private final GroupRecords records;
     private final Outbox outbox;
+    private final CoverHistory cover;
 
     public SchemeBillingService(EntityManager em, PlatformSecurityContext security, GroupRecords records,
-            Outbox outbox) {
+            Outbox outbox, CoverHistory cover) {
         this.em = em;
         this.security = security;
         this.records = records;
         this.outbox = outbox;
+        this.cover = cover;
     }
 
     /** Issues the invoice for a month, or returns the one already issued for that scheme and month. */
@@ -93,29 +95,24 @@ public class SchemeBillingService {
         invoice.policyYear(Math.max(1, java.time.Period.between(scheme.getInceptionDate(), start).getYears() + 1));
         List<InvoiceLine> lines = new ArrayList<>();
         BigDecimal total = BigDecimal.ZERO.setScale(2);
+        // Each day is priced on the cover period and category rate version in force that day (NS-GL04-004,
+        // NS-GL05-005): a mid-month salary change or a renewal inside the month bills both sides of it. Pending cover
+        // is never billed, only the accepted (authorised) amount (AT-GL03-01); suspended days are not billed.
+        Map<Long, List<MemberCoverPeriod>> periods = cover.periods(members);
+        List<BenefitCategory> categories = records.categories(scheme);
+        cover.ensureVersions(scheme, categories, user.getUsername());
+        Map<Long, List<CategoryVersion>> versions = cover.versions(categories);
         for (SchemeMember member : members) {
-            if (member.getAcceptedCover().signum() <= 0) {
+            CoverHistory.Priced priced = cover.price(member, periods.get(member.getId()), versions, start, end,
+                    daysInPeriod);
+            if (priced.daysCovered() <= 0 || priced.premium().signum() <= 0 && priced.cover().signum() <= 0) {
                 continue;
             }
-            LocalDate from = member.getJoinDate().isAfter(start) ? member.getJoinDate() : start;
-            // The exit date is the member's last day of cover.
-            LocalDate to = member.getExitDate() != null && member.getExitDate().isBefore(end)
-                    ? member.getExitDate() : end;
-            // Days the scheme was suspended are neither covered nor billed (NS-GL01-006).
-            int days = (int) ChronoUnit.DAYS.between(from, to) + 1 - (to.isBefore(from) ? 0
-                    : member.suspendedDays(from, to));
-            if (days <= 0) {
-                continue;
-            }
-            BigDecimal rate = member.getCategory().getRatePerMille();
-            // Pending cover is never billed: only the accepted (authorised) amount (AT-GL03-01).
-            BigDecimal premium = member.getAcceptedCover()
-                    .multiply(rate)
-                    .multiply(BigDecimal.valueOf(days))
-                    .divide(BigDecimal.valueOf(1000L * daysInPeriod), 2, RoundingMode.HALF_UP);
-            lines.add(new InvoiceLine(invoice, member, rate, days, daysInPeriod, premium));
-            total = total.add(premium);
+            lines.add(new InvoiceLine(invoice, member, priced.categoryCode(), priced.cover(), priced.rate(),
+                    priced.daysCovered(), daysInPeriod, priced.premium()));
+            total = total.add(priced.premium());
         }
+        invoice.pricedOn(cover.prorationBasis(), "Category rate versions in force on each day of " + period);
         if (lines.isEmpty()) {
             throw new IllegalArgumentException("No member of scheme " + schemeRef + " was on cover in " + period
                     + "; there is nothing to invoice");

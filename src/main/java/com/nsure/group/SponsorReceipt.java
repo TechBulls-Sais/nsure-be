@@ -43,7 +43,21 @@ public class SponsorReceipt {
     @Column(name = "received_at", nullable = false)
     private LocalDateTime receivedAt;
 
+    /** The lump-sum sponsor payment this allocation came from (NS-GL05-003), if any. */
+    @Column(name = "payment_id")
+    private Long paymentId;
+
     protected SponsorReceipt() {
+    }
+
+    SponsorReceipt(String ref, SchemeInvoice invoice, String reference, BigDecimal amount, String receivedBy,
+            Long paymentId) {
+        this(ref, invoice, reference, amount, receivedBy);
+        this.paymentId = paymentId;
+    }
+
+    public Long getPaymentId() {
+        return paymentId;
     }
 
     SponsorReceipt(String ref, SchemeInvoice invoice, String reference, BigDecimal amount, String receivedBy) {

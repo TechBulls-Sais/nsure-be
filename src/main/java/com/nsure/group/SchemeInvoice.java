@@ -79,7 +79,47 @@ public class SchemeInvoice {
     @Column(name = "issued_at", nullable = false)
     private LocalDateTime issuedAt;
 
+    /**
+     * Net supplementary adjustments on this invoice's balance (NS-GL05-002): debits raise it, credits lower it (never
+     * below zero; any excess credit is held for the sponsor). The issued amount and lines never change.
+     */
+    @Column(name = "adjustment_amount", nullable = false, precision = 15, scale = 2)
+    private BigDecimal adjustmentAmount = BigDecimal.ZERO.setScale(2);
+
+    /** The proration basis and rate source the invoice was priced on (NS-GL05-001). */
+    @Column(name = "proration_basis", length = 20)
+    private String prorationBasis;
+
+    @Column(name = "rate_source", length = 200)
+    private String rateSource;
+
     protected SchemeInvoice() {
+    }
+
+    void pricedOn(String basis, String source) {
+        this.prorationBasis = basis;
+        this.rateSource = source == null || source.length() <= 200 ? source : source.substring(0, 197) + "...";
+    }
+
+    /** Applies a supplementary adjustment to the balance; a credit applies only up to what is outstanding. */
+    BigDecimal adjust(BigDecimal delta) {
+        BigDecimal applied = delta.signum() >= 0 ? delta : delta.max(outstanding.negate());
+        this.adjustmentAmount = adjustmentAmount.add(applied);
+        this.outstanding = amount.add(adjustmentAmount).subtract(paidAmount);
+        this.status = outstanding.signum() <= 0 ? PAID : paidAmount.signum() > 0 ? PARTIALLY_PAID : ISSUED;
+        return applied;
+    }
+
+    public BigDecimal getAdjustmentAmount() {
+        return adjustmentAmount == null ? BigDecimal.ZERO.setScale(2) : adjustmentAmount;
+    }
+
+    public String getProrationBasis() {
+        return prorationBasis;
+    }
+
+    public String getRateSource() {
+        return rateSource;
     }
 
     SchemeInvoice(String ref, GroupScheme scheme, String period, LocalDate periodStart, LocalDate periodEnd,
@@ -105,7 +145,7 @@ public class SchemeInvoice {
 
     void allocate(BigDecimal receipt) {
         this.paidAmount = paidAmount.add(receipt);
-        this.outstanding = amount.subtract(paidAmount);
+        this.outstanding = amount.add(getAdjustmentAmount()).subtract(paidAmount);
         this.status = outstanding.signum() <= 0 ? PAID : PARTIALLY_PAID;
     }
 

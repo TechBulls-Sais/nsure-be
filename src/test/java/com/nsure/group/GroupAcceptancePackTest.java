@@ -139,8 +139,8 @@ class GroupAcceptancePackTest {
                 .andExpect(jsonPath("$.status").value("PAID"));
         String held = upload(scheme, "RL-2", HEADER, "R1,,,,,,LEAVE,2026-03-01");
         mockMvc.perform(get("/group/census-batches/" + held).with(signedIn("admin", "password")))
-                .andExpect(jsonPath("$.rows[0].status").value("INVALID"))
-                .andExpect(jsonPath("$.rows[0].error").value(containsString("held for authorised review: claim " + claim)));
+                .andExpect(jsonPath("$.rows[0].status").value("HELD"))
+                .andExpect(jsonPath("$.rows[0].holdReason").value(containsString("held for authorised review: claim " + claim)));
         String later = upload(scheme, "RL-3", HEADER, "R1,,,,,,LEAVE,2026-03-31");
         mockMvc.perform(get("/group/census-batches/" + later).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.rows[0].status").value("VALID"));

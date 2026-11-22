@@ -75,7 +75,52 @@ public class CensusBatch {
     @Column(name = "committed_at")
     private LocalDateTime committedAt;
 
+    @Column(name = "held_rows", nullable = false)
+    private int heldRows;
+
+    /** The census template version the file's header used (NS-GL04-001/006). */
+    @Column(name = "schema_version", length = 10)
+    private String schemaVersion;
+
+    /** A correction batch names the batch whose rows it corrects (NS-GL04-006). */
+    @Column(name = "corrects_batch_ref", length = 20)
+    private String correctsBatchRef;
+
     protected CensusBatch() {
+    }
+
+    void schema(String version) {
+        this.schemaVersion = version;
+    }
+
+    void corrects(String ref) {
+        this.correctsBatchRef = ref;
+    }
+
+    void held(int count) {
+        this.heldRows = Math.max(0, count);
+    }
+
+    /** A held row applied at review after commit counts as accepted. */
+    void reviewApplied() {
+        this.acceptedRows++;
+    }
+
+    /** A held row rejected at review after commit counts as rejected. */
+    void reviewRejected() {
+        this.rejectedRows++;
+    }
+
+    public int getHeldRows() {
+        return heldRows;
+    }
+
+    public String getSchemaVersion() {
+        return schemaVersion;
+    }
+
+    public String getCorrectsBatchRef() {
+        return correctsBatchRef;
     }
 
     CensusBatch(String ref, GroupScheme scheme, String externalBatchId, String mode, String fileHash,

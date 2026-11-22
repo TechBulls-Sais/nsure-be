@@ -1,0 +1,155 @@
+databaseChangeLog:
+  # GL05 scheme billing after issue: supplementary debit/credit adjustments that reference the original invoice lines
+  # (NS-GL05-002), lump-sum sponsor payments with unallocated money held and member-level allocation (NS-GL05-003),
+  # billing exceptions for short payments, unallocated money and disputes (AT-GL05-02), and lapse proposals for schemes
+  # in arrears after the grace period (NS-GL05-004). Invoices record the proration basis and rate source they used.
+  - changeSet:
+      id: 151-group-supplementary-billing
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: grp_invoice
+            columns:
+              - column: {name: adjustment_amount, type: 'decimal(15,2)', defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: proration_basis, type: varchar(20)}
+              - column: {name: rate_source, type: varchar(200)}
+        - addColumn:
+            tableName: grp_invoice_line
+            columns:
+              - column: {name: paid_amount, type: 'decimal(15,2)', defaultValueNumeric: 0, constraints: {nullable: false}}
+
+        - createTable:
+            tableName: grp_adjustment
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_adjustment}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_adjustment_ref}}
+              - column: {name: scheme_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: invoice_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: adjustment_type, type: varchar(10), constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: applied_to_invoice, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: held_as_credit, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: line_count, type: int, constraints: {nullable: false}}
+              - column: {name: source_ref, type: varchar(40)}
+              - column: {name: reason, type: varchar(300)}
+              - column: {name: policy_year, type: int}
+              - column: {name: issued_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: issued_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_adjustment
+            baseColumnNames: invoice_id
+            referencedTableName: grp_invoice
+            referencedColumnNames: id
+            constraintName: fk_grp_adjustment_invoice
+        - addForeignKeyConstraint:
+            baseTableName: grp_adjustment
+            baseColumnNames: scheme_id
+            referencedTableName: ins_scheme
+            referencedColumnNames: id
+            constraintName: fk_grp_adjustment_scheme
+
+        - createTable:
+            tableName: grp_adjustment_line
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_adjustment_line}}
+              - column: {name: adjustment_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: original_line_id, type: bigint}
+              - column: {name: member_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: member_key, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: member_name, type: varchar(130), constraints: {nullable: false}}
+              - column: {name: category_code, type: varchar(20)}
+              - column: {name: change_type, type: varchar(20)}
+              - column: {name: cover_after, type: 'decimal(15,2)'}
+              - column: {name: days_covered, type: int, constraints: {nullable: false}}
+              - column: {name: billed_before, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: recalculated, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_adjustment_line
+            baseColumnNames: adjustment_id
+            referencedTableName: grp_adjustment
+            referencedColumnNames: id
+            constraintName: fk_grp_adj_line_adjustment
+
+        - createTable:
+            tableName: grp_sponsor_payment
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_sponsor_payment}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_sponsor_payment_ref}}
+              - column: {name: scheme_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: payer_reference, type: varchar(80), constraints: {nullable: false}}
+              - column: {name: payment_kind, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: allocation_rule, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: allocated, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: unallocated, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: received_date, type: date, constraints: {nullable: false}}
+              - column: {name: payment_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: unmatched_detail, type: varchar(1000)}
+              - column: {name: note, type: varchar(300)}
+              - column: {name: received_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: received_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_sponsor_payment
+            baseColumnNames: scheme_id
+            referencedTableName: ins_scheme
+            referencedColumnNames: id
+            constraintName: fk_grp_sponsor_payment_scheme
+        - addUniqueConstraint:
+            tableName: grp_sponsor_payment
+            columnNames: scheme_id, payer_reference
+            constraintName: uk_grp_sponsor_payment_payer
+        - addColumn:
+            tableName: grp_sponsor_receipt
+            columns:
+              - column: {name: payment_id, type: bigint}
+
+        - createTable:
+            tableName: grp_billing_exception
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_billing_exception}}
+              - column: {name: scheme_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: exception_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: invoice_ref, type: varchar(20)}
+              - column: {name: payment_ref, type: varchar(20)}
+              - column: {name: amount, type: 'decimal(15,2)'}
+              - column: {name: detail, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: exception_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: raised_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: raised_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: resolved_by, type: varchar(100)}
+              - column: {name: resolved_at, type: datetime}
+              - column: {name: resolution_note, type: varchar(300)}
+        - addForeignKeyConstraint:
+            baseTableName: grp_billing_exception
+            baseColumnNames: scheme_id
+            referencedTableName: ins_scheme
+            referencedColumnNames: id
+            constraintName: fk_grp_billing_exc_scheme
+
+        - createTable:
+            tableName: grp_scheme_lapse
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_scheme_lapse}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_scheme_lapse_ref}}
+              - column: {name: scheme_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: lapse_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: paid_to_date, type: date}
+              - column: {name: effective_date, type: date, constraints: {nullable: false}}
+              - column: {name: grace_ended, type: date, constraints: {nullable: false}}
+              - column: {name: arrears_amount, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: oldest_invoice_ref, type: varchar(20)}
+              - column: {name: continuation_until, type: date}
+              - column: {name: members_affected, type: int, constraints: {nullable: false}}
+              - column: {name: note, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: proposed_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: proposed_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: datetime}
+              - column: {name: decision_note, type: varchar(300)}
+        - addForeignKeyConstraint:
+            baseTableName: grp_scheme_lapse
+            baseColumnNames: scheme_id
+            referencedTableName: ins_scheme
+            referencedColumnNames: id
+            constraintName: fk_grp_scheme_lapse_scheme
