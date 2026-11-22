@@ -35,6 +35,12 @@ public class IdentityDocumentController {
         return documents.upload(file, type);
     }
 
+    @PostMapping(path = "/customers/{ref}/identity-documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public List<IdentityDocumentService.IdentityDocumentView> staffUpload(@PathVariable String ref,
+            @RequestPart("file") MultipartFile file, @RequestParam(value = "type", required = false) String type) {
+        return documents.staffUpload(ref, file, type);
+    }
+
     @GetMapping("/customers/{ref}/identity-documents")
     public List<IdentityDocumentService.IdentityDocumentView> forCustomer(@PathVariable String ref) {
         return documents.forCustomer(ref);

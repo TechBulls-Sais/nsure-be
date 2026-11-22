@@ -46,6 +46,9 @@ public final class ApiAccessRules {
             // Customer self sign-up: creates a Pending KYC customer once the one-time code matches.
             rule(POST, "/public/signup/otp", publicAccess()),
             rule(POST, "/public/signup", publicAccess()),
+            // NS-SH11-001 customer account recovery with a code to the registered mobile (work package e).
+            rule(POST, "/public/password-reset/otp", publicAccess()),
+            rule(POST, "/public/password-reset", publicAccess()),
             // Payment settlement triggers (spec 13 §6): each only names a transaction to verify server-side, never a
             // verdict. The simulator stands in for the provider's hosted page until DPO credentials exist.
             rule(GET, "/payment/return", publicAccess()),
@@ -79,6 +82,13 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/shop/applications/*/offer", customer()),
             rule(GET, "/portfolio/shop/identity-documents", customer()),
             rule(POST, "/portfolio/shop/identity-documents", customer()),
+            rule(POST, "/portfolio/shop/contact-changes", customer()),
+            rule(POST, "/portfolio/shop/contact-changes/*/verify", customer()),
+            rule(GET, "/portfolio/shop/delegated", customer()),
+            rule(GET, "/portfolio/shop/preferences", customer()),
+            rule(PUT, "/portfolio/shop/preferences", customer()),
+            rule(PUT, "/portfolio/shop/preferences/purposes", customer()),
+            rule(GET, "/portfolio/shop/delegated/*", customer()),
             rule(POST, "/portfolio/shop/claims", customer()),
             rule(POST, "/portfolio/shop/claims/*/documents", customer()),
             rule(GET, "/portfolio/shop/claims/*/documents/*", customer()),
@@ -102,7 +112,30 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/customers/*/edd", anyOf("EDD_CUSTOMER")),
             // KYC evidence the customer uploaded (NS-SH01-004): staff who read customers see and open it.
             rule(GET, "/portfolio/customers/*/identity-documents", anyOf("READ_CUSTOMER")),
+            rule(POST, "/portfolio/customers/*/identity-documents", anyOf("UPDATE_CUSTOMER")),
             rule(GET, "/portfolio/customers/*/identity-documents/*", anyOf("READ_CUSTOMER")),
+            // SH01 party master (work package e): duplicates and steward-approved merges, KYC screening and
+            // verification, contacts with independent approval, relationships and delegations, the customer view.
+            rule(GET, "/portfolio/parties/duplicates", anyOf("READ_CUSTOMER")),
+            rule(GET, "/portfolio/parties/merge-requests", anyOf("READ_CUSTOMER")),
+            rule(POST, "/portfolio/parties/merge-requests", anyOf("KYC_CUSTOMER")),
+            rule(POST, "/portfolio/parties/merge-requests/*/approve", anyOf("APPROVE_PARTY_MERGE")),
+            rule(POST, "/portfolio/parties/merge-requests/*/reject", anyOf("APPROVE_PARTY_MERGE")),
+            rule(GET, "/portfolio/parties/resolve/*", anyOf("READ_CUSTOMER")),
+            rule(GET, "/portfolio/customers/*/view", anyOf("READ_CUSTOMER")),
+            rule(GET, "/portfolio/customers/*/kyc-record", anyOf("READ_CUSTOMER")),
+            rule(POST, "/portfolio/customers/*/screening", anyOf("KYC_CUSTOMER")),
+            rule(POST, "/portfolio/customers/*/screening/review", anyOf("EDD_CUSTOMER")),
+            rule(GET, "/portfolio/customers/*/contacts", anyOf("READ_CUSTOMER")),
+            rule(POST, "/portfolio/customers/*/addresses", anyOf("UPDATE_CUSTOMER")),
+            rule(POST, "/portfolio/customers/*/identifiers", anyOf("UPDATE_CUSTOMER")),
+            rule(POST, "/portfolio/customers/*/contact-changes", anyOf("UPDATE_CUSTOMER")),
+            rule(POST, "/portfolio/contact-changes/*/verify", anyOf("UPDATE_CUSTOMER")),
+            rule(POST, "/portfolio/contact-changes/*/approve", anyOf("KYC_CUSTOMER")),
+            rule(POST, "/portfolio/contact-changes/*/reject", anyOf("KYC_CUSTOMER")),
+            rule(GET, "/portfolio/customers/*/relationships", anyOf("READ_CUSTOMER")),
+            rule(POST, "/portfolio/customers/*/relationships", anyOf("UPDATE_CUSTOMER")),
+            rule(POST, "/portfolio/relationships/*/end", anyOf("UPDATE_CUSTOMER")),
             rule(GET, "/portfolio/history/kyc/*", anyOf("READ_CUSTOMER")),
             rule(GET, "/portfolio/history/edd/*", anyOf("READ_CUSTOMER")),
 
@@ -180,7 +213,17 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/claims/*/documents/summary", anyOf("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM")),
             rule(GET, "/portfolio/claims/*/document-access", anyOf("READ_AUDIT")),
             // The upload quarantine (AT-SH09A-02): the queue for claim staff, decisions for the document reviewer.
-            rule(GET, "/portfolio/document-quarantine", anyOf("READ_CLAIM")),
+            rule(GET, "/portfolio/document-quarantine", anyOf("READ_CLAIM", "READ_CUSTOMER", "READ_SERVICE_CASE")),
+            // NS-SH09A-006 short-lived links: anyone signed in asks; the service checks the owning record's access.
+            // NS-SH09A-002 document generation templates: drafted (UPDATE_PRODUCT), published by another
+            // (ACTIVATE_PRODUCT), generated on a policy (UPDATE_POLICY or CREATE_POLICY).
+            rule(GET, "/portfolio/document-templates", anyOf("READ_PRODUCT")),
+            rule(POST, "/portfolio/document-templates", anyOf("UPDATE_PRODUCT")),
+            rule(POST, "/portfolio/document-templates/preview", anyOf("UPDATE_PRODUCT", "ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/document-templates/*/versions/*/approve", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/policies/*/documents/generate", anyOf("UPDATE_POLICY", "CREATE_POLICY")),
+            rule(POST, "/portfolio/document-links", authenticated()),
+            rule(GET, "/portfolio/document-links/*", authenticated()),
             rule(GET, "/portfolio/document-quarantine/*/file", anyOf("RELEASE_DOCUMENT")),
             rule(POST, "/portfolio/document-quarantine/*/release", anyOf("RELEASE_DOCUMENT")),
             rule(POST, "/portfolio/document-quarantine/*/reject", anyOf("RELEASE_DOCUMENT")),
@@ -486,8 +529,14 @@ public final class ApiAccessRules {
             // ── partner portals, work queue, document register, payouts ────────────────────────────────
             rule(GET, "/ops/portal", anyOf("USE_PARTNER_PORTAL")),
             rule(POST, "/ops/portal/requests", anyOf("USE_PARTNER_PORTAL")),
+            // Spec 04 partner workspaces (work package e): structured submissions, the agent's quote, staff processing
+            // (the owning module's permission is checked in the service).
+            rule(POST, "/ops/portal/submissions", anyOf("USE_PARTNER_PORTAL")),
+            rule(POST, "/ops/portal/quote", anyOf("USE_PARTNER_PORTAL")),
+            rule(POST, "/ops/portal-requests/*/process", anyOf("CREATE_APPLICATION", "PROCESS_CENSUS", "MANAGE_CREDIT")),
             rule(GET, "/ops/portal-accounts", anyOf("READ_USER")),
             rule(PUT, "/ops/portal-accounts", anyOf("UPDATE_USER")),
+            rule(DELETE, "/ops/portal-accounts/*", anyOf("UPDATE_USER")),
             rule(GET, "/ops/portal-requests", staff()),
             rule(POST, "/ops/portal-requests/*/close", staff()),
             rule(GET, "/ops/workflow", staff()),
@@ -499,6 +548,10 @@ public final class ApiAccessRules {
             rule(GET, "/ops/queue/assignees", anyOf("ASSIGN_WORK")),
             rule(GET, "/ops/documents", anyOf("READ_POLICY", "READ_CLAIM")),
             rule(PUT, "/ops/documents/hold", anyOf("UPDATE_POLICY")),
+            rule(GET, "/ops/documents/disposals", anyOf("READ_POLICY", "READ_CLAIM", "MANAGE_CONFIG")),
+            rule(POST, "/ops/documents/disposals", anyOf("MANAGE_CONFIG")),
+            rule(POST, "/ops/documents/disposals/*/approve", anyOf("MANAGE_CONFIG")),
+            rule(POST, "/ops/documents/disposals/*/reject", anyOf("MANAGE_CONFIG")),
             rule(PUT, "/ops/documents/retention", anyOf("MANAGE_CONFIG")),
             rule(GET, "/ops/payouts", anyOf("READ_CLAIM")),
 
@@ -534,6 +587,11 @@ public final class ApiAccessRules {
             rule(POST, "/communications/templates/preview", anyOf("MANAGE_COMMUNICATION", "APPROVE_TEMPLATE")),
             rule(POST, "/communications/dispatch", anyOf("MANAGE_COMMUNICATION")),
             rule(PUT, "/communications/preferences/*", anyOf("MANAGE_COMMUNICATION")),
+            // SH09B delivery rules (work package e): purpose choices with consent evidence, the recipient matrix, the
+            // purpose fallback rules and the WhatsApp provider's template approval.
+            rule(PUT, "/communications/preferences/*/purposes", anyOf("MANAGE_COMMUNICATION")),
+            rule(PUT, "/communications/rules/**", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/templates/*/provider-submission", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/inbound/*/assign", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/inbound/*/owner", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/bulk-notices", anyOf("MANAGE_COMMUNICATION")),
@@ -544,10 +602,17 @@ public final class ApiAccessRules {
             // ── service desk and complaints SH10 (Service Agent) ───────────────────────────────────────
             rule(GET, "/service/cases", anyOf("READ_SERVICE_CASE")),
             rule(GET, "/service/cases/*", anyOf("READ_SERVICE_CASE")),
+            // SH10 reference data, escalation check and case evidence (work package e).
+            rule(GET, "/service/cases/*/documents", anyOf("READ_SERVICE_CASE")),
+            rule(GET, "/service/cases/*/documents/*", anyOf("READ_SERVICE_CASE")),
+            rule(GET, "/service/reference", anyOf("READ_SERVICE_CASE")),
+            rule(POST, "/service/escalations/run", anyOf("ASSIGN_WORK")),
             rule(POST, "/service/cases", anyOf("MANAGE_SERVICE_CASE")),
             rule(POST, "/service/cases/*/*", anyOf("MANAGE_SERVICE_CASE")),
             rule(GET, "/portfolio/shop/cases", customer()),
             rule(POST, "/portfolio/shop/cases", customer()),
+            rule(GET, "/portfolio/shop/cases/*/documents", customer()),
+            rule(POST, "/portfolio/shop/cases/*/documents", customer()),
 
             // ── collections SH04: billing accounts for anyone who reads policies or finance; changes by Finance ──
             rule(GET, "/collections/policies/*", anyOf("READ_POLICY", "READ_FINANCE")),
@@ -637,6 +702,10 @@ public final class ApiAccessRules {
             rule(GET, "/permissions/*", anyOf("READ_PERMISSION")),
             rule(PUT, "/permissions/*", anyOf("UPDATE_PERMISSION")),
             // Claim approval limits per role (spec 04 §5.3): part of administering roles.
+            // NS-SH10-003 time-bound delegation of claim approval authority (work package e).
+            rule(GET, "/admin/approval-delegations", anyOf("APPROVE_CLAIM", "READ_ROLE")),
+            rule(POST, "/admin/approval-delegations", anyOf("APPROVE_CLAIM")),
+            rule(POST, "/admin/approval-delegations/*/revoke", anyOf("APPROVE_CLAIM", "UPDATE_ROLE")),
             rule(GET, "/admin/approval-authorities", anyOf("READ_ROLE")),
             rule(PUT, "/admin/approval-authorities/*", anyOf("UPDATE_ROLE")),
             rule(DELETE, "/admin/approval-authorities/*", anyOf("UPDATE_ROLE")));

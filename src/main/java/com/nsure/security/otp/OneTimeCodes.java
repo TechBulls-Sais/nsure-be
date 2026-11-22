@@ -38,7 +38,11 @@ public class OneTimeCodes {
 
     public enum Purpose {
         STAFF_SIGN_IN,
-        CUSTOMER_SIGNUP
+        CUSTOMER_SIGNUP,
+        /** NS-SH01-005: proves a new email or phone belongs to the customer before the change is approved. */
+        CONTACT_CHANGE,
+        /** NS-SH11-001: account recovery, sent to the customer's verified mobile. */
+        ACCOUNT_RECOVERY
     }
 
     /** The demonstration code. Accepted only while a dev or demo profile is active and prod is not. */
@@ -97,6 +101,8 @@ public class OneTimeCodes {
                 throw new CodeDeliveryUnavailableException(purpose == Purpose.CUSTOMER_SIGNUP
                         ? "Online sign-up is not available yet: no SMS or e-mail provider is connected. Please contact"
                                 + " us to open an account."
+                        : purpose == Purpose.CONTACT_CHANGE || purpose == Purpose.ACCOUNT_RECOVERY
+                        ? "No SMS or e-mail provider is connected to send the verification code."
                         : "Sign-in needs a one-time code, and no SMS or e-mail provider is connected to send it. Ask"
                                 + " your administrator.");
             }

@@ -328,6 +328,7 @@ public class ClaimDocumentService {
         if (document == null || !document.getClaimId().equals(claim.getId())) {
             throw new NotFoundException("Document " + id + " not found on claim " + claim.getRef());
         }
+        custody.requireSensitiveAccess(document.getDocumentType(), security.authenticatedUser(), channel);
         custody.verify(document.getSha256(), document.getStoragePath(), "document " + id);
         custody.logAccess(DocumentCustody.CLAIM, id, claim.getRef(), document.getFileName(), username, channel);
         return new StoredFile(document.getFileName(), document.getContentType(), document.getSizeBytes(),

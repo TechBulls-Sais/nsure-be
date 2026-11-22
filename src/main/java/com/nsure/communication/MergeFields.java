@@ -21,6 +21,7 @@ final class MergeFields {
     static final String PORTAL_LINK = "portalLink";
     static final String INTERMEDIARY_REF = "intermediaryRef";
     static final String INTERMEDIARY_NAME = "intermediaryName";
+    static final String LENDER_NAME = "lenderName";
 
     /**
      * NS-SH09B-001/003: what an intermediary-audience template may show. References, the product and the customer's
@@ -28,6 +29,14 @@ final class MergeFields {
      */
     private static final Set<String> INTERMEDIARY_SAFE = Set.of("policyRef", "claimRef", "caseRef", "product",
             "customerName", "dueDate");
+
+    /** Fields an intermediary may also see for an event about itself: its own commission statement. */
+    private static final Map<String, Set<String>> INTERMEDIARY_OWN = Map.of(
+            Events.COMMISSION_PAID, Set.of("statementRef", "amount"));
+
+    /** What a lender-audience template may show: its own loan references, never borrower health or claim detail. */
+    private static final Set<String> LENDER_SAFE = Set.of("loanRef", "lenderRef", "lenderLoanId", "policyRef",
+            "disbursementDate");
 
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{\\{\\s*([A-Za-z][A-Za-z0-9_]*)\\s*}}");
 
@@ -47,6 +56,12 @@ final class MergeFields {
         BY_EVENT.put(Events.PREMIUM_DUE_REMINDER,
                 List.of("policyRef", "customerName", "product", "amount", "dueDate"));
         BY_EVENT.put(Events.OPERATIONAL_NOTICE, List.of("customerName"));
+        // NS-SH09B-001: missing evidence, commission statements and lender notices. The evidence requirement itself
+        // (possibly medical) is never a merge field; the customer reads it in the secure portal.
+        BY_EVENT.put(Events.EVIDENCE_REQUESTED, List.of("caseRef", "applicationRef", "customerName", "dueDate"));
+        BY_EVENT.put(Events.COMMISSION_PAID, List.of("statementRef", "intermediaryRef", "amount"));
+        BY_EVENT.put(Events.LOAN_DISBURSED,
+                List.of("loanRef", "lenderRef", "lenderLoanId", "policyRef", "customerName", "disbursementDate"));
     }
 
     private MergeFields() {
@@ -66,11 +81,20 @@ final class MergeFields {
 
     /** The fields a template for this audience may use; an intermediary gets references only (see INTERMEDIARY_SAFE). */
     static List<String> known(String eventType, String audience) {
+        if (CommunicationService.LENDER.equals(audience)) {
+            List<String> fields = new ArrayList<>(BY_EVENT.getOrDefault(eventType, List.of()).stream()
+                    .filter(LENDER_SAFE::contains).toList());
+            fields.add(LENDER_NAME);
+            fields.add(PORTAL_LINK);
+            return fields;
+        }
         if (!CommunicationService.INTERMEDIARY.equals(audience)) {
             return known(eventType);
         }
+        Set<String> own = INTERMEDIARY_OWN.getOrDefault(eventType, Set.of());
         List<String> fields = new ArrayList<>(BY_EVENT.getOrDefault(eventType, List.of()).stream()
-                .filter(INTERMEDIARY_SAFE::contains).toList());
+                .filter(f -> INTERMEDIARY_SAFE.contains(f) || own.contains(f)).filter(f -> !INTERMEDIARY_REF.equals(f))
+                .toList());
         fields.add(INTERMEDIARY_REF);
         fields.add(INTERMEDIARY_NAME);
         fields.add(PORTAL_LINK);

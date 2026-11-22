@@ -32,7 +32,10 @@ public final class CommunicationViews {
             String withdrawnBy,
             String withdrawnAt,
             // Why messages from it are sent (MessagePurposes): always a service purpose, never promotional.
-            String purpose) {
+            String purpose,
+            // BP-COMMS: the WhatsApp provider's approval (NOT_REQUIRED for Email and SMS).
+            String providerStatus,
+            String providerNote) {
 
         static TemplateView of(MessageTemplate t) {
             return new TemplateView(t.getId(), t.getCode(), t.getEventType(), t.getChannel(), t.getAudience(),
@@ -42,7 +45,7 @@ public final class CommunicationViews {
                     MergeFields.known(t.getEventType(), t.getAudience()),
                     blank(t.getWithdrawalReason()), blank(t.getWithdrawalRequestedBy()),
                     time(t.getWithdrawalRequestedAt()), blank(t.getWithdrawnBy()), time(t.getWithdrawnAt()),
-                    MessagePurposes.of(t.getEventType()));
+                    MessagePurposes.of(t.getEventType()), t.getProviderStatus(), blank(t.getProviderNote()));
         }
     }
 
@@ -79,7 +82,12 @@ public final class CommunicationViews {
             String recipientRole,
             String recipientBasis,
             String owner,
-            String ownedAt) {
+            String ownedAt,
+            // NS-SH09B-005 / AT-SH09B-02: how it failed, when it is tried again, and the fallback chain.
+            String failureKind,
+            String nextAttemptAt,
+            String fallbackOf,
+            String fallbackRef) {
 
         static MessageView of(CommunicationMessage m) {
             return new MessageView(m.getId(), m.getRef(), blank(m.getEventId()), m.getEventType(),
@@ -89,7 +97,8 @@ public final class CommunicationViews {
                     blank(m.getLastError()), m.getCreatedBy(), time(m.getCreatedAt()), time(m.getUpdatedAt()),
                     time(m.getDeliveredAt()), time(m.getReadAt()), time(m.getAcceptedAt()), blank(m.getPurpose()),
                     blank(m.getRecipientRole()), blank(m.getRecipientBasis()), blank(m.getOwner()),
-                    time(m.getOwnedAt()));
+                    time(m.getOwnedAt()), blank(m.getFailureKind()), time(m.getNextAttemptAt()),
+                    blank(m.getFallbackOf()), blank(m.getFallbackRef()));
         }
     }
 
@@ -136,7 +145,16 @@ public final class CommunicationViews {
             String updatedAt) {
     }
 
-    public record CustomerPreferencesView(String customerRef, String customerName, List<PreferenceView> channels) {
+    /**
+     * One purpose for one customer (AT-SH09B-02, NS-SH01-006): its rule, the customer's overall choice (DEFAULT,
+     * OPTED_OUT on some channel, or for marketing OPTED_IN / NOT_SET) and the recorded choices with consent evidence.
+     */
+    public record PurposePreferenceView(String purpose, String label, boolean contractual, boolean customerMayOptOut,
+            boolean marketing, List<String> fallbackChannels, String status, List<DeliveryRules.PurposeChoice> choices) {
+    }
+
+    public record CustomerPreferencesView(String customerRef, String customerName, List<PreferenceView> channels,
+            List<PurposePreferenceView> purposes) {
     }
 
     /** Inbound correspondence (Blueprint §5): matched to a customer and linked to a case, or waiting in triage. */

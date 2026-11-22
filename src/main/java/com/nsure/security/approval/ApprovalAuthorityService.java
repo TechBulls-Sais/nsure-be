@@ -46,9 +46,127 @@ public class ApprovalAuthorityService {
         this.security = security;
     }
 
-    /** The user's approval limit, or empty when unbounded. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.nsure.security.repository.AppUserRepository users;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.nsure.audit.evidence.EvidenceChain audit;
+
+    @org.springframework.beans.factory.annotation.Value("${nsure.approval.max-delegation-days:30}")
+    private int maxDelegationDays;
+
+    /**
+     * The user's approval limit, or empty when unbounded: the highest of their own roles' limits and any delegation
+     * lent to them that is in force now (NS-SH10-003).
+     */
     @Transactional(readOnly = true)
     public Optional<BigDecimal> limitFor(AppUser user) {
+        Optional<BigDecimal> own = ownLimit(user);
+        if (own.isEmpty() || jdbc == null) {
+            return own;
+        }
+        BigDecimal delegated = jdbc.queryForObject("select max(max_amount) from auth_delegation where delegate = ? and"
+                + " revoked_at is null and valid_from <= ? and valid_to >= ?", BigDecimal.class, user.getUsername(),
+                java.time.LocalDateTime.now(), java.time.LocalDateTime.now());
+        return delegated != null && delegated.compareTo(own.get()) > 0 ? Optional.of(delegated) : own;
+    }
+
+    /**
+     * {delegate, maxAmount, validTo, reason}: the signed-in approver lends a higher claim approval limit to a colleague
+     * who also approves claims, until a date at most {@code nsure.approval.max-delegation-days} away. It can never be
+     * above the delegator's own limit (only a role's limit counts, not a delegation they received).
+     */
+    @Transactional
+    public Map<String, Object> delegate(com.fasterxml.jackson.databind.JsonNode body) {
+        AppUser delegator = security.authenticatedUser();
+        delegator.validateHasPermissionTo("APPROVE_CLAIM");
+        String to = body == null || !body.hasNonNull("delegate") ? null : body.get("delegate").asText().trim();
+        if (to == null || to.isEmpty() || to.equalsIgnoreCase(delegator.getUsername())) {
+            throw new IllegalArgumentException("Choose the colleague the authority is delegated to (not yourself).");
+        }
+        AppUser delegate = users.findByUsername(to)
+                .orElseThrow(() -> new com.nsure.common.exception.NotFoundException("User " + to + " not found"));
+        if (!delegate.isEnabled() || !delegate.hasPermissionTo("APPROVE_CLAIM")) {
+            throw new IllegalArgumentException(to + " does not approve claims, so no limit can be delegated to them.");
+        }
+        BigDecimal amount;
+        try {
+            amount = new BigDecimal(body.path("maxAmount").asText(""));
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Give the limit delegated, e.g. 100000.");
+        }
+        if (amount.signum() <= 0) {
+            throw new IllegalArgumentException("The delegated limit must be above zero.");
+        }
+        Optional<BigDecimal> own = ownLimit(delegator);
+        if (own.isPresent() && amount.compareTo(own.get()) > 0) {
+            throw new NoAuthorizationException("You can delegate at most your own limit of " + Money.display(own.get())
+                    + ".");
+        }
+        java.time.LocalDateTime until;
+        try {
+            until = java.time.LocalDate.parse(body.path("validTo").asText("")).atTime(23, 59, 59);
+        } catch (java.time.format.DateTimeParseException e) {
+            throw new IllegalArgumentException("Give the last day of the delegation, e.g. 2026-12-31.");
+        }
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        if (until.isBefore(now) || until.isAfter(now.plusDays(maxDelegationDays).withHour(23).withMinute(59))) {
+            throw new IllegalArgumentException("A delegation lasts at most " + maxDelegationDays + " days.");
+        }
+        String reason = body.path("reason").asText("").trim();
+        if (reason.length() < 5) {
+            throw new IllegalArgumentException("Say why the authority is delegated (at least 5 characters).");
+        }
+        jdbc.update("insert into auth_delegation (delegator, delegate, max_amount, valid_from, valid_to, reason) values"
+                + " (?, ?, ?, ?, ?, ?)", delegator.getUsername(), delegate.getUsername(), amount, now, until, reason);
+        audit.record(delegator.getUsername(), "Approval authority delegated", "User", delegate.getUsername(),
+                Money.display(amount) + " until " + until.toLocalDate() + ": " + reason);
+        return delegations();
+    }
+
+    /** Ends a delegation now: by its delegator, or by someone who manages roles (UPDATE_ROLE). */
+    @Transactional
+    public Map<String, Object> revokeDelegation(Long id) {
+        AppUser user = security.authenticatedUser();
+        Map<String, Object> d = jdbc.queryForList("select delegator, delegate from auth_delegation where id = ?", id)
+                .stream().findFirst().orElseThrow(() -> new com.nsure.common.exception.NotFoundException(
+                        "Delegation " + id + " not found"));
+        String delegator = String.valueOf(d.entrySet().stream().filter(e -> e.getKey().equalsIgnoreCase("delegator"))
+                .findFirst().orElseThrow().getValue());
+        if (!delegator.equalsIgnoreCase(user.getUsername()) && !user.hasPermissionTo("UPDATE_ROLE")) {
+            throw new NoAuthorizationException("Only the delegator or a role administrator ends a delegation.");
+        }
+        jdbc.update("update auth_delegation set revoked_by = ?, revoked_at = ? where id = ? and revoked_at is null",
+                user.getUsername(), java.time.LocalDateTime.now(), id);
+        audit.record(user.getUsername(), "Approval delegation revoked", "Delegation", String.valueOf(id), null);
+        return delegations();
+    }
+
+    /** Delegations (newest first) and the signed-in user's own effective limit. */
+    @Transactional(readOnly = true)
+    public Map<String, Object> delegations() {
+        AppUser user = security.authenticatedUser();
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        out.put("delegations", jdbc.queryForList("select * from auth_delegation order by id desc").stream().map(r -> {
+            Map<String, Object> m = new java.util.LinkedHashMap<>();
+            r.forEach((k, v) -> m.put(k.toLowerCase(java.util.Locale.ROOT), v instanceof java.sql.Timestamp t
+                    ? t.toLocalDateTime().toString() : v));
+            m.put("active", m.get("revoked_at") == null
+                    && !java.time.LocalDateTime.parse(String.valueOf(m.get("valid_to"))).isBefore(now));
+            return m;
+        }).toList());
+        Optional<BigDecimal> mine = limitFor(user);
+        out.put("myLimit", mine.map(BigDecimal::toPlainString).orElse("UNLIMITED"));
+        out.put("maxDays", maxDelegationDays);
+        return out;
+    }
+
+    /** The highest limit among the user's own approving roles; empty when one of them is unbounded. */
+    private Optional<BigDecimal> ownLimit(AppUser user) {
         Map<Long, BigDecimal> limits = authorities.findAll().stream()
                 .collect(Collectors.toMap(a -> a.getRole().getId(), ClaimApprovalAuthority::getMaxPayoutAmount));
         BigDecimal highest = null;

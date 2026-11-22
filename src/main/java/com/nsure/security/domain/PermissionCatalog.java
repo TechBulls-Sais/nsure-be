@@ -93,6 +93,8 @@ public enum PermissionCatalog {
     UPDATE_CUSTOMER("customer.write"),
     KYC_CUSTOMER("customer.write"),
     EDD_CUSTOMER("customer.write"),
+    // SH01 data steward: approves a merge someone else asked for.
+    APPROVE_PARTY_MERGE(null),
     DELETE_CUSTOMER(null),
     READ_PRODUCT("product.read"),
     CREATE_PRODUCT("product.write"),
@@ -131,6 +133,8 @@ public enum PermissionCatalog {
     APPROVE_TEMPLATE(null),
     // Releases or rejects an upload held in quarantine (SH09A AT-SH09A-02).
     RELEASE_DOCUMENT(null),
+    // NS-SH11-002 record sensitivity: open health evidence (medical reports, hospital bills, death certificates).
+    READ_HEALTH_EVIDENCE(null),
     READ_SERVICE_CASE(null),
     MANAGE_SERVICE_CASE(null),
     // Compliance disposes of KYC/AML screening referrals (spec 11 Identity/KYC/AML).

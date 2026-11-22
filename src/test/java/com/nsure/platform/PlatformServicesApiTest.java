@@ -38,10 +38,20 @@ class PlatformServicesApiTest {
                 .andExpect(jsonPath("$[?(@.first.ref == '" + a + "' && @.second.ref == '" + b + "')].confidence").value(hasItem("LIKELY")));
         mockMvc.perform(json(post("/platform/parties/merges"), "admin", "{\"survivingRef\":\"" + a + "\",\"mergedRef\":\"" + b + "\",\"reason\":\"ok\"}"))
                 .andExpect(status().isUnprocessableEntity());
-        mockMvc.perform(json(post("/platform/parties/merges"), "admin", "{\"survivingRef\":\"" + a + "\",\"mergedRef\":\"" + b
+        // NS-SH01-002: the merge is a request; a data steward who is someone else approves it before anything moves.
+        String request = JsonPath.read(mockMvc.perform(json(post("/platform/parties/merges"), "admin",
+                        "{\"survivingRef\":\"" + a + "\",\"mergedRef\":\"" + b
                         + "\",\"reason\":\"Same person captured twice at the branch\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.recordsMoved").value(1));
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andReturn().getResponse().getContentAsString(), "$.ref");
+        mockMvc.perform(json(post("/portfolio/parties/merge-requests/" + request + "/approve"), "admin", "{}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/portfolio/parties/merge-requests/" + request + "/approve"), "secadmin", "{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.movedDetail").value(org.hamcrest.Matchers.containsString(
+                        "1 applications, policies and claims")));
         mockMvc.perform(get("/servicing/policies/" + policy).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policy.customerRef").value(a));
         mockMvc.perform(get("/platform/parties/merges").with(signedIn("admin", "password")))

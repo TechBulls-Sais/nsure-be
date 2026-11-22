@@ -25,6 +25,11 @@ public class MessageTemplate {
     public static final String APPROVED = "APPROVED";
     public static final String RETIRED = "RETIRED";
     public static final String WITHDRAWN = "WITHDRAWN";
+    public static final String PROVIDER_NOT_REQUIRED = "NOT_REQUIRED";
+    public static final String PROVIDER_NOT_SUBMITTED = "NOT_SUBMITTED";
+    public static final String PROVIDER_SUBMITTED = "SUBMITTED";
+    public static final String PROVIDER_APPROVED = "APPROVED";
+    public static final String PROVIDER_REJECTED = "REJECTED";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -81,6 +86,13 @@ public class MessageTemplate {
     @Column(name = "withdrawn_at")
     private LocalDateTime withdrawnAt;
 
+    // BP-COMMS: the WhatsApp provider's own approval of the template (NOT_REQUIRED for Email and SMS).
+    @Column(name = "provider_status", nullable = false, length = 20)
+    private String providerStatus;
+
+    @Column(name = "provider_note", length = 300)
+    private String providerNote;
+
     protected MessageTemplate() {
     }
 
@@ -96,6 +108,32 @@ public class MessageTemplate {
         this.status = DRAFT;
         this.createdBy = createdBy;
         this.createdAt = LocalDateTime.now();
+        this.providerStatus = "WHATSAPP".equals(channel) ? PROVIDER_NOT_SUBMITTED : PROVIDER_NOT_REQUIRED;
+    }
+
+    /** Sent to the WhatsApp provider for its review (BP-COMMS). */
+    void submitToProvider(String by) {
+        providerStatus = PROVIDER_SUBMITTED;
+        providerNote = "Submitted to the WhatsApp provider by " + by + " on " + LocalDateTime.now().toLocalDate();
+    }
+
+    /** The provider's answer to a submission. */
+    void providerDecision(boolean approved, String note) {
+        providerStatus = approved ? PROVIDER_APPROVED : PROVIDER_REJECTED;
+        providerNote = note == null || note.length() <= 300 ? note : note.substring(0, 300);
+    }
+
+    /** Whether the provider allows this template to be sent (always, for channels that need no provider approval). */
+    boolean providerAllows() {
+        return PROVIDER_NOT_REQUIRED.equals(providerStatus) || PROVIDER_APPROVED.equals(providerStatus);
+    }
+
+    public String getProviderStatus() {
+        return providerStatus;
+    }
+
+    public String getProviderNote() {
+        return providerNote;
     }
 
     void approve(String approver) {

@@ -156,6 +156,10 @@ public final class Events {
     public static final String PARTY_MERGED = "PartyMerged";
     /** customerRef, review (KYC or EDD), previousStatus, status. */
     public static final String KYC_STATUS_CHANGED = "KycStatusChanged";
+    /** SH01: a party's details changed (an approved contact change, an address, an identifier or a relationship). */
+    public static final String PARTY_UPDATED = "PartyUpdated";
+    /** SH01: a new email or phone was proved with a one-time code sent to it. */
+    public static final String CONTACT_VERIFIED = "ContactVerified";
 
     // Collections and claims (spec SH04, SH05).
     public static final String INVOICE_ISSUED = "InvoiceIssued";

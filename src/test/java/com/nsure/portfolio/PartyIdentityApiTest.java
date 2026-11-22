@@ -139,12 +139,17 @@ class PartyIdentityApiTest {
                         .content("{\"customerRef\":\"" + gone + "\",\"product\":\"Term Life\",\"tier\":\"Bronze\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
         long version = jdbc.queryForObject("select row_version from ins_policy where record_ref = ?", Long.class, policy);
-        mockMvc.perform(post("/platform/parties/merges").with(signedIn("admin", "password"))
+        // The merge is a request; a data steward who is someone else approves it (NS-SH01-002).
+        String request = JsonPath.read(mockMvc.perform(post("/platform/parties/merges").with(signedIn("admin", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"survivingRef\":\"" + keep + "\",\"mergedRef\":\"" + gone
                                 + "\",\"reason\":\"Same person captured twice at the branch\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.recordsMoved").value(1));
+                .andReturn().getResponse().getContentAsString(), "$.ref");
+        mockMvc.perform(post("/portfolio/parties/merge-requests/" + request + "/approve")
+                        .with(signedIn("secadmin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.movedDetail").value(org.hamcrest.Matchers.startsWith("1 applications")));
         assertThat(jdbc.queryForObject("select customer_ref from ins_policy where record_ref = ?", String.class, policy))
                 .isEqualTo(keep);
         assertThat(jdbc.queryForObject("select row_version from ins_policy where record_ref = ?", Long.class, policy))

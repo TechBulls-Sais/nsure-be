@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.jayway.jsonpath.JsonPath;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -25,6 +26,7 @@ import org.springframework.test.web.servlet.ResultActions;
 @SpringBootTest(properties = {"spring.datasource.url=jdbc:h2:mem:nsure-identity-documents;DB_CLOSE_DELAY=-1",
         "nsure.documents.dir=target/test-documents/identity"})
 @AutoConfigureMockMvc
+@SuppressWarnings("unchecked")
 class IdentityDocumentApiTest {
 
     private static final byte[] PDF = "%PDF-1.4\n% omang copy\n".getBytes(StandardCharsets.US_ASCII);
@@ -42,15 +44,34 @@ class IdentityDocumentApiTest {
         upload("lorato.upload", "omang.txt", "plain text".getBytes(StandardCharsets.US_ASCII), "Omang")
                 .andExpect(status().isUnprocessableEntity());
         upload("lorato.upload", "omang.pdf", PDF, "Selfie").andExpect(status().isUnprocessableEntity());
-        String body = upload("lorato.upload", "omang.pdf", PDF, "Omang")
+        // NS-SH09A-004: the upload waits in quarantine; it is listed as being checked but cannot be opened.
+        upload("lorato.upload", "omang.pdf", PDF, "Omang")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].documentType").value("Omang"))
                 .andExpect(jsonPath("$[0].fileName").value("omang.pdf"))
+                .andExpect(jsonPath("$[0].state").value("QUARANTINED"))
+                .andExpect(jsonPath("$[0].id").doesNotExist());
+        String held = mockMvc.perform(get("/portfolio/document-quarantine").with(signedIn("onboarding", "password")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Integer uploadId = ((List<Integer>) JsonPath.read(held, "$[?(@.ownerRef == '" + ref + "')].id")).get(0);
+        // A claims reviewer without customer access cannot decide identity evidence.
+        mockMvc.perform(post("/portfolio/document-quarantine/" + uploadId + "/release")
+                        .with(signedIn("assessor", "password")).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"Looks fine\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/portfolio/document-quarantine/" + uploadId + "/release")
+                        .with(signedIn("onboarding", "password")).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"Omang copy matches the record\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RELEASED"));
+        String body = mockMvc.perform(get("/portfolio/shop/identity-documents")
+                        .with(signedIn("lorato.upload", "password123")))
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].state").value("CURRENT"))
                 .andReturn().getResponse().getContentAsString();
         Integer id = JsonPath.read(body, "$[0].id");
-        mockMvc.perform(get("/portfolio/shop/identity-documents").with(signedIn("lorato.upload", "password123")))
-                .andExpect(jsonPath("$.length()").value(1));
 
         // The reviewer sees it on the customer record, opens it, and the access is logged.
         mockMvc.perform(get("/portfolio/customers/" + ref + "/identity-documents").with(signedIn("onboarding", "password")))
@@ -69,6 +90,32 @@ class IdentityDocumentApiTest {
                 .andExpect(status().isNotFound());
         mockMvc.perform(get("/portfolio/customers/" + ref + "/identity-documents")
                         .with(signedIn("lorato.upload", "password123")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void anEicarTestFileIsRejectedByTheSimulatedScannerAndStaffUploadsAreQuarantinedToo() throws Exception {
+        String ref = customer("Mpho Eicar", "mpho.eicar", "916000003");
+        byte[] eicar = ("%PDF-1.4\nX5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*\n")
+                .getBytes(StandardCharsets.US_ASCII);
+        upload("mpho.eicar", "omang.pdf", eicar, "Omang")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].state").value("REJECTED"))
+                .andExpect(jsonPath("$[0].note").value(org.hamcrest.Matchers.containsString("Malware found")));
+        mockMvc.perform(multipart("/portfolio/customers/" + ref + "/identity-documents")
+                        .file(new MockMultipartFile("file", "passport.pdf", "application/pdf", PDF))
+                        .param("type", "Passport").with(signedIn("onboarding", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.fileName == 'passport.pdf')].state").value(org.hamcrest.Matchers.hasItem(
+                        "QUARANTINED")));
+        String held = mockMvc.perform(get("/portfolio/document-quarantine").with(signedIn("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        Integer uploadId = ((List<Integer>) JsonPath.read(held, "$[?(@.fileName == 'passport.pdf' && @.ownerRef == '"
+                + ref + "')].id")).get(0);
+        // The uploader cannot release their own upload.
+        mockMvc.perform(post("/portfolio/document-quarantine/" + uploadId + "/release")
+                        .with(signedIn("onboarding", "password")).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"Checked\"}"))
                 .andExpect(status().isForbidden());
     }
 

@@ -283,6 +283,10 @@ public class PortfolioService {
     @org.springframework.beans.factory.annotation.Autowired
     private PartyRegister parties;
 
+    /** KYC screening and verification records (SH01, work package e). */
+    @org.springframework.beans.factory.annotation.Autowired
+    private PartyService partyService;
+
     @Transactional
     public PortfolioViews.CustomerView createCustomer(JsonNode body) {
         AppUser staff = security.authenticatedUser();
@@ -1598,6 +1602,10 @@ public class PortfolioService {
         }
         String reason = body == null ? null : reviewReason(body, decision);
         String previous = blank(row.getKycStatus());
+        if ("VERIFIED".equals(decision)) {
+            // NS-SH01-004: screening must be clear (never a provider failure), and the source and expiry are recorded.
+            partyService.beforeVerified(row, body, reviewer.getUsername());
+        }
         row.setKycStatus(decision);
         row.setStatus("VERIFIED".equals(decision) ? "Verified" : "KYC failed");
         row.setKycRejectionReason(reason);
@@ -2007,7 +2015,7 @@ public class PortfolioService {
                 row.getKycStatus() == null ? "PENDING" : row.getKycStatus(),
                 row.getLoginUsername() == null ? "" : row.getLoginUsername(),
                 row.getPoiType() == null ? "" : row.getPoiType(),
-                row.getPoiNumber() == null ? "" : row.getPoiNumber(),
+                row.getPoiNumber() == null ? "" : identityNumberFor(row.getPoiNumber()),
                 row.getDateOfBirth() == null ? "" : row.getDateOfBirth().toString(),
                 row.getEddStatus() == null ? "" : row.getEddStatus(),
                 tiers,
@@ -2015,6 +2023,22 @@ public class PortfolioService {
                 blank(row.getEddRejectionReason()),
                 blank(row.getDuplicateReview()),
                 row.getRowVersion());
+    }
+
+    /**
+     * Spec 04 operations boundary: protected fields are masked where not needed. Staff see a customer's full identity
+     * number only with a KYC role (KYC_CUSTOMER), others its last three characters; the customer sees their own.
+     */
+    private String identityNumberFor(String number) {
+        try {
+            AppUser user = security.authenticatedUser();
+            if (user.isStaffUser() && !user.hasPermissionTo("KYC_CUSTOMER")) {
+                return PartyService.mask(number);
+            }
+        } catch (RuntimeException notSignedIn) {
+            // Sign-up answers the new customer with their own details.
+        }
+        return number;
     }
 
     private String createCustomerLogin(String username, String password) {

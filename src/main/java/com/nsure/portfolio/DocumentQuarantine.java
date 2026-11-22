@@ -36,6 +36,33 @@ import org.springframework.transaction.annotation.Transactional;
 public class DocumentQuarantine {
 
     public static final String CLAIM = DocumentCustody.CLAIM;
+    /** Identity evidence for KYC, owned by the customer (owner_id is the customer's id). */
+    public static final String IDENTITY = "IDENTITY";
+    /** Evidence on a service request or complaint (owner_id is the case's id). */
+    public static final String SERVICE_CASE = "SERVICE_CASE";
+    /** The read permission of each kind's owning record: a reviewer must hold it as well as RELEASE_DOCUMENT. */
+    private static final java.util.Map<String, String> READ = java.util.Map.of(CLAIM, "READ_CLAIM", IDENTITY,
+            "READ_CUSTOMER", SERVICE_CASE, "READ_SERVICE_CASE");
+    private static final String EICAR = "EICAR-STANDARD-ANTIVIRUS-TEST-FILE";
+    /**
+     * Until an installation connects a real scanner: a simulated check that only recognises the EICAR anti-virus test
+     * signature (rejecting it, so the "infected file" path can be shown). It never calls a file clean.
+     */
+    static final UploadScanner SIMULATED = new UploadScanner() {
+        @Override
+        public String name() {
+            return "Simulated EICAR check";
+        }
+
+        @Override
+        public Verdict scan(String fileName, byte[] bytes) {
+            if (new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1).contains(EICAR)) {
+                return new Verdict(INFECTED, "EICAR anti-virus test signature (simulated scanner)");
+            }
+            return new Verdict(NOT_SCANNED, "No malware scanner is configured, so the file was not scanned (the"
+                    + " simulated check found no test signature). A person must release it.");
+        }
+    };
     private static final String RELEASE = "RELEASE_DOCUMENT";
     private static final Set<String> STATES = Set.of(QuarantinedUpload.PENDING, QuarantinedUpload.RELEASED,
             QuarantinedUpload.REJECTED);
@@ -48,10 +75,16 @@ public class DocumentQuarantine {
     private final WorkflowHistory history;
     private final EvidenceChain audit;
     private final ObjectProvider<UploadScanner> scanners;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+    private final boolean simulatedScanner;
 
     public DocumentQuarantine(EntityManager em, PlatformSecurityContext security, DocumentFiles files,
             DocumentCustody custody, WorkflowHistory history, EvidenceChain audit,
-            ObjectProvider<UploadScanner> scanners) {
+            ObjectProvider<UploadScanner> scanners, org.springframework.jdbc.core.JdbcTemplate jdbc,
+            @org.springframework.beans.factory.annotation.Value("${nsure.documents.simulated-scanner:true}")
+            boolean simulatedScanner) {
+        this.jdbc = jdbc;
+        this.simulatedScanner = simulatedScanner;
         this.em = em;
         this.security = security;
         this.files = files;
@@ -76,7 +109,7 @@ public class DocumentQuarantine {
      */
     QuarantinedUpload receive(InsuranceClaim claim, byte[] bytes, String fileName, String extension, String contentType,
             String documentType, String uploadedBy, String channel) {
-        UploadScanner scanner = scanners.getIfAvailable();
+        UploadScanner scanner = scanner();
         UploadScanner.Verdict verdict = scanner == null ? UploadScanner.NO_SCANNER : verdict(scanner, fileName, bytes);
         String storagePath = files.write(claim.getRef(), extension, bytes);
         QuarantinedUpload upload = new QuarantinedUpload(CLAIM, claim.getId(), claim.getRef(), documentType, fileName,
@@ -102,6 +135,105 @@ public class DocumentQuarantine {
         return upload;
     }
 
+    /** The configured scanner, else the simulated EICAR check (unless switched off), else none. */
+    private UploadScanner scanner() {
+        UploadScanner scanner = scanners.getIfAvailable();
+        return scanner != null ? scanner : simulatedScanner ? SIMULATED : null;
+    }
+
+    /**
+     * Holds identity or service case evidence in quarantine (NS-SH09A-004), like claim evidence: stored and hashed,
+     * never served or counted until released. The owner's history records it. A scanner finding rejects it at once.
+     */
+    public QuarantinedUpload receiveEvidence(String kind, Long ownerId, String ownerRef, String ownerName,
+            DocumentIntake.Upload file, String documentType, String uploadedBy, String channel) {
+        if (!IDENTITY.equals(kind) && !SERVICE_CASE.equals(kind)) {
+            throw new IllegalArgumentException("Unknown evidence owner " + kind);
+        }
+        UploadScanner scanner = scanner();
+        UploadScanner.Verdict verdict = scanner == null ? UploadScanner.NO_SCANNER
+                : verdict(scanner, file.fileName(), file.bytes());
+        String storagePath = files.write((IDENTITY.equals(kind) ? "identity/" : "cases/") + ownerRef, file.extension(),
+                file.bytes());
+        QuarantinedUpload upload = new QuarantinedUpload(kind, ownerId, ownerRef, documentType, file.fileName(),
+                file.contentType(), file.bytes().length, storagePath, DocumentCustody.sha256(file.bytes()), uploadedBy,
+                channel, verdict);
+        try {
+            em.persist(upload);
+            em.flush();
+        } catch (RuntimeException e) {
+            files.deleteQuietly(storagePath);
+            throw e;
+        }
+        ownerHistory(kind, ownerRef, ownerName, "Evidence uploaded", documentType + ": " + file.fileName()
+                + " · held in quarantine until released", uploadedBy);
+        if (UploadScanner.CLEAN.equals(verdict.result())) {
+            fileEvidence(upload, "scanner:" + scanner.name(), verdict.detail());
+        } else if (UploadScanner.INFECTED.equals(verdict.result())) {
+            String by = "scanner:" + scanner.name();
+            upload.rejected(by, "Malware found: " + verdict.detail());
+            ownerHistory(kind, ownerRef, ownerName, "Evidence rejected", file.fileName() + ": malware found ("
+                    + verdict.detail() + ")", by);
+            audit.record(by, "Upload rejected by scanner", label(kind), ownerRef, file.fileName() + ": "
+                    + verdict.detail());
+        }
+        return upload;
+    }
+
+    /** Files released identity or case evidence where its owner keeps documents of record. */
+    private void fileEvidence(QuarantinedUpload upload, String releasedBy, String note) {
+        Long documentId;
+        if (IDENTITY.equals(upload.getOwnerKind())) {
+            IdentityDocument document = new IdentityDocument(upload.getOwnerRef(), upload.getDocumentType(),
+                    upload.getFileName(), upload.getContentType(), upload.getSizeBytes(), upload.getStoragePath(),
+                    upload.getSha256(), upload.getUploadedBy());
+            em.persist(document);
+            em.flush();
+            documentId = document.getId();
+        } else {
+            jdbc.update("insert into svc_case_document (case_ref, document_type, file_name, content_type, size_bytes,"
+                    + " storage_path, sha256, uploaded_by, uploaded_at, channel, released_by, upload_id) values (?, ?, ?,"
+                    + " ?, ?, ?, ?, ?, ?, ?, ?, ?)", upload.getOwnerRef(), upload.getDocumentType(), upload.getFileName(),
+                    upload.getContentType(), upload.getSizeBytes(), upload.getStoragePath(), upload.getSha256(),
+                    upload.getUploadedBy(), upload.getUploadedAt(), upload.getChannel(), releasedBy, upload.getId());
+            documentId = jdbc.queryForObject("select id from svc_case_document where upload_id = ?", Long.class,
+                    upload.getId());
+        }
+        upload.released(releasedBy, note, documentId);
+        ownerHistory(upload.getOwnerKind(), upload.getOwnerRef(), ownerName(upload), "Evidence released",
+                upload.getDocumentType() + ": " + upload.getFileName() + " · released from quarantine by " + releasedBy,
+                releasedBy);
+    }
+
+    private void ownerHistory(String kind, String ref, String name, String action, String detail, String actor) {
+        if (IDENTITY.equals(kind)) {
+            history.record(WorkflowHistory.KYC_REVIEW, ref, name, action, null, null, detail, actor);
+        } else if (SERVICE_CASE.equals(kind)) {
+            history.record("Service Case", ref, name, action, null, null, detail, actor);
+        }
+    }
+
+    private String ownerName(QuarantinedUpload q) {
+        if (CLAIM.equals(q.getOwnerKind())) {
+            InsuranceClaim claim = em.find(InsuranceClaim.class, q.getOwnerId());
+            return claim == null ? "" : claim.getCustomerName();
+        }
+        List<String> names = IDENTITY.equals(q.getOwnerKind())
+                ? jdbc.queryForList("select name from ins_customer where record_ref = ?", String.class, q.getOwnerRef())
+                : jdbc.queryForList("select customer_name from svc_case where record_ref = ?", String.class,
+                        q.getOwnerRef());
+        return names.isEmpty() ? "" : names.get(0);
+    }
+
+    private static String label(String kind) {
+        return IDENTITY.equals(kind) ? "Customer" : SERVICE_CASE.equals(kind) ? "Service case" : "Claim";
+    }
+
+    /** The reviewer also needs the read permission of the upload's owning record. */
+    private void mayRead(AppUser user, QuarantinedUpload upload) {
+        user.validateHasPermissionTo(READ.getOrDefault(upload.getOwnerKind(), "READ_CLAIM"));
+    }
+
     private static UploadScanner.Verdict verdict(UploadScanner scanner, String fileName, byte[] bytes) {
         try {
             UploadScanner.Verdict verdict = scanner.scan(fileName, bytes);
@@ -121,14 +253,20 @@ public class DocumentQuarantine {
     /** Uploads in a state (PENDING by default, or ALL), newest first. Claim uploads need READ_CLAIM. */
     @Transactional(readOnly = true)
     public List<UploadView> list(String status) {
-        security.authenticatedUser().validateHasPermissionTo("READ_CLAIM");
+        AppUser user = security.authenticatedUser();
+        List<String> kinds = READ.entrySet().stream().filter(e -> user.hasPermissionTo(e.getValue()))
+                .map(java.util.Map.Entry::getKey).toList();
+        if (kinds.isEmpty()) {
+            throw new NoAuthorizationException("User has no authority to read claim, identity or case evidence");
+        }
         String state = status == null || status.isBlank() ? QuarantinedUpload.PENDING
                 : status.trim().toUpperCase(Locale.ROOT);
         if (!"ALL".equals(state) && !STATES.contains(state)) {
             throw new IllegalArgumentException("Status must be PENDING, RELEASED, REJECTED or ALL.");
         }
-        var query = em.createQuery("select q from QuarantinedUpload q"
-                + ("ALL".equals(state) ? "" : " where q.status = :status") + " order by q.id desc", QuarantinedUpload.class);
+        var query = em.createQuery("select q from QuarantinedUpload q where q.ownerKind in :kinds"
+                + ("ALL".equals(state) ? "" : " and q.status = :status") + " order by q.id desc", QuarantinedUpload.class);
+        query.setParameter("kinds", kinds);
         if (!"ALL".equals(state)) {
             query.setParameter("status", state);
         }
@@ -141,6 +279,8 @@ public class DocumentQuarantine {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo(RELEASE);
         QuarantinedUpload upload = upload(id);
+        mayRead(user, upload);
+        custody.requireSensitiveAccess(upload.getDocumentType(), user, DocumentCustody.STAFF);
         custody.verify(upload.getSha256(), upload.getStoragePath(), "upload " + id);
         custody.logAccess("UPLOAD", id, upload.getOwnerRef(), upload.getFileName(), user.getUsername(),
                 DocumentCustody.STAFF);
@@ -154,6 +294,15 @@ public class DocumentQuarantine {
         AppUser user = reviewer();
         String note = reason(body, "note", "Say what you checked before releasing the file (5 to 500 characters).");
         QuarantinedUpload upload = pending(id, user);
+        mayRead(user, upload);
+        if (!CLAIM.equals(upload.getOwnerKind())) {
+            custody.verify(upload.getSha256(), upload.getStoragePath(), "upload " + id);
+            fileEvidence(upload, user.getUsername(), note);
+            audit.record(user.getUsername(), "Upload released without a malware scan", label(upload.getOwnerKind()),
+                    upload.getOwnerRef(), upload.getDocumentType() + ": " + upload.getFileName() + " (uploaded by "
+                            + upload.getUploadedBy() + "): " + note);
+            return view(upload);
+        }
         InsuranceClaim claim = em.find(InsuranceClaim.class, upload.getOwnerId(), LockModeType.PESSIMISTIC_WRITE);
         if (claim == null) {
             throw new NotFoundException("Claim " + upload.getOwnerRef() + " not found");
@@ -176,7 +325,15 @@ public class DocumentQuarantine {
         AppUser user = reviewer();
         String reason = reason(body, "reason", "Give the reason the file is not accepted (5 to 500 characters).");
         QuarantinedUpload upload = pending(id, user);
+        mayRead(user, upload);
         upload.rejected(user.getUsername(), reason);
+        if (!CLAIM.equals(upload.getOwnerKind())) {
+            ownerHistory(upload.getOwnerKind(), upload.getOwnerRef(), ownerName(upload), "Evidence rejected",
+                    upload.getDocumentType() + ": " + upload.getFileName() + " · " + reason, user.getUsername());
+            audit.record(user.getUsername(), "Upload rejected", label(upload.getOwnerKind()), upload.getOwnerRef(),
+                    upload.getDocumentType() + ": " + upload.getFileName() + ": " + reason);
+            return view(upload);
+        }
         InsuranceClaim claim = em.find(InsuranceClaim.class, upload.getOwnerId());
         if (claim != null) {
             history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Document Rejected",
@@ -268,9 +425,28 @@ public class DocumentQuarantine {
         return value;
     }
 
+    /** Identity or case uploads of an owner still held or refused, for the owner's document list (no download). */
+    public List<java.util.Map<String, Object>> held(String kind, String ownerRef) {
+        return em.createQuery("select q from QuarantinedUpload q where q.ownerKind = :kind and q.ownerRef = :ref"
+                        + " and q.status <> :released order by q.id desc", QuarantinedUpload.class)
+                .setParameter("kind", kind).setParameter("ref", ownerRef)
+                .setParameter("released", QuarantinedUpload.RELEASED)
+                .getResultStream().map(q -> {
+                    java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("uploadId", q.getId());
+                    m.put("documentType", q.getDocumentType());
+                    m.put("fileName", q.getFileName());
+                    m.put("uploadedBy", q.getUploadedBy());
+                    m.put("uploadedAt", time(q.getUploadedAt()));
+                    m.put("state", q.isPending() ? DocumentIntake.QUARANTINED : DocumentIntake.REJECTED);
+                    m.put("note", q.isPending() ? "Being checked before it can be opened or counted as evidence."
+                            : "Not accepted: " + q.getDecisionReason());
+                    return m;
+                }).toList();
+    }
+
     private UploadView view(QuarantinedUpload q) {
-        InsuranceClaim claim = CLAIM.equals(q.getOwnerKind()) ? em.find(InsuranceClaim.class, q.getOwnerId()) : null;
-        return new UploadView(q.getId(), q.getOwnerKind(), q.getOwnerRef(), claim == null ? "" : claim.getCustomerName(),
+        return new UploadView(q.getId(), q.getOwnerKind(), q.getOwnerRef(), ownerName(q),
                 q.getDocumentType(), DocumentIntake.classification(q.getDocumentType()), q.getFileName(),
                 q.getContentType(), q.getSizeBytes(), q.getSha256(), q.getUploadedBy(), q.getChannel(),
                 time(q.getUploadedAt()), q.getStatus(), q.getScanResult(), blank(q.getScanDetail()),

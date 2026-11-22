@@ -1,0 +1,20 @@
+databaseChangeLog:
+  # NS-SH10-003 (work package e): time-bound delegation of claim approval authority. A delegator who approves claims
+  # lends a higher limit to a colleague who also approves claims, never above the delegator's own limit, for at most
+  # nsure.approval.max-delegation-days (30, demo default). It ends on its date or when revoked.
+  - changeSet:
+      id: 202-approval-delegation
+      author: nsure
+      changes:
+        - createTable:
+            tableName: auth_delegation
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_auth_delegation}}
+              - column: {name: delegator, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: delegate, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: max_amount, type: "decimal(19,2)", constraints: {nullable: false}}
+              - column: {name: valid_from, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: valid_to, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: revoked_by, type: varchar(100)}
+              - column: {name: revoked_at, type: timestamp(6)}

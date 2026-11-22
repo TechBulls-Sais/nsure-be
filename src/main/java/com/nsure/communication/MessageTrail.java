@@ -55,6 +55,12 @@ class MessageTrail {
         }
     }
 
+    /** A decision the system took about the message without changing its state (e.g. a fallback, or none). */
+    void system(CommunicationMessage m, String detail) {
+        em.persist(new MessageEvent(m.getId(), m.getStatus(), detail.length() <= 500 ? detail : detail.substring(0, 500),
+                MessageEvent.SYSTEM, null, "system"));
+    }
+
     /** A staff action that does not change the state (taking or releasing a failed message). */
     void noted(CommunicationMessage m, String detail, String actor) {
         em.persist(new MessageEvent(m.getId(), m.getStatus(), detail, MessageEvent.STAFF, null, actor));

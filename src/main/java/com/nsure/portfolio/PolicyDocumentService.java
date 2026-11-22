@@ -179,7 +179,7 @@ public class PolicyDocumentService {
                 + d.getSnapshotSha256().substring(0, 12) + "…";
     }
 
-    private static List<PortfolioViews.DocumentView> views(EntityManager em, Long policyId) {
+    static List<PortfolioViews.DocumentView> views(EntityManager em, Long policyId) {
         return viewsOf(em, List.of(policyId)).getOrDefault(policyId, List.of());
     }
 

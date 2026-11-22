@@ -66,13 +66,9 @@ public class OpsService {
     @Transactional(readOnly = true)
     public Map<String, Object> portal() {
         AppUser user = user("USE_PARTNER_PORTAL");
-        List<Map<String, Object>> account = jdbc.query("select portal_type, scope_ref from portal_account where username = ?",
-                ROW, user.getUsername());
-        if (account.isEmpty()) {
-            throw new NoAuthorizationException("This login is not linked to an agent, employer or lender.");
-        }
-        String type = (String) account.get(0).get("portalType");
-        String scope = (String) account.get(0).get("scopeRef");
+        Map<String, Object> link = partnerAccount(user);
+        String type = (String) link.get("portalType");
+        String scope = (String) link.get("scopeRef");
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("portalType", type);
         out.put("scopeRef", scope);
@@ -135,19 +131,76 @@ public class OpsService {
             }
         }
         out.put("requests", jdbc.query("select record_ref, request_type, detail, status, created_at, handled_by,"
-                + " handled_note from portal_request where created_by = ? order by id desc", ROW, user.getUsername()));
+                + " handled_note, result, result_ref, processed_at from portal_request where created_by = ? order by id"
+                + " desc", ROW, user.getUsername()));
+        if ("AGENT".equals(type)) {
+            // Spec 04 agent workspace: commission statements and the arrears tasks of the agent's book.
+            out.put("statements", jdbc.query("select s.record_ref, s.net_amount, s.line_count, s.status, s.issued_at,"
+                    + " s.paid_at from dist_statement s join dist_intermediary i on i.id = s.intermediary_id where"
+                    + " i.record_ref = ? order by s.id desc", ROW, scope));
+            out.put("arrears", jdbc.query("select p.record_ref, p.customer_name, p.product, p.status, p.premium from"
+                    + " ins_policy p where (p.record_ref in (select a.policy_ref from dist_policy_assignment a join"
+                    + " dist_intermediary i on i.id = a.intermediary_id where i.record_ref = ? and a.ended_on is null) or"
+                    + " p.application_ref in (select ap.record_ref from ins_application ap where ap.intermediary_code ="
+                    + " ?)) and p.status not in ('Active', 'Cancelled', 'Terminated', 'Matured') order by p.id desc", ROW,
+                    scope, scope));
+        }
         return out;
+    }
+
+    /**
+     * The partner a login may act for, checked on every request (AT-SH11-02, AT-SH01-03, NS-SH11-002): the portal link
+     * must not have passed its end date, and the partner itself must still be in good standing: an intermediary
+     * ACTIVE with a current appointment, a scheme not closed, a lender active. Suspending the partner closes the
+     * portal at once, for sessions already open as well.
+     */
+    public Map<String, Object> partnerAccount(AppUser user) {
+        Map<String, Object> account = first("select portal_type, scope_ref, valid_until from portal_account where"
+                + " username = ?", user.getUsername());
+        if (account == null) {
+            throw new NoAuthorizationException("This login is not linked to an agent, employer or lender.");
+        }
+        Object until = account.get("validUntil");
+        if (until instanceof LocalDate end && end.isBefore(LocalDate.now())) {
+            throw new NoAuthorizationException("Your portal access ended on " + end + ".");
+        }
+        String scope = (String) account.get("scopeRef");
+        switch (String.valueOf(account.get("portalType"))) {
+            case "AGENT" -> {
+                Map<String, Object> i = first("select status, appointment_expiry from dist_intermediary where record_ref"
+                        + " = ?", scope);
+                if (i == null || !"ACTIVE".equals(i.get("status"))) {
+                    throw new NoAuthorizationException("Intermediary " + scope + " is "
+                            + (i == null ? "not on record" : i.get("status")) + ", so its portal access is closed.");
+                }
+                if (i.get("appointmentExpiry") instanceof LocalDate expiry && expiry.isBefore(LocalDate.now())) {
+                    throw new NoAuthorizationException("Intermediary " + scope + "'s appointment expired on " + expiry
+                            + ", so its portal access is closed.");
+                }
+            }
+            case "EMPLOYER" -> {
+                Map<String, Object> scheme = first("select scheme_status from ins_scheme where record_ref = ?", scope);
+                if (scheme == null || "CLOSED".equals(scheme.get("schemeStatus"))) {
+                    throw new NoAuthorizationException("Scheme " + scope + " is closed, so its portal access is closed.");
+                }
+            }
+            default -> {
+                Map<String, Object> lender = first("select active from crd_lender where record_ref = ?", scope);
+                Object active = lender == null ? null : lender.get("active");
+                if (lender == null || Boolean.FALSE.equals(active) || Integer.valueOf(0).equals(active)) {
+                    throw new NoAuthorizationException("Lender " + scope + " is not active, so its portal access is"
+                            + " closed.");
+                }
+            }
+        }
+        return account;
     }
 
     /** {requestType, detail}: a partner's request, acknowledged with a reference (NS-UX-005). */
     @Transactional
     public Map<String, Object> portalRequest(JsonNode body) {
         AppUser user = user("USE_PARTNER_PORTAL");
-        Map<String, Object> account = first("select portal_type, scope_ref from portal_account where username = ?",
-                user.getUsername());
-        if (account == null) {
-            throw new NoAuthorizationException("This login is not linked to an agent, employer or lender.");
-        }
+        Map<String, Object> account = partnerAccount(user);
         String type = required(body, "requestType").toUpperCase(Locale.ROOT);
         String detail = required(body, "detail");
         Integer n = jdbc.queryForObject("select count(*) from portal_request", Integer.class);
@@ -190,10 +243,32 @@ public class OpsService {
         if (!Set.of("AGENT", "EMPLOYER", "LENDER").contains(type)) {
             throw new IllegalArgumentException("portalType must be AGENT, EMPLOYER or LENDER.");
         }
+        String until = textOr(body, "validUntil", null);
+        LocalDate end = null;
+        if (until != null) {
+            try {
+                end = LocalDate.parse(until);
+            } catch (java.time.format.DateTimeParseException e) {
+                throw new IllegalArgumentException("validUntil is a date like 2027-12-31.");
+            }
+        }
         jdbc.update("delete from portal_account where username = ?", username);
-        jdbc.update("insert into portal_account (username, portal_type, scope_ref) values (?, ?, ?)", username, type,
-                required(body, "scopeRef"));
-        audit.record(user.getUsername(), "Portal access set", "User", username, type + " " + required(body, "scopeRef"));
+        jdbc.update("insert into portal_account (username, portal_type, scope_ref, valid_until) values (?, ?, ?, ?)",
+                username, type, required(body, "scopeRef"), end);
+        audit.record(user.getUsername(), "Portal access set", "User", username, type + " " + required(body, "scopeRef")
+                + (end == null ? "" : " until " + end));
+        return jdbc.query("select * from portal_account order by username", ROW);
+    }
+
+    /** {reason}: removes a login's portal link; it takes effect on the login's next request (AT-SH11-02). */
+    @Transactional
+    public List<Map<String, Object>> removePortalAccount(String username, JsonNode body) {
+        AppUser user = user("UPDATE_USER");
+        String reason = required(body, "reason");
+        if (jdbc.update("delete from portal_account where username = ?", username) == 0) {
+            throw new NotFoundException("No portal access for " + username);
+        }
+        audit.record(user.getUsername(), "Portal access removed", "User", username, reason);
         return jdbc.query("select * from portal_account order by username", ROW);
     }
 
@@ -205,6 +280,7 @@ public class OpsService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("definitions", jdbc.query("select * from wf_definition order by name", ROW));
         out.put("calendar", first("select * from wf_calendar where id = 1"));
+        out.put("versions", jdbc.query("select * from wf_definition_version order by code, version_no desc", ROW));
         return out;
     }
 
@@ -227,11 +303,34 @@ public class OpsService {
         if (!Set.of("HIGH", "NORMAL", "LOW").contains(priority)) {
             throw new IllegalArgumentException("Priority must be HIGH, NORMAL or LOW.");
         }
+        java.math.BigDecimal limit = body.hasNonNull("authorityLimit") && !body.get("authorityLimit").asText().isBlank()
+                ? new java.math.BigDecimal(body.get("authorityLimit").asText().trim())
+                : body.has("authorityLimit") ? null : (java.math.BigDecimal) d.get("authorityLimit");
+        if (limit != null && limit.signum() < 0) {
+            throw new IllegalArgumentException("The authority limit cannot be negative.");
+        }
+        String roles = textOr(body, "roles", (String) d.get("roles"));
+        if (roles != null) {
+            for (String code2 : roles.split(",")) {
+                if (!code2.isBlank() && !com.nsure.security.domain.PermissionCatalog.isKnown(code2.trim())) {
+                    throw new IllegalArgumentException("Unknown permission code " + code2.trim() + " in roles.");
+                }
+            }
+        }
+        // NS-SH10-001: the version moves on and the new version is kept beside the earlier ones; running service
+        // cases keep the version (and SLA) they were opened under.
         jdbc.update("update wf_definition set name = ?, team = ?, sla_hours = ?, steps = ?, priority = ?,"
+                + " entry_criteria = ?, roles = ?, authority_limit = ?, required_evidence = ?,"
                 + " version_no = version_no + 1, updated_by = ?, updated_at = ? where code = ?",
                 textOr(body, "name", (String) d.get("name")), textOr(body, "team", (String) d.get("team")), sla,
-                textOr(body, "steps", (String) d.get("steps")), priority, user.getUsername(), LocalDateTime.now(),
-                code);
+                textOr(body, "steps", (String) d.get("steps")), priority,
+                textOr(body, "entryCriteria", (String) d.get("entryCriteria")), roles, limit,
+                textOr(body, "requiredEvidence", (String) d.get("requiredEvidence")), user.getUsername(),
+                LocalDateTime.now(), code);
+        jdbc.update("insert into wf_definition_version (code, version_no, name, team, sla_hours, priority, steps,"
+                + " entry_criteria, roles, authority_limit, required_evidence, changed_by, changed_at) select code,"
+                + " version_no, name, team, sla_hours, priority, steps, entry_criteria, roles, authority_limit,"
+                + " required_evidence, updated_by, updated_at from wf_definition where code = ?", code);
         audit.record(user.getUsername(), "Workflow definition changed", "Workflow", code,
                 "SLA " + sla + "h, priority " + priority);
         return workflow();
@@ -253,27 +352,16 @@ public class OpsService {
         return workflow();
     }
 
-    /** Adds working hours to a start time, skipping nights, non-working days and holidays. */
-    static LocalDateTime addWorkingHours(LocalDateTime start, int hours, Map<String, Object> calendar) {
+    /** Adds working minutes to a start time, skipping nights, non-working days and holidays. */
+    public static LocalDateTime addWorkingMinutes(LocalDateTime start, long minutes, Map<String, Object> calendar) {
         int open = (Integer) calendar.get("workStartHour");
         int close = (Integer) calendar.get("workEndHour");
-        Set<DayOfWeek> days = Arrays.stream(String.valueOf(calendar.get("workingDays")).split(","))
-                .map(d -> switch (d.trim()) {
-                    case "MON" -> DayOfWeek.MONDAY;
-                    case "TUE" -> DayOfWeek.TUESDAY;
-                    case "WED" -> DayOfWeek.WEDNESDAY;
-                    case "THU" -> DayOfWeek.THURSDAY;
-                    case "FRI" -> DayOfWeek.FRIDAY;
-                    case "SAT" -> DayOfWeek.SATURDAY;
-                    default -> DayOfWeek.SUNDAY;
-                }).collect(Collectors.toSet());
-        Set<String> holidays = calendar.get("holidays") == null ? Set.of()
-                : Arrays.stream(String.valueOf(calendar.get("holidays")).split(",")).map(String::trim)
-                        .collect(Collectors.toSet());
+        Set<DayOfWeek> days = workingDays(calendar);
+        Set<String> holidays = holidays(calendar);
         LocalDateTime t = start;
-        long minutes = hours * 60L;
+        long left = minutes;
         int guard = 0;
-        while (minutes > 0 && guard++ < 5000) {
+        while (left > 0 && guard++ < 5000) {
             LocalDate day = t.toLocalDate();
             boolean working = days.contains(day.getDayOfWeek()) && !holidays.contains(day.toString());
             LocalDateTime dayOpen = day.atTime(open, 0);
@@ -285,12 +373,67 @@ public class OpsService {
             if (t.isBefore(dayOpen)) {
                 t = dayOpen;
             }
-            long available = java.time.Duration.between(t, dayClose).toMinutes();
-            long used = Math.min(available, minutes);
+            long used = Math.min(java.time.Duration.between(t, dayClose).toMinutes(), left);
             t = t.plusMinutes(used);
-            minutes -= used;
+            left -= used;
         }
         return t;
+    }
+
+    /** Working minutes between two times under the business calendar (NS-SH10-005: working time beside elapsed). */
+    public static long workingMinutesBetween(LocalDateTime from, LocalDateTime to, Map<String, Object> calendar) {
+        if (from == null || to == null || !to.isAfter(from)) {
+            return 0;
+        }
+        int open = (Integer) calendar.get("workStartHour");
+        int close = (Integer) calendar.get("workEndHour");
+        Set<DayOfWeek> days = workingDays(calendar);
+        Set<String> holidays = holidays(calendar);
+        long total = 0;
+        LocalDate day = from.toLocalDate();
+        int guard = 0;
+        while (!day.isAfter(to.toLocalDate()) && guard++ < 5000) {
+            if (days.contains(day.getDayOfWeek()) && !holidays.contains(day.toString())) {
+                LocalDateTime dayOpen = day.atTime(open, 0);
+                LocalDateTime dayClose = close == 24 ? day.plusDays(1).atStartOfDay() : day.atTime(close, 0);
+                LocalDateTime a = from.isAfter(dayOpen) ? from : dayOpen;
+                LocalDateTime b = to.isBefore(dayClose) ? to : dayClose;
+                if (b.isAfter(a)) {
+                    total += java.time.Duration.between(a, b).toMinutes();
+                }
+            }
+            day = day.plusDays(1);
+        }
+        return total;
+    }
+
+    private static Set<DayOfWeek> workingDays(Map<String, Object> calendar) {
+        return Arrays.stream(String.valueOf(calendar.get("workingDays")).split(","))
+                .map(d -> switch (d.trim()) {
+                    case "MON" -> DayOfWeek.MONDAY;
+                    case "TUE" -> DayOfWeek.TUESDAY;
+                    case "WED" -> DayOfWeek.WEDNESDAY;
+                    case "THU" -> DayOfWeek.THURSDAY;
+                    case "FRI" -> DayOfWeek.FRIDAY;
+                    case "SAT" -> DayOfWeek.SATURDAY;
+                    default -> DayOfWeek.SUNDAY;
+                }).collect(Collectors.toSet());
+    }
+
+    private static Set<String> holidays(Map<String, Object> calendar) {
+        return calendar.get("holidays") == null ? Set.of()
+                : Arrays.stream(String.valueOf(calendar.get("holidays")).split(",")).map(String::trim)
+                        .collect(Collectors.toSet());
+    }
+
+    /** The business calendar as a map (workStartHour, workEndHour, workingDays, holidays), for SLA arithmetic. */
+    public Map<String, Object> calendar() {
+        return first("select * from wf_calendar where id = 1");
+    }
+
+    /** Adds working hours to a start time, skipping nights, non-working days and holidays. */
+    public static LocalDateTime addWorkingHours(LocalDateTime start, int hours, Map<String, Object> calendar) {
+        return addWorkingMinutes(start, hours * 60L, calendar);
     }
 
     // ── documents: register, scan status, retention, legal hold, search (NS-SH09A-004..006) ───────
@@ -449,6 +592,114 @@ public class OpsService {
                 docKey, hold, reason, user.getUsername(), LocalDateTime.now());
         audit.record(user.getUsername(), hold ? "Legal hold placed" : "Legal hold lifted", "Document", docKey, reason);
         return Map.of("docKey", docKey, "legalHold", hold);
+    }
+
+    // ── approved disposal (NS-SH09A-006) ─────────────────────────────────────────────────────────
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.nsure.portfolio.DocumentFiles documentFiles;
+
+    /** Disposal requests, newest first. */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> disposals() {
+        staff();
+        return jdbc.query("select * from doc_disposal order by id desc", ROW);
+    }
+
+    /**
+     * {docKey, reason}: asks for a policy document or claim evidence to be disposed of. Only a document past its
+     * retention date and not on legal hold qualifies; nothing happens until someone else approves.
+     */
+    @Transactional
+    public Map<String, Object> requestDisposal(JsonNode body) {
+        AppUser user = user("MANAGE_CONFIG");
+        String key = required(body, "docKey");
+        String reason = required(body, "reason");
+        if (reason.length() < 10) {
+            throw new IllegalArgumentException("Give the reason for disposal (at least 10 characters).");
+        }
+        Map<String, Object> doc = disposable(key);
+        Integer open = jdbc.queryForObject("select count(*) from doc_disposal where doc_key = ? and status = 'PENDING'",
+                Integer.class, key);
+        if (open != null && open > 0) {
+            throw new ConflictException("A disposal of this document is already waiting for approval.");
+        }
+        jdbc.update("insert into doc_disposal (doc_key, file_name, reason, status, requested_by, requested_at) values"
+                + " (?, ?, ?, 'PENDING', ?, ?)", key, doc.get("fileName"), reason, user.getUsername(), LocalDateTime.now());
+        audit.record(user.getUsername(), "Document disposal requested", "Document", key, reason);
+        return first("select * from doc_disposal where doc_key = ? and status = 'PENDING'", key);
+    }
+
+    /**
+     * A second person approves: the file is deleted from storage, its indexed text cleared (no search can find it),
+     * and the row kept as DISPOSED with the decision in the evidence chain. Retention and holds are checked again.
+     */
+    @Transactional
+    public Map<String, Object> decideDisposal(Long id, boolean approve) {
+        AppUser user = user("MANAGE_CONFIG");
+        Map<String, Object> d = first("select * from doc_disposal where id = ?", id);
+        if (d == null) {
+            throw new NotFoundException("Disposal request " + id + " not found");
+        }
+        if (!"PENDING".equals(d.get("status"))) {
+            throw new ConflictException("Disposal request " + id + " is " + d.get("status") + ".");
+        }
+        if (user.getUsername().equalsIgnoreCase((String) d.get("requestedBy"))) {
+            throw new NoAuthorizationException("You asked for this disposal, so another person decides it.");
+        }
+        String key = (String) d.get("docKey");
+        if (approve) {
+            Map<String, Object> doc = disposable(key);
+            String table = key.startsWith("P:") ? "ins_policy_document" : "ins_claim_document";
+            documentFiles.dispose((String) doc.get("storagePath"));
+            jdbc.update("update " + table + " set status = 'DISPOSED', search_text = null where id = ?", doc.get("id"));
+        }
+        jdbc.update("update doc_disposal set status = ?, decided_by = ?, decided_at = ? where id = ?",
+                approve ? "DISPOSED" : "REJECTED", user.getUsername(), LocalDateTime.now(), id);
+        audit.record(user.getUsername(), approve ? "Document disposed" : "Document disposal rejected", "Document", key,
+                "Requested by " + d.get("requestedBy") + ": " + d.get("reason"));
+        return first("select * from doc_disposal where id = ?", id);
+    }
+
+    /** The document behind a key, refused unless its retention has passed and it is not on legal hold. */
+    private Map<String, Object> disposable(String key) {
+        String table;
+        String docClass;
+        if (key.startsWith("P:")) {
+            table = "ins_policy_document";
+            docClass = "Policy document";
+        } else if (key.startsWith("C:")) {
+            table = "ins_claim_document";
+            docClass = "Claim evidence";
+        } else {
+            throw new IllegalArgumentException("Only policy documents and claim evidence are disposed of here.");
+        }
+        long id;
+        try {
+            id = Long.parseLong(key.substring(2));
+        } catch (NumberFormatException e) {
+            throw new NotFoundException("Document " + key + " not found");
+        }
+        Map<String, Object> doc = first("select id, file_name, storage_path, status, uploaded_at from " + table
+                + " where id = ?", id);
+        if (doc == null) {
+            throw new NotFoundException("Document " + key + " not found");
+        }
+        if ("DISPOSED".equals(doc.get("status"))) {
+            throw new ConflictException(doc.get("fileName") + " was already disposed of.");
+        }
+        Map<String, Object> control = first("select legal_hold, hold_reason from doc_control where doc_key = ?", key);
+        if (control != null && Boolean.TRUE.equals(control.get("legalHold"))) {
+            throw new ConflictException(doc.get("fileName") + " is on legal hold (" + control.get("holdReason")
+                    + "), so it cannot be disposed of.");
+        }
+        Integer years = jdbc.queryForObject("select retain_years from doc_retention where document_class = ?",
+                Integer.class, docClass);
+        LocalDate retainUntil = ((LocalDateTime) doc.get("uploadedAt")).toLocalDate().plusYears(years == null ? 7 : years);
+        if (!retainUntil.isBefore(LocalDate.now())) {
+            throw new ConflictException(doc.get("fileName") + " must be kept until " + retainUntil + ".");
+        }
+        return doc;
     }
 
     /** {documentClass, retainYears} */

@@ -60,6 +60,10 @@ public class PlatformService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.nsure.reporting.MetricDictionary dictionary;
 
+    /** Duplicate matching and steward-approved merges (SH01, work package e). */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.nsure.portfolio.PartyService partyMaster;
+
     public PlatformService(EntityManager em, JdbcTemplate jdbc, PlatformSecurityContext security, EvidenceChain audit) {
         this.em = em;
         this.jdbc = jdbc;
@@ -69,57 +73,13 @@ public class PlatformService {
 
     // ── party duplicates and merge (NS-SH01-002) ──────────────────────────────────────────────────
 
-    /** Pairs of customers that may be the same person, with why. A matching name alone is only "possible". */
+    /**
+     * Pairs of customers that may be the same person, with why. A matching name alone is only "possible". The
+     * matching (deterministic and configurable fuzzy rules) is the party master's (SH01, PartyService).
+     */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> duplicates() {
-        user("READ_CUSTOMER");
-        List<CustomerAccount> all = em.createQuery("select c from CustomerAccount c order by c.ref", CustomerAccount.class)
-                .getResultList().stream().filter(c -> c.getStatus() == null || !c.getStatus().startsWith("Merged")).toList();
-        List<Map<String, Object>> pairs = new ArrayList<>();
-        for (int i = 0; i < all.size(); i++) {
-            for (int j = i + 1; j < all.size(); j++) {
-                CustomerAccount a = all.get(i);
-                CustomerAccount b = all.get(j);
-                List<String> reasons = new ArrayList<>();
-                boolean strong = false;
-                if (same(a.getPoiNumber(), b.getPoiNumber())) {
-                    reasons.add("Same identity number");
-                    strong = true;
-                }
-                if (same(a.getEmail(), b.getEmail())) {
-                    reasons.add("Same email");
-                    strong = true;
-                }
-                if (same(digits(a.getPhone()), digits(b.getPhone()))) {
-                    reasons.add("Same phone");
-                }
-                boolean name = same(normal(a.getName()), normal(b.getName()));
-                if (name) {
-                    reasons.add("Same name");
-                }
-                if (name && a.getDateOfBirth() != null && a.getDateOfBirth().equals(b.getDateOfBirth())) {
-                    reasons.add("Same date of birth");
-                    strong = true;
-                }
-                if (reasons.isEmpty() || reasons.equals(List.of("Same phone"))) {
-                    continue;
-                }
-                // A record staff kept despite the match carries their note (NS-SH01-002: referred, not merged).
-                for (CustomerAccount c : List.of(a, b)) {
-                    if (c.getDuplicateReview() != null && !c.getDuplicateReview().isBlank()) {
-                        reasons.add(c.getRef() + " referred when created: " + c.getDuplicateReview());
-                    }
-                }
-                Map<String, Object> pair = new LinkedHashMap<>();
-                pair.put("first", party(a));
-                pair.put("second", party(b));
-                pair.put("reasons", reasons);
-                // AT-SH01-01: a name match alone is never enough to merge without a steward's judgement.
-                pair.put("confidence", strong ? "LIKELY" : "POSSIBLE");
-                pairs.add(pair);
-            }
-        }
-        return pairs;
+        return partyMaster.duplicates();
     }
 
     @Transactional(readOnly = true)
@@ -140,40 +100,12 @@ public class PlatformService {
     }
 
     /**
-     * {survivingRef, mergedRef, reason}: a data steward merges two records. Every application, policy and claim moves
-     * to the surviving record; the merged reference stays resolvable through the merge register (AT-SH01-02).
+     * {survivingRef, mergedRef, reason}: asks for a merge. Nothing moves until a data steward who is someone else
+     * approves it (NS-SH01-002, PartyService); the request is returned with status PENDING.
      */
     @Transactional
     public Map<String, Object> merge(JsonNode body) {
-        AppUser user = user("KYC_CUSTOMER");
-        CustomerAccount keep = customer(text(body, "survivingRef"));
-        CustomerAccount gone = customer(text(body, "mergedRef"));
-        String reason = text(body, "reason");
-        if (keep.getRef().equals(gone.getRef())) {
-            throw new IllegalArgumentException("Choose two different records.");
-        }
-        if (reason == null || reason.length() < 10) {
-            throw new IllegalArgumentException("Say why these are the same party (at least 10 characters).");
-        }
-        if (gone.getStatus() != null && gone.getStatus().startsWith("Merged")) {
-            throw new ConflictException(gone.getRef() + " has already been merged.");
-        }
-        // The portfolio module moves its own records, as entities under their row versions (NS-ARC-002).
-        int moved = parties.moveRecords(gone, keep);
-        keep.setPolicyCount(keep.getPolicyCount() + gone.getPolicyCount());
-        gone.setPolicyCount(0);
-        gone.setStatus("Merged into " + keep.getRef());
-        jdbc.update("insert into pty_merge (surviving_ref, merged_ref, merged_name, reason, records_moved, merged_by,"
-                + " merged_at) values (?, ?, ?, ?, ?, ?, ?)", keep.getRef(), gone.getRef(), gone.getName(), reason, moved,
-                user.getUsername(), LocalDateTime.now());
-        audit.record(user.getUsername(), "Parties merged", "Customer", keep.getRef(), gone.getRef() + " merged in: "
-                + reason);
-        parties.merged(keep, gone, moved, user.getUsername());
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("survivingRef", keep.getRef());
-        out.put("mergedRef", gone.getRef());
-        out.put("recordsMoved", moved);
-        return out;
+        return partyMaster.requestMerge(body);
     }
 
     // ── wording library (NS-SH09A-001) ────────────────────────────────────────────────────────────
@@ -869,19 +801,6 @@ public class PlatformService {
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────
 
-    private Map<String, Object> party(CustomerAccount c) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("ref", c.getRef());
-        m.put("name", c.getName());
-        m.put("email", c.getEmail());
-        m.put("phone", c.getPhone());
-        m.put("dateOfBirth", c.getDateOfBirth());
-        m.put("identityNumber", c.getPoiNumber());
-        m.put("identityType", c.getPoiType());
-        m.put("policies", c.getPolicyCount());
-        return m;
-    }
-
     private CustomerAccount customer(String ref) {
         if (ref == null) {
             throw new IllegalArgumentException("Choose the customer.");
@@ -889,18 +808,6 @@ public class PlatformService {
         return em.createQuery("select c from CustomerAccount c where c.ref = :ref", CustomerAccount.class)
                 .setParameter("ref", ref.toUpperCase(Locale.ROOT)).getResultStream().findFirst()
                 .orElseThrow(() -> new NotFoundException("Customer " + ref + " not found"));
-    }
-
-    private static boolean same(String a, String b) {
-        return a != null && b != null && !a.isBlank() && a.trim().equalsIgnoreCase(b.trim());
-    }
-
-    private static String normal(String name) {
-        return name == null ? null : name.toLowerCase(Locale.ROOT).replaceAll("[^a-z]", "");
-    }
-
-    private static String digits(String phone) {
-        return phone == null ? null : phone.replaceAll("\\D", "");
     }
 
     private static String sha256(String value) {

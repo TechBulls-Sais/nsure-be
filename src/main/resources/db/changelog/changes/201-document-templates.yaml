@@ -1,0 +1,40 @@
+databaseChangeLog:
+  # SH09A NS-SH09A-002 (work package e): generation templates per document kind (schedule, certificate, invoice,
+  # letter, claim letter), versioned, validated (known merge fields, required fields, balanced conditional clauses, a
+  # page limit) and published only when a second person approves the rendered sample output, whose hash is kept.
+  # The two starter templates are approved content the insurer replaces, like the starter message templates.
+  - changeSet:
+      id: 201-document-templates
+      author: nsure
+      changes:
+        - createTable:
+            tableName: doc_template
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_doc_template}}
+              - column: {name: code, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: kind, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: version_no, type: int, constraints: {nullable: false}}
+              - column: {name: title, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: body, type: varchar(4000), constraints: {nullable: false}}
+              - column: {name: required_fields, type: varchar(500)}
+              - column: {name: max_pages, type: int, constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: timestamp(6)}
+              - column: {name: sample_sha256, type: varchar(64)}
+        - addUniqueConstraint:
+            tableName: doc_template
+            columnNames: code, version_no
+            constraintName: uk_doc_template
+        - sql:
+            sql: |
+              INSERT INTO doc_template (code, kind, version_no, title, body, required_fields, max_pages, status, created_by, created_at, approved_by, approved_at)
+              VALUES ('POLICY_CONFIRMATION', 'LETTER', 1, 'Confirmation of cover',
+                      'Dear {{customerName}},\n\nThis letter confirms that your {{product}} policy {{policyRef}} is {{status}}.\n{{#if sumAssured}}The sum assured is {{sumAssured}}.\n{{/if}}{{#if premium}}Your premium is {{premium}}.\n{{/if}}\nYour full policy schedule and terms are in your secure portal.\n\nYours sincerely,\n{{insurerName}}',
+                      'customerName,policyRef', 2, 'APPROVED', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP);
+              INSERT INTO doc_template (code, kind, version_no, title, body, required_fields, max_pages, status, created_by, created_at, approved_by, approved_at)
+              VALUES ('CERTIFICATE_OF_COVER', 'CERTIFICATE', 1, 'Certificate of cover',
+                      'This certifies that {{customerName}} is covered under {{product}} policy {{policyRef}}.\n{{#if sumAssured}}Sum assured: {{sumAssured}}.\n{{/if}}Status on {{today}}: {{status}}.\n\nIssued by {{insurerName}}.',
+                      'customerName,policyRef,status', 1, 'APPROVED', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP);

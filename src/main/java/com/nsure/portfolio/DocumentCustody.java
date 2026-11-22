@@ -50,7 +50,7 @@ public class DocumentCustody {
     }
 
     /** Refuses a file whose bytes no longer match the hash recorded when it was stored. Older rows have no hash. */
-    void verify(String expectedSha256, String storagePath, String what) {
+    public void verify(String expectedSha256, String storagePath, String what) {
         if (expectedSha256 == null) {
             return;
         }
@@ -60,8 +60,23 @@ public class DocumentCustody {
         }
     }
 
+    /** The permission staff need, beside the record's own, to open health evidence (NS-SH11-002 record sensitivity). */
+    public static final String HEALTH_PERMISSION = "READ_HEALTH_EVIDENCE";
+
+    /**
+     * Refuses a staff member who may read the record but not its health evidence (a medical report, hospital bill or
+     * death certificate). The customer opening their own document is not affected.
+     */
+    public void requireSensitiveAccess(String documentType, com.nsure.security.domain.AppUser user, String channel) {
+        if (STAFF.equals(channel) && "Sensitive: health".equals(DocumentIntake.classification(documentType))
+                && !user.hasPermissionTo(HEALTH_PERMISSION)) {
+            throw new com.nsure.security.exception.NoAuthorizationException("This " + documentType.toLowerCase(
+                    java.util.Locale.ROOT) + " is health evidence; opening it needs the health evidence permission.");
+        }
+    }
+
     /** Logs one download. */
-    void logAccess(String kind, Long documentId, String ownerRef, String fileName, String username, String channel) {
+    public void logAccess(String kind, Long documentId, String ownerRef, String fileName, String username, String channel) {
         em.persist(new DocumentAccess(kind, documentId, ownerRef, fileName, username, channel));
         // Opening a document is sensitive access (NS-SH11-005).
         evidence.record(username, "Downloaded " + kind + " document", kind, ownerRef, fileName + " via " + channel);

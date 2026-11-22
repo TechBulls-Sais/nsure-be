@@ -399,6 +399,30 @@ databaseChangeLog:
       file: changes/185-treaty-terms-and-bordereaux.yaml
       relativeToChangelogFile: true
   - include:
+      file: changes/195-communication-delivery-rules.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/196-party-master.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/197-service-cases-and-evidence.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/198-security-scoping.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/199-partner-submissions.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/200-document-links-and-disposal.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/201-document-templates.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/202-approval-delegation.yaml
+      relativeToChangelogFile: true
+  - include:
       file: changes/210-interface-catalogue.yaml
       relativeToChangelogFile: true
   - include:

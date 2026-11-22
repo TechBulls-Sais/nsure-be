@@ -71,11 +71,18 @@ class ServiceDeskApiTest {
         assertThat(complaint).startsWith("CMP-");
 
         String body = detail(request);
-        assertThat(hours(JsonPath.read(body, "$.case.openedAt"), JsonPath.read(body, "$.case.dueAt"))).isEqualTo(72);
+        // NS-SH10-005 / NS-SH10-001: 72 working hours of the business calendar, under the workflow's version.
+        assertThat(hours(JsonPath.read(body, "$.case.openedAt"), JsonPath.read(body, "$.case.dueAt")))
+                .isGreaterThanOrEqualTo(72);
+        assertThat((String) JsonPath.read(body, "$.case.slaBasis")).isEqualTo("WORKING_HOURS");
+        assertThat((Integer) JsonPath.read(body, "$.case.slaHours")).isEqualTo(72);
+        assertThat((Integer) JsonPath.read(body, "$.case.workflowVersion")).isNotNull();
         assertThat((String) JsonPath.read(body, "$.case.channel")).isEqualTo("PHONE");
         assertThat((String) JsonPath.read(body, "$.history[0].action")).isEqualTo("Opened");
         body = detail(complaint);
-        assertThat(hours(JsonPath.read(body, "$.case.openedAt"), JsonPath.read(body, "$.case.dueAt"))).isEqualTo(120);
+        assertThat(hours(JsonPath.read(body, "$.case.openedAt"), JsonPath.read(body, "$.case.dueAt")))
+                .isGreaterThanOrEqualTo(120);
+        assertThat((Integer) JsonPath.read(body, "$.case.slaHours")).isEqualTo(120);
         assertThat((Boolean) JsonPath.read(body, "$.case.breached")).isFalse();
 
         // ServiceCaseOpened → the communications handler acknowledges the case with its reference (NS-UX-005).
@@ -140,11 +147,27 @@ class ServiceDeskApiTest {
                 .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/service/cases/" + ref + "/resume"), "service", "{}"))
                 .andExpect(status().isUnprocessableEntity());
+        // NS-SH10-005: only an approved reason, with its evidence and an expected resume date within its limit.
         mockMvc.perform(json(post("/service/cases/" + ref + "/pause"), "service",
                         "{\"reason\":\"Awaiting bank statement from customer\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/service/cases/" + ref + "/pause"), "service",
+                        "{\"code\":\"AWAITING_CUSTOMER\",\"expectedResume\":\"" + java.time.LocalDate.now().plusDays(5)
+                                + "\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/service/cases/" + ref + "/pause"), "service",
+                        "{\"code\":\"AWAITING_CUSTOMER\",\"evidence\":\"Bank statement asked for by email\","
+                                + "\"expectedResume\":\"" + java.time.LocalDate.now().plusDays(60) + "\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/service/cases/" + ref + "/pause"), "service",
+                        "{\"code\":\"AWAITING_CUSTOMER\",\"evidence\":\"Bank statement asked for by email\","
+                                + "\"expectedResume\":\"" + java.time.LocalDate.now().plusDays(5) + "\","
+                                + "\"reason\":\"Awaiting bank statement from customer\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.case.status").value("PAUSED"))
-                .andExpect(jsonPath("$.case.pauseReason").value("Awaiting bank statement from customer"));
+                .andExpect(jsonPath("$.case.pauseCode").value("AWAITING_CUSTOMER"))
+                .andExpect(jsonPath("$.case.pauseEvidence").value("Bank statement asked for by email"))
+                .andExpect(jsonPath("$.case.pauseReason").value(containsString("Awaiting bank statement from customer")));
 
         // Opened three hours ago, paused for the last ninety minutes.
         LocalDateTime now = LocalDateTime.now();
@@ -169,9 +192,14 @@ class ServiceDeskApiTest {
                 .andReturn().getResponse().getContentAsString();
         int paused = JsonPath.read(body, "$.case.pausedMinutes");
         assertThat(paused).isBetween(89, 91);
+        // The due time moves out by the working minutes the pause used (none at night or on a weekend).
+        int pausedWorking = JsonPath.read(body, "$.case.pausedWorkingMinutes");
+        assertThat(pausedWorking).isBetween(0, 91);
         String dueAfter = JsonPath.read(body, "$.case.dueAt");
-        assertThat(Duration.between(LocalDateTime.parse(dueBefore), LocalDateTime.parse(dueAfter)).toMinutes())
-                .isEqualTo(paused);
+        java.util.Map<String, Object> calendar = JsonPath.read(mockMvc.perform(get("/ops/workflow")
+                .with(signedIn("service", "password"))).andReturn().getResponse().getContentAsString(), "$.calendar");
+        assertThat(LocalDateTime.parse(dueAfter)).isEqualTo(com.nsure.ops.OpsService.addWorkingMinutes(
+                LocalDateTime.parse(dueBefore), pausedWorking, calendar));
 
         // Past its due date and not resolved: breached.
         tx.executeWithoutResult(status -> em.createQuery("update ServiceCase c set c.dueAt = :due where c.ref = :ref")
@@ -193,7 +221,11 @@ class ServiceDeskApiTest {
                 .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/service/cases/" + ref + "/resolve"), "service",
                         "{\"resolution\":\"Statement emailed\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/service/cases/" + ref + "/resolve"), "service",
+                        "{\"resolution\":\"Statement emailed\",\"resolutionCode\":\"INFORMATION_GIVEN\"}"))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.case.resolutionCode").value("INFORMATION_GIVEN"))
                 .andExpect(jsonPath("$.case.status").value("RESOLVED"))
                 .andExpect(jsonPath("$.case.resolution").value("Statement emailed"));
         mockMvc.perform(json(post("/service/cases/" + ref + "/reopen"), "service", "{}"))
@@ -206,7 +238,7 @@ class ServiceDeskApiTest {
                 .andExpect(jsonPath("$.history[?(@.action == 'Reopened')].details")
                         .value(hasItem(containsString("Previous resolution: Statement emailed"))));
         mockMvc.perform(json(post("/service/cases/" + ref + "/resolve"), "service",
-                        "{\"resolution\":\"Statement posted\"}"))
+                        "{\"resolution\":\"Statement posted\",\"resolutionCode\":\"DONE_AS_REQUESTED\"}"))
                 .andExpect(status().isOk());
         mockMvc.perform(json(post("/service/cases/" + ref + "/close"), "service", "{}"))
                 .andExpect(status().isOk())

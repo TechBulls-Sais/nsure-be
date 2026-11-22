@@ -1,0 +1,33 @@
+databaseChangeLog:
+  # SH09A NS-SH09A-006 (work package e): short-lived retrieval links and approved disposal. A link is bound to the
+  # person who asked for it, expires after nsure.documents.link-minutes (10, demo default) and works once; each use is
+  # logged as a delivery. A document past its retention and not on legal hold is disposed of only when someone other
+  # than the requester approves: the file is deleted, its search text cleared, and the row kept as DISPOSED.
+  - changeSet:
+      id: 200-document-links-and-disposal
+      author: nsure
+      changes:
+        - createTable:
+            tableName: doc_link
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_doc_link}}
+              - column: {name: token_hash, type: varchar(64), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_doc_link_token}}
+              - column: {name: doc_kind, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: document_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: owner_ref, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: username, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: expires_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: used_at, type: timestamp(6)}
+        - createTable:
+            tableName: doc_disposal
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_doc_disposal}}
+              - column: {name: doc_key, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: file_name, type: varchar(255), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: timestamp(6)}

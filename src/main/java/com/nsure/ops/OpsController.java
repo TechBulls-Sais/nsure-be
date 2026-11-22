@@ -48,6 +48,12 @@ public class OpsController {
         return ops.portalAccounts();
     }
 
+    @org.springframework.web.bind.annotation.DeleteMapping("/portal-accounts/{username}")
+    public List<Map<String, Object>> removePortalAccount(@PathVariable String username,
+            @RequestBody(required = false) JsonNode body) {
+        return ops.removePortalAccount(username, body);
+    }
+
     @PutMapping("/portal-accounts")
     public List<Map<String, Object>> savePortalAccount(@RequestBody JsonNode body) {
         return ops.savePortalAccount(body);
@@ -78,6 +84,26 @@ public class OpsController {
             @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(
                     iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate to) {
         return ops.documents(q, customerRef, ownerRef, documentClass, from, to);
+    }
+
+    @GetMapping("/documents/disposals")
+    public List<Map<String, Object>> disposals() {
+        return ops.disposals();
+    }
+
+    @PostMapping("/documents/disposals")
+    public Map<String, Object> requestDisposal(@RequestBody JsonNode body) {
+        return ops.requestDisposal(body);
+    }
+
+    @PostMapping("/documents/disposals/{id}/approve")
+    public Map<String, Object> approveDisposal(@PathVariable Long id) {
+        return ops.decideDisposal(id, true);
+    }
+
+    @PostMapping("/documents/disposals/{id}/reject")
+    public Map<String, Object> rejectDisposal(@PathVariable Long id) {
+        return ops.decideDisposal(id, false);
     }
 
     @PutMapping("/documents/hold")

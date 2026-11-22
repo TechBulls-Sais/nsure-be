@@ -54,7 +54,8 @@ public class MessagingWebhooks {
 
     public MessagingWebhooks(EntityManager em, CommunicationService communications, ServiceDeskService serviceDesk,
             PlatformSecurityContext security, ObjectMapper mapper, Outbox outbox, EvidenceChain audit,
-            @Value("${nsure.messaging.webhook-secret:local-messaging-webhook-secret}") String secret) {
+            @Value("${nsure.messaging.webhook-secret:}") String secret,
+            org.springframework.core.env.Environment environment) {
         this.outbox = outbox;
         this.audit = audit;
         this.em = em;
@@ -62,8 +63,18 @@ public class MessagingWebhooks {
         this.serviceDesk = serviceDesk;
         this.security = security;
         this.mapper = mapper;
-        this.secret = secret.getBytes(StandardCharsets.UTF_8);
+        // NS-SH11-001/004: the published local secret is never shared with a real installation. It is used only in a
+        // dev or demo profile when none is configured; anywhere else, without a configured secret every callback is
+        // refused.
+        String chosen = secret == null || secret.isBlank()
+                ? environment.acceptsProfiles(org.springframework.core.env.Profiles.of("(dev | demo) & !prod"))
+                        ? LOCAL_SECRET : null
+                : secret.trim();
+        this.secret = chosen == null ? null : chosen.getBytes(StandardCharsets.UTF_8);
     }
+
+    /** The published secret for local and demo installations only. */
+    static final String LOCAL_SECRET = "local-messaging-webhook-secret";
 
     /** {providerMessageId, status: DELIVERED | READ | FAILED, detail}. */
     @Transactional
@@ -198,6 +209,10 @@ public class MessagingWebhooks {
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────────
 
     private JsonNode verified(String raw, String signature) {
+        if (secret == null) {
+            throw new NoAuthorizationException("Messaging callbacks are not configured on this installation"
+                    + " (nsure.messaging.webhook-secret).");
+        }
         String expected = "sha256=" + hmac(raw == null ? "" : raw);
         if (signature == null || !MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8),
                 signature.trim().toLowerCase(Locale.ROOT).getBytes(StandardCharsets.UTF_8))) {
