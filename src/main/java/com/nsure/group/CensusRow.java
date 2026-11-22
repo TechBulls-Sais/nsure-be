@@ -22,6 +22,8 @@ public class CensusRow {
     public static final String INVALID = "INVALID";
     public static final String APPLIED = "APPLIED";
     public static final String REJECTED = "REJECTED";
+    /** Valid, but waiting for an authorised review before it may apply (AT-GL04-03). */
+    public static final String HELD = "HELD";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -83,6 +85,43 @@ public class CensusRow {
     @Column(name = "row_key", length = 80)
     private String rowKey;
 
+    /** Why the row is held for review, and who reviewed it with what note. */
+    @Column(name = "hold_reason", length = 500)
+    private String holdReason;
+
+    @Column(name = "reviewed_by", length = 100)
+    private String reviewedBy;
+
+    @Column(name = "reviewed_at")
+    private java.time.LocalDateTime reviewedAt;
+
+    @Column(name = "review_note", length = 300)
+    private String reviewNote;
+
+    /** Supplementary adjustments the applied row created (GL04 workspace: created transaction ids). */
+    @Column(name = "adjustment_refs", length = 200)
+    private String adjustmentRefs;
+
+    /** Correction batches: the original line this row corrects, and on an original row what corrected it. */
+    @Column(name = "corrects_line")
+    private Integer correctsLine;
+
+    @Column(name = "corrected_by", length = 40)
+    private String correctedBy;
+
+    @Column(name = "national_id", length = 30)
+    private String nationalId;
+
+    @Column(name = "relationship", length = 20)
+    private String relationship;
+
+    /** Preview (NS-GL04-005): a full month's premium on the member's cover before and after the row. */
+    @Column(name = "premium_before", precision = 15, scale = 2)
+    private java.math.BigDecimal premiumBefore;
+
+    @Column(name = "premium_after", precision = 15, scale = 2)
+    private java.math.BigDecimal premiumAfter;
+
     protected CensusRow() {
     }
 
@@ -100,6 +139,78 @@ public class CensusRow {
         this.activelyAtWork = cells.length > 8 ? clip(cells[8], 5) : null;
         this.eligibleDate = cells.length > 9 ? clip(cells[9], 20) : null;
         this.rowKey = cells.length > 10 ? clip(cells[10] == null ? null : cells[10].trim(), 80) : null;
+        this.nationalId = cells.length > 11 ? clip(cells[11] == null ? null : cells[11].trim(), 30) : null;
+        this.relationship = cells.length > 12 ? clip(cells[12] == null ? null : cells[12].trim(), 20) : null;
+        if (cells.length > 13 && cells[13] != null && cells[13].trim().matches("\\d{1,6}")) {
+            this.correctsLine = Integer.valueOf(cells[13].trim());
+        }
+    }
+
+    void hold(String reason) {
+        this.holdReason = clip(reason, 500);
+    }
+
+    void reviewed(String actor, String note) {
+        this.reviewedBy = actor;
+        this.reviewNote = clip(note, 300);
+        this.reviewedAt = java.time.LocalDateTime.now();
+    }
+
+    void adjustments(String refs) {
+        this.adjustmentRefs = clip(refs, 200);
+    }
+
+    void correctedBy(String ref) {
+        this.correctedBy = clip(ref, 40);
+    }
+
+    void premiums(java.math.BigDecimal before, java.math.BigDecimal after) {
+        this.premiumBefore = before;
+        this.premiumAfter = after;
+    }
+
+    public String getHoldReason() {
+        return holdReason;
+    }
+
+    public String getReviewedBy() {
+        return reviewedBy;
+    }
+
+    public java.time.LocalDateTime getReviewedAt() {
+        return reviewedAt;
+    }
+
+    public String getReviewNote() {
+        return reviewNote;
+    }
+
+    public String getAdjustmentRefs() {
+        return adjustmentRefs;
+    }
+
+    public Integer getCorrectsLine() {
+        return correctsLine;
+    }
+
+    public String getCorrectedBy() {
+        return correctedBy;
+    }
+
+    public String getNationalId() {
+        return nationalId;
+    }
+
+    public String getRelationship() {
+        return relationship;
+    }
+
+    public java.math.BigDecimal getPremiumBefore() {
+        return premiumBefore;
+    }
+
+    public java.math.BigDecimal getPremiumAfter() {
+        return premiumAfter;
     }
 
     void outcome(String status, String error) {

@@ -306,6 +306,24 @@ databaseChangeLog:
       file: changes/111-mysql-new-booleans.yaml
       relativeToChangelogFile: true
   - include:
+      file: changes/150-group-cover-history.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/151-group-supplementary-billing.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/152-group-renewal.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/153-group-credit.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/154-group-credit-demo.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/155-group-census-terms.yaml
+      relativeToChangelogFile: true
+  - include:
       file: changes/210-interface-catalogue.yaml
       relativeToChangelogFile: true
   - include:

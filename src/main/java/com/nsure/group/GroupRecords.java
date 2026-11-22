@@ -28,10 +28,12 @@ public class GroupRecords {
 
     private final EntityManager em;
     private final com.nsure.integration.Outbox outbox;
+    private final CoverHistory cover;
 
-    public GroupRecords(EntityManager em, com.nsure.integration.Outbox outbox) {
+    public GroupRecords(EntityManager em, com.nsure.integration.Outbox outbox, CoverHistory cover) {
         this.em = em;
         this.outbox = outbox;
+        this.cover = cover;
     }
 
     /**
@@ -266,14 +268,37 @@ public class GroupRecords {
                 m.fullName(), m.getDateOfBirth(), c.getCode(), c.getName(), m.getSalary(), m.getStatus(),
                 m.getJoinDate(), m.getExitDate(), m.getRequestedCover(), m.getAcceptedCover(), m.getPendingCover(),
                 premium, m.getUnderwritingDecision(), m.getUnderwritingReason(), m.getUnderwrittenBy(),
-                m.getUnderwrittenAt(), m.getSourceBatchRef(), m.getActivelyAtWork(), m.getRowVersion());
+                m.getUnderwrittenAt(), m.getSourceBatchRef(), m.getActivelyAtWork(), m.getRowVersion(),
+                membershipStatus(m), coverStatus(m), m.getPartyRef());
+    }
+
+    /** Membership of the scheme, separate from cover (GL03 workspace): on the scheme, suspended with it, or left. */
+    static String membershipStatus(SchemeMember m) {
+        return SchemeMember.CEASED.equals(m.getStatus()) ? "LEFT"
+                : SchemeMember.SUSPENDED.equals(m.getStatus()) ? "SUSPENDED" : "ON_SCHEME";
+    }
+
+    /** The benefit's cover status: in force, partly pending underwriting, pending, declined or ended. */
+    static String coverStatus(SchemeMember m) {
+        if (SchemeMember.CEASED.equals(m.getStatus())) {
+            return "ENDED";
+        }
+        if (SchemeMember.SUSPENDED.equals(m.getStatus())) {
+            return "SUSPENDED";
+        }
+        boolean accepted = m.getAcceptedCover().signum() > 0;
+        boolean pending = m.getPendingCover().signum() > 0;
+        if (!accepted && !pending) {
+            return "DECLINED";
+        }
+        return accepted && pending ? "IN_FORCE_PART_PENDING" : pending ? "PENDING_UNDERWRITING" : "IN_FORCE";
     }
 
     static GroupViews.CensusBatchSummaryView batchSummary(CensusBatch b) {
         return new GroupViews.CensusBatchSummaryView(b.getRef(), b.getScheme().getRef(), b.getExternalBatchId(),
                 b.getMode(), b.getStatus(), b.getFileHash(), b.getTotalRows(), b.getValidRows(), b.getInvalidRows(),
                 b.getAcceptedRows(), b.getRejectedRows(), b.getSubmittedBy(), b.getSubmittedAt(), b.getCommittedBy(),
-                b.getCommittedAt());
+                b.getCommittedAt(), b.getHeldRows(), b.getSchemaVersion(), b.getCorrectsBatchRef());
     }
 
     GroupViews.CensusBatchView batchView(CensusBatch b) {
@@ -285,12 +310,20 @@ public class GroupRecords {
                 .map(r -> new GroupViews.CensusRowView(r.getLineNo(), r.getMemberKey(), r.getFirstName(),
                         r.getLastName(), r.getDateOfBirth(), r.getCategoryCode(), r.getSalary(), r.getAction(),
                         r.getEffectiveDate(), r.getStatus(), r.getError(), r.getMemberId(), r.getChangeId(),
-                        r.getRowKey()))
+                        r.getRowKey(), r.getHoldReason(), r.getReviewedBy(), r.getReviewNote(), r.getAdjustmentRefs(),
+                        r.getCorrectsLine(), r.getCorrectedBy(), r.getPremiumBefore(), r.getPremiumAfter()))
                 .toList();
+        BigDecimal before = rows.stream().filter(r -> !CensusRow.INVALID.equals(r.status())
+                        && !CensusRow.REJECTED.equals(r.status()) && r.premiumBefore() != null)
+                .map(GroupViews.CensusRowView::premiumBefore).reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add);
+        BigDecimal after = rows.stream().filter(r -> !CensusRow.INVALID.equals(r.status())
+                        && !CensusRow.REJECTED.equals(r.status()) && r.premiumAfter() != null)
+                .map(GroupViews.CensusRowView::premiumAfter).reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add);
         return new GroupViews.CensusBatchView(b.getRef(), b.getScheme().getRef(), b.getScheme().getName(),
                 b.getExternalBatchId(), b.getMode(), b.getStatus(), b.getFileHash(), b.getTotalRows(),
                 b.getValidRows(), b.getInvalidRows(), b.getAcceptedRows(), b.getRejectedRows(), b.getSubmittedBy(),
-                b.getSubmittedAt(), b.getCommittedBy(), b.getCommittedAt(), rows);
+                b.getSubmittedAt(), b.getCommittedBy(), b.getCommittedAt(), rows, b.getHeldRows(), b.getSchemaVersion(),
+                b.getCorrectsBatchRef(), before, after, cover.prorationText());
     }
 
     GroupViews.InvoiceView invoiceView(SchemeInvoice invoice) {
@@ -310,7 +343,14 @@ public class GroupRecords {
             lines.computeIfAbsent(l.getInvoice().getId(), id -> new ArrayList<>())
                     .add(new GroupViews.InvoiceLineView(l.getMemberId(), l.getMemberKey(), l.getMemberName(),
                             l.getCategoryCode(), l.getAcceptedCover(), l.getRatePerMille(), l.getDaysCovered(),
-                            l.getDaysInPeriod(), l.getPremium(), l.getDisputeStatus(), l.getDisputeNote()));
+                            l.getDaysInPeriod(), l.getPremium(), l.getDisputeStatus(), l.getDisputeNote(), l.getId(),
+                            l.getPaidAmount()));
+        }
+        Map<Long, List<GroupViews.AdjustmentView>> adjustments = new HashMap<>();
+        for (GroupViews.AdjustmentView a : adjustmentViews(invoices)) {
+            Long invoiceId = invoices.stream().filter(i -> i.getRef().equals(a.invoiceRef())).findFirst()
+                    .map(SchemeInvoice::getId).orElse(null);
+            adjustments.computeIfAbsent(invoiceId, id -> new ArrayList<>()).add(a);
         }
         Map<Long, List<GroupViews.ReceiptView>> receipts = new HashMap<>();
         for (SponsorReceipt r : em.createQuery(
@@ -325,12 +365,39 @@ public class GroupRecords {
                         i.getOutstanding(), lines.getOrDefault(i.getId(), List.of()).stream()
                                 .filter(l -> "OPEN".equals(l.disputeStatus())).map(GroupViews.InvoiceLineView::premium)
                                 .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add), i.getStatus(), i.getPolicyYear(), i.getMemberCount(), i.getIssuedBy(), i.getIssuedAt(),
-                        lines.getOrDefault(i.getId(), List.of()), receipts.getOrDefault(i.getId(), List.of())))
+                        lines.getOrDefault(i.getId(), List.of()), receipts.getOrDefault(i.getId(), List.of()),
+                        i.getAdjustmentAmount(), adjustments.getOrDefault(i.getId(), List.of()), i.getProrationBasis(),
+                        i.getRateSource()))
                 .toList();
+    }
+
+    /** Supplementary adjustments on the given invoices, with their lines, oldest first. */
+    List<GroupViews.AdjustmentView> adjustmentViews(List<SchemeInvoice> invoices) {
+        if (invoices.isEmpty()) {
+            return List.of();
+        }
+        List<SchemeAdjustment> list = em.createQuery("select a from SchemeAdjustment a join fetch a.invoice"
+                + " where a.invoice in :invoices order by a.id", SchemeAdjustment.class)
+                .setParameter("invoices", invoices).getResultList();
+        Map<Long, List<GroupViews.AdjustmentLineView>> lines = new HashMap<>();
+        if (!list.isEmpty()) {
+            for (AdjustmentLine l : em.createQuery("select l from AdjustmentLine l where l.adjustment in :a"
+                    + " order by l.memberKey", AdjustmentLine.class).setParameter("a", list).getResultList()) {
+                lines.computeIfAbsent(l.getAdjustment().getId(), k -> new ArrayList<>())
+                        .add(new GroupViews.AdjustmentLineView(l.getOriginalLineId(), l.getMemberId(),
+                                l.getMemberKey(), l.getMemberName(), l.getCategoryCode(), l.getChangeType(),
+                                l.getCoverAfter(), l.getDaysCovered(), l.getBilledBefore(), l.getRecalculated(),
+                                l.getAmount()));
+            }
+        }
+        return list.stream().map(a -> new GroupViews.AdjustmentView(a.getRef(), a.getInvoice().getRef(),
+                a.getInvoice().getPeriod(), a.getPolicyYear(), a.getType(), a.getAmount(), a.getAppliedToInvoice(),
+                a.getHeldAsCredit(), a.getSourceRef(), a.getReason(), a.getIssuedBy(), a.getIssuedAt(),
+                lines.getOrDefault(a.getId(), List.of()))).toList();
     }
 
     static GroupViews.ReceiptView receiptView(SponsorReceipt r) {
         return new GroupViews.ReceiptView(r.getRef(), r.getReference(), r.getAmount(), r.getOutstandingAfter(),
-                r.getReceivedBy(), r.getReceivedAt());
+                r.getReceivedBy(), r.getReceivedAt(), r.getInvoice().getPolicyYear());
     }
 }

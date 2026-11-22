@@ -37,13 +37,17 @@ public class SchemeBillingService {
     private final PlatformSecurityContext security;
     private final GroupRecords records;
     private final Outbox outbox;
+    private final CoverHistory cover;
+    private final SponsorAccountService account;
 
     public SchemeBillingService(EntityManager em, PlatformSecurityContext security, GroupRecords records,
-            Outbox outbox) {
+            Outbox outbox, CoverHistory cover, SponsorAccountService account) {
         this.em = em;
         this.security = security;
         this.records = records;
         this.outbox = outbox;
+        this.cover = cover;
+        this.account = account;
     }
 
     /** Issues the invoice for a month, or returns the one already issued for that scheme and month. */
@@ -93,29 +97,24 @@ public class SchemeBillingService {
         invoice.policyYear(Math.max(1, java.time.Period.between(scheme.getInceptionDate(), start).getYears() + 1));
         List<InvoiceLine> lines = new ArrayList<>();
         BigDecimal total = BigDecimal.ZERO.setScale(2);
+        // Each day is priced on the cover period and category rate version in force that day (NS-GL04-004,
+        // NS-GL05-005): a mid-month salary change or a renewal inside the month bills both sides of it. Pending cover
+        // is never billed, only the accepted (authorised) amount (AT-GL03-01); suspended days are not billed.
+        Map<Long, List<MemberCoverPeriod>> periods = cover.periods(members);
+        List<BenefitCategory> categories = records.categories(scheme);
+        cover.ensureVersions(scheme, categories, user.getUsername());
+        Map<Long, List<CategoryVersion>> versions = cover.versions(categories);
         for (SchemeMember member : members) {
-            if (member.getAcceptedCover().signum() <= 0) {
+            CoverHistory.Priced priced = cover.price(member, periods.get(member.getId()), versions, start, end,
+                    daysInPeriod);
+            if (priced.daysCovered() <= 0 || priced.premium().signum() <= 0 && priced.cover().signum() <= 0) {
                 continue;
             }
-            LocalDate from = member.getJoinDate().isAfter(start) ? member.getJoinDate() : start;
-            // The exit date is the member's last day of cover.
-            LocalDate to = member.getExitDate() != null && member.getExitDate().isBefore(end)
-                    ? member.getExitDate() : end;
-            // Days the scheme was suspended are neither covered nor billed (NS-GL01-006).
-            int days = (int) ChronoUnit.DAYS.between(from, to) + 1 - (to.isBefore(from) ? 0
-                    : member.suspendedDays(from, to));
-            if (days <= 0) {
-                continue;
-            }
-            BigDecimal rate = member.getCategory().getRatePerMille();
-            // Pending cover is never billed: only the accepted (authorised) amount (AT-GL03-01).
-            BigDecimal premium = member.getAcceptedCover()
-                    .multiply(rate)
-                    .multiply(BigDecimal.valueOf(days))
-                    .divide(BigDecimal.valueOf(1000L * daysInPeriod), 2, RoundingMode.HALF_UP);
-            lines.add(new InvoiceLine(invoice, member, rate, days, daysInPeriod, premium));
-            total = total.add(premium);
+            lines.add(new InvoiceLine(invoice, member, priced.categoryCode(), priced.cover(), priced.rate(),
+                    priced.daysCovered(), daysInPeriod, priced.premium()));
+            total = total.add(priced.premium());
         }
+        invoice.pricedOn(cover.prorationBasis(), "Category rate versions in force on each day of " + period);
         if (lines.isEmpty()) {
             throw new IllegalArgumentException("No member of scheme " + schemeRef + " was on cover in " + period
                     + "; there is nothing to invoice");
@@ -148,6 +147,7 @@ public class SchemeBillingService {
                 .setParameter("today", today).getResultList();
         Map<String, GroupViews.InvoiceView> views = new java.util.HashMap<>();
         records.invoiceViews(owed).forEach(v -> views.put(v.ref(), v));
+        Map<Long, List<String>> blockers = new java.util.HashMap<>();
         List<Map<String, Object>> out = new ArrayList<>();
         for (SchemeInvoice i : owed) {
             Map<String, Object> v = new LinkedHashMap<>();
@@ -162,6 +162,13 @@ public class SchemeBillingService {
             v.put("disputedAmount", views.get(i.getRef()).disputedAmount());
             v.put("status", i.getStatus());
             v.put("daysOverdue", ChronoUnit.DAYS.between(i.getPeriodEnd(), today));
+            // NS-GL05-004: grace period, stage and what must be resolved before any adverse cover action.
+            v.putAll(account.arrearsStage(i, today));
+            v.put("blockers", blockers.computeIfAbsent(i.getScheme().getId(),
+                    k -> account.escalationBlockers(i.getScheme())));
+            v.put("pendingLapse", em.createQuery("select l.ref from SchemeLapse l where l.scheme = :s"
+                    + " and l.status = 'PROPOSED'", String.class).setParameter("s", i.getScheme()).setMaxResults(1)
+                    .getResultStream().findFirst().orElse(null));
             out.add(v);
         }
         return out;
@@ -203,6 +210,7 @@ public class SchemeBillingService {
         } else {
             throw new IllegalArgumentException("Action must be RAISE or RESOLVE");
         }
+        account.disputeChanged(invoice, line, user.getUsername());
         em.flush();
         return records.invoiceView(invoice);
     }
@@ -245,6 +253,7 @@ public class SchemeBillingService {
         SponsorReceipt receipt = new SponsorReceipt(records.nextRef(SponsorReceipt.class, "GRC-", 5), invoice,
                 reference, amount, user.getUsername());
         em.persist(receipt);
+        account.afterAllocation(invoice, user.getUsername());
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("schemeRef", invoice.getScheme().getRef());

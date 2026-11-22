@@ -82,7 +82,12 @@ public final class GroupViews {
             LocalDateTime underwrittenAt,
             String sourceBatchRef,
             Boolean activelyAtWork,
-            long version) {
+            long version,
+            // GL03 workspace: membership (on the scheme, left, suspended) apart from the cover status of the benefit.
+            String membershipStatus,
+            String coverStatus,
+            // NS-GL04-003: the party the member was resolved to by national id, when one matched.
+            String partyRef) {
     }
 
     public record CensusBatchSummaryView(
@@ -100,7 +105,10 @@ public final class GroupViews {
             String submittedBy,
             LocalDateTime submittedAt,
             String committedBy,
-            LocalDateTime committedAt) {
+            LocalDateTime committedAt,
+            int heldRows,
+            String schemaVersion,
+            String correctsBatchRef) {
     }
 
     public record CensusBatchView(
@@ -120,7 +128,15 @@ public final class GroupViews {
             LocalDateTime submittedAt,
             String committedBy,
             LocalDateTime committedAt,
-            List<CensusRowView> rows) {
+            List<CensusRowView> rows,
+            // Rows held for an authorised review (AT-GL04-03), the template version and the batch corrected.
+            int heldRows,
+            String schemaVersion,
+            String correctsBatchRef,
+            // Preview (NS-GL04-005): a full month's premium on the rows' members before and after the batch.
+            BigDecimal premiumBefore,
+            BigDecimal premiumAfter,
+            String prorationBasis) {
     }
 
     public record CensusRowView(
@@ -137,7 +153,15 @@ public final class GroupViews {
             String error,
             Long memberId,
             Long changeId,
-            String rowKey) {
+            String rowKey,
+            String holdReason,
+            String reviewedBy,
+            String reviewNote,
+            String adjustmentRefs,
+            Integer correctsLine,
+            String correctedBy,
+            BigDecimal premiumBefore,
+            BigDecimal premiumAfter) {
     }
 
     public record InvoiceView(
@@ -158,7 +182,44 @@ public final class GroupViews {
             String issuedBy,
             LocalDateTime issuedAt,
             List<InvoiceLineView> lines,
-            List<ReceiptView> receipts) {
+            List<ReceiptView> receipts,
+            // Net supplementary adjustments on the balance and the adjustments themselves (NS-GL05-002).
+            BigDecimal adjustmentAmount,
+            List<AdjustmentView> adjustments,
+            // The proration basis and rate source the invoice was priced on (NS-GL05-001).
+            String prorationBasis,
+            String rateSource) {
+    }
+
+    /** A supplementary debit or credit on an issued invoice, with its member lines against the original lines. */
+    public record AdjustmentView(
+            String ref,
+            String invoiceRef,
+            String period,
+            Integer policyYear,
+            String type,
+            BigDecimal amount,
+            BigDecimal appliedToInvoice,
+            BigDecimal heldAsCredit,
+            String sourceRef,
+            String reason,
+            String issuedBy,
+            LocalDateTime issuedAt,
+            List<AdjustmentLineView> lines) {
+    }
+
+    public record AdjustmentLineView(
+            Long originalLineId,
+            Long memberId,
+            String memberKey,
+            String memberName,
+            String category,
+            String changeType,
+            BigDecimal coverAfter,
+            int daysCovered,
+            BigDecimal billedBefore,
+            BigDecimal recalculated,
+            BigDecimal amount) {
     }
 
     public record InvoiceLineView(
@@ -172,7 +233,9 @@ public final class GroupViews {
             int daysInPeriod,
             BigDecimal premium,
             String disputeStatus,
-            String disputeNote) {
+            String disputeNote,
+            Long lineId,
+            BigDecimal paidAmount) {
     }
 
     public record ReceiptView(
@@ -181,7 +244,9 @@ public final class GroupViews {
             BigDecimal amount,
             BigDecimal outstandingAfter,
             String receivedBy,
-            LocalDateTime receivedAt) {
+            LocalDateTime receivedAt,
+            // GL05: policy-year reference on every bill and receipt.
+            Integer policyYear) {
     }
 
     /** A claim on a member's group cover (GL claim register). */

@@ -1,0 +1,113 @@
+databaseChangeLog:
+  # GL04 effective-dated cover (NS-GL04-004): every join, leave, salary, category and underwriting change closes the
+  # member's open cover period and opens the next, so billing and supplementary adjustments price each day on the
+  # terms in force that day. Members created before this change get their first period when they next change.
+  # Census rows gain a held-for-review state (AT-GL04-03), correction links and identity columns (NS-GL04-001/003/006);
+  # categories gain dated rate versions and schemes dated scheme-year records (GL05 renewal).
+  - changeSet:
+      id: 150-group-cover-history
+      author: nsure
+      changes:
+        - createTable:
+            tableName: grp_member_cover
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_member_cover}}
+              - column: {name: member_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: valid_from, type: date, constraints: {nullable: false}}
+              - column: {name: valid_to, type: date}
+              - column: {name: category_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: category_code, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: salary, type: 'decimal(15,2)'}
+              - column: {name: accepted_cover, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: pending_cover, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: member_status, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: change_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: change_id, type: bigint}
+              - column: {name: superseded_by, type: bigint}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_member_cover
+            baseColumnNames: member_id
+            referencedTableName: grp_member
+            referencedColumnNames: id
+            constraintName: fk_grp_member_cover_member
+        - createIndex:
+            tableName: grp_member_cover
+            indexName: ix_grp_member_cover_member
+            columns:
+              - column: {name: member_id}
+              - column: {name: valid_from}
+
+        - createTable:
+            tableName: grp_category_version
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_category_version}}
+              - column: {name: category_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: policy_year, type: int, constraints: {nullable: false}}
+              - column: {name: effective_from, type: date, constraints: {nullable: false}}
+              - column: {name: effective_to, type: date}
+              - column: {name: benefit_basis, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: salary_multiple, type: 'decimal(9,4)'}
+              - column: {name: fixed_cover, type: 'decimal(15,2)'}
+              - column: {name: free_cover_limit, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: rate_per_mille, type: 'decimal(9,4)', constraints: {nullable: false}}
+              - column: {name: source_ref, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_category_version
+            baseColumnNames: category_id
+            referencedTableName: grp_benefit_category
+            referencedColumnNames: id
+            constraintName: fk_grp_category_version_cat
+
+        - createTable:
+            tableName: grp_scheme_year
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_scheme_year}}
+              - column: {name: scheme_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: policy_year, type: int, constraints: {nullable: false}}
+              - column: {name: start_date, type: date, constraints: {nullable: false}}
+              - column: {name: end_date, type: date, constraints: {nullable: false}}
+              - column: {name: year_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: source_ref, type: varchar(40)}
+              - column: {name: gap_note, type: varchar(300)}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_scheme_year
+            baseColumnNames: scheme_id
+            referencedTableName: ins_scheme
+            referencedColumnNames: id
+            constraintName: fk_grp_scheme_year_scheme
+        - addUniqueConstraint:
+            tableName: grp_scheme_year
+            columnNames: scheme_id, policy_year
+            constraintName: uk_grp_scheme_year
+
+        - addColumn:
+            tableName: grp_census_row
+            columns:
+              - column: {name: hold_reason, type: varchar(500)}
+              - column: {name: reviewed_by, type: varchar(100)}
+              - column: {name: reviewed_at, type: datetime}
+              - column: {name: review_note, type: varchar(300)}
+              - column: {name: adjustment_refs, type: varchar(200)}
+              - column: {name: corrects_line, type: int}
+              - column: {name: corrected_by, type: varchar(40)}
+              - column: {name: national_id, type: varchar(30)}
+              - column: {name: relationship, type: varchar(20)}
+              - column: {name: premium_before, type: 'decimal(15,2)'}
+              - column: {name: premium_after, type: 'decimal(15,2)'}
+        - addColumn:
+            tableName: grp_census_batch
+            columns:
+              - column: {name: held_rows, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: schema_version, type: varchar(10)}
+              - column: {name: corrects_batch_ref, type: varchar(20)}
+              - column: {name: checkpoint_line, type: int}
+        - addColumn:
+            tableName: grp_member
+            columns:
+              - column: {name: party_ref, type: varchar(20)}
+              - column: {name: national_id, type: varchar(30)}

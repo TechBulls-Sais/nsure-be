@@ -191,6 +191,36 @@ public class SchemeMember {
         applyCover(category.coverFor(newSalary), ceiling);
     }
 
+    /**
+     * A category transfer (NS-GL04-004): cover is recalculated on the new category's formula (with a new salary when
+     * one is given) and the new category's free-cover limit, or the cover an underwriter already authorised if higher;
+     * anything above that is pending underwriting, as for a salary increase.
+     */
+    void transferCategory(BenefitCategory newCategory, BigDecimal newSalary, Boolean activelyAtWorkNow) {
+        this.category = newCategory;
+        changeSalary(newSalary == null ? salary : newSalary, activelyAtWorkNow);
+    }
+
+    /** The party the member was resolved to by national id (NS-GL04-003), if any. */
+    @Column(name = "party_ref", length = 20)
+    private String partyRef;
+
+    @Column(name = "national_id", length = 30)
+    private String nationalId;
+
+    void identify(String nationalId, String partyRef) {
+        this.nationalId = nationalId;
+        this.partyRef = partyRef;
+    }
+
+    public String getPartyRef() {
+        return partyRef;
+    }
+
+    public String getNationalId() {
+        return nationalId;
+    }
+
     public Boolean getActivelyAtWork() {
         return activelyAtWork;
     }

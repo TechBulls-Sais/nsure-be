@@ -220,6 +220,33 @@ with 409 (`WorkOwnershipGuard`; service desk cases check their own owner). Event
 - **Events** add `CategoryTermsChanged`, `MemberUnderwritingReferred`, `MemberCoverAuthorised`, `CensusBatchValidated`,
   `MemberCoverChanged`, `CensusBatchCompleted` and `UnearnedPremiumRefundApproved`; `SchemeActivated` is published for
   schemes set up directly as well as from quotes.
+- **Effective-dated cover (GL04)**: census actions JOIN, LEAVE, SALARY and CATEGORY (category transfer). Every change
+  records a member cover period (`/group/members/{id}/cover-history`); invoices price each day on that day's cover and
+  category rate version. Rows behind an admitted claim, or reaching invoiced months more than
+  `nsure.group.census.retro-review-days` (demo 90) back or into a closed accounting period, are HELD for an authorised
+  review (`POST /group/census-batches/{ref}/rows/{line}/review`, not the submitter). `GET /group/census-template` is the
+  published template (v2 adds `nationalId`, `relationship`, `correctsLine`); correction batches name `correctsBatchRef`.
+  `/group/schemes/{ref}/census-terms` can require atomic batches and a second committer.
+- **Supplementary billing and the sponsor account (GL05)**: backdated changes into invoiced months create debit/credit
+  adjustments against the original lines (published as `SchemeInvoiceIssued` with `invoiceType` SUPPLEMENTARY; the
+  issued invoice is never edited, excess credit is held for the sponsor). `/group/schemes/{ref}/sponsor-payments`
+  allocates lump sums oldest first, to named invoices or by member; unallocated money is held (`UnmatchedReceipt`) and
+  allocated later (`/group/sponsor-payments/{ref}/allocations`). Billing exceptions (`/group/billing-exceptions`) cover
+  short payments, held money, disputes and escalated lapses. Arrears use a demo grace of
+  `nsure.group.billing.grace-days` (30) after the invoice month; `/group/schemes/{ref}/lapse` escalates while disputes or
+  held money exist, otherwise a second person decides (`/group/scheme-lapses/{ref}/decision`): cover ends at the
+  paid-to date and later months are credited. Proration basis: `nsure.group.billing.proration-basis` (DAILY or MID_MONTH).
+- **Renewal (GL05)**: `/group/schemes/{ref}/renewals` prepares a renewal from the year's census and claims experience
+  (demo experience-rating rule, `nsure.group.renewal.*`), then versions, sponsor acceptance (overlap refused, gap needs
+  a reason) and second-person approval, which opens next-year category versions and a scheme-year record and publishes
+  `SchemeRenewed`. Income benefits in payment always continue. The lifecycle RENEWAL request applies its rate change the
+  same way.
+- **Group credit (GL06)**: `/group-life/schemes/{ref}/lender-agreement` (limits, loan classes, premium basis, refund
+  formula, commission and ceded share; demo defaults `nsure.group.credit.*` until saved), bordereau interface 2.0 with
+  control totals, `/credit-loans/{id}/underwriting` for referrals, `/credit-files` lender updates with retained
+  exceptions, `/credit-remittances` premium statements, refunds approved by a second person then paid
+  (`/credit-refunds/{ref}/decision|payment`), and claims (`/credit-loans/{id}/claims`, `/credit-claims/{ref}/decision`,
+  posted as `GroupClaimPaid`). Demo lender scheme SCH-010 (changeset 154, context demo).
 
 ## Party master (SH01)
 

@@ -69,6 +69,27 @@ public class InvoiceLine {
         this.daysCovered = daysCovered;
         this.daysInPeriod = daysInPeriod;
         this.premium = premium;
+        this.paidAmount = BigDecimal.ZERO.setScale(2);
+    }
+
+    /** A line priced from the member's cover periods: the cover and category in force at the end of the month. */
+    InvoiceLine(SchemeInvoice invoice, SchemeMember member, String categoryCode, BigDecimal acceptedCover,
+            BigDecimal ratePerMille, int daysCovered, int daysInPeriod, BigDecimal premium) {
+        this(invoice, member, ratePerMille, daysCovered, daysInPeriod, premium);
+        this.categoryCode = categoryCode;
+        this.acceptedCover = acceptedCover;
+    }
+
+    /** What the sponsor has paid against this member's line (member-level allocation, NS-GL05-003). */
+    @Column(name = "paid_amount", nullable = false, precision = 15, scale = 2)
+    private BigDecimal paidAmount;
+
+    void paid(BigDecimal amount) {
+        this.paidAmount = (paidAmount == null ? BigDecimal.ZERO.setScale(2) : paidAmount).add(amount);
+    }
+
+    public BigDecimal getPaidAmount() {
+        return paidAmount == null ? BigDecimal.ZERO.setScale(2) : paidAmount;
     }
 
     /** OPEN while the sponsor disputes this member's contribution, RESOLVED once settled; null when never disputed. */

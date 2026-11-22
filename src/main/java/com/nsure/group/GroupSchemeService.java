@@ -39,6 +39,14 @@ public class GroupSchemeService {
         this.audit = audit;
     }
 
+    /** Effective-dated cover and supplementary billing (GL04/GL05): underwriting decisions update both. */
+    private SupplementaryBilling supplementary;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void supplementaryBilling(SupplementaryBilling supplementary) {
+        this.supplementary = supplementary;
+    }
+
     // ── schemes ────────────────────────────────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
@@ -429,6 +437,9 @@ public class GroupSchemeService {
             throw new IllegalArgumentException("Reason must be at most 500 characters");
         }
         BigDecimal coverBefore = member.getAcceptedCover();
+        if (supplementary != null) {
+            supplementary.beforeUnderwriting(member);
+        }
         if ("ACCEPT".equals(decision)) {
             BigDecimal amount = GroupRecords.decimal(body, "acceptedAmount", "Accepted amount");
             amount = amount == null ? member.getRequestedCover() : GroupRecords.money(amount, "Accepted amount", false);
@@ -449,8 +460,13 @@ public class GroupSchemeService {
         } else {
             throw new IllegalArgumentException("Decision must be ACCEPT or DECLINE");
         }
-        records.memberChanged(new MemberChange(member, "UNDERWRITING", LocalDate.now(), member.getSalary(), coverBefore,
-                null, decision + (reason == null ? "" : ": " + reason), user.getUsername()));
+        MemberChange decided = new MemberChange(member, "UNDERWRITING", LocalDate.now(), member.getSalary(), coverBefore,
+                null, decision + (reason == null ? "" : ": " + reason), user.getUsername());
+        records.memberChanged(decided);
+        if (supplementary != null) {
+            // GL04/GL05: the decided cover applies from the date it was requested; invoiced months are re-priced.
+            supplementary.afterUnderwriting(member, decided.getId(), user.getUsername());
+        }
         Map<String, Object> authorised = new java.util.LinkedHashMap<>();
         authorised.put("schemeRef", member.getScheme().getRef());
         authorised.put("memberKey", member.getMemberKey());

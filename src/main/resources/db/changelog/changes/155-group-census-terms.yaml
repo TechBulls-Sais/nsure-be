@@ -1,0 +1,23 @@
+databaseChangeLog:
+  # NS-GL04-002: a scheme's census terms: whether every batch must be committed all-or-nothing, and whether someone
+  # other than the submitter must commit it. Flags are integers (0/1) to avoid boolean type differences between H2 and
+  # MySQL.
+  - changeSet:
+      id: 155-group-census-terms
+      author: nsure
+      changes:
+        - createTable:
+            tableName: grp_census_terms
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_census_terms}}
+              - column: {name: scheme_id, type: bigint, constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_census_terms_scheme}}
+              - column: {name: atomic_required, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: four_eyes, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: updated_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: updated_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_census_terms
+            baseColumnNames: scheme_id
+            referencedTableName: ins_scheme
+            referencedColumnNames: id
+            constraintName: fk_grp_census_terms_scheme
