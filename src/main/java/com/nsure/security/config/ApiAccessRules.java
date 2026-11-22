@@ -353,6 +353,11 @@ public final class ApiAccessRules {
 
             // ── Care Cash benefit engine (specification section 07) ────────────────────────────────────
             rule(GET, "/care-cash/**", anyOf("READ_CLAIM")),
+            rule(POST, "/care-cash/rules", anyOf("UPDATE_PRODUCT")),
+            rule(POST, "/care-cash/rules/*/approve", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/care-cash/rules/*/reject", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/care-cash/policies/*/opening-days", anyOf("UPDATE_CLAIM")),
+            rule(POST, "/care-cash/events/*/reverse", anyOf("APPROVE_CLAIM")),
             rule(POST, "/care-cash/policies/*/assessment", anyOf("CREATE_CLAIM")),
             rule(POST, "/care-cash/policies/*/events", anyOf("CREATE_CLAIM")),
             rule(POST, "/care-cash/events/*/decision", anyOf("APPROVE_CLAIM")),

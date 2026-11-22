@@ -175,6 +175,10 @@ public final class Events {
     public static final String PAYOUT_RETURNED = "PayoutReturned";
     /** claimRef, policyRef, amount, instructionRef, reason. A settled claim payment was returned; the claim is unpaid again. */
     public static final String CLAIM_PAYMENT_RETURNED = "ClaimPaymentReturned";
+    /** policyRef, eventRef, months, waivedFrom, waivedTo. Premiums waived after a long Care Cash admission (section 07). */
+    public static final String PREMIUM_WAIVED = "PremiumWaived";
+    /** policyRef, eventRef, months, waivedFrom, waivedTo, reason. A premium waiver undone because its event was reversed. */
+    public static final String PREMIUM_WAIVER_REVERSED = "PremiumWaiverReversed";
 
     // Communications (spec SH09B). Payloads carry references only: never the message content or the contact.
     /** messageRef, eventType, businessRef, customerRef, recipientRole, channel, purpose, templateCode, templateVersion, status, reason. */

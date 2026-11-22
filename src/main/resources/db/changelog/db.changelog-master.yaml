@@ -314,3 +314,6 @@ databaseChangeLog:
   - include:
       file: changes/167-claim-calculation.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/168-care-cash-rules.yaml
+      relativeToChangelogFile: true

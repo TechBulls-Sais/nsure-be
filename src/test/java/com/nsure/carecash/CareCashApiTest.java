@@ -66,9 +66,11 @@ class CareCashApiTest {
         String ref = JsonPath.read(recorded, "$.ref");
         // SH05: recording an assessment consumes nothing yet; the approval does.
         org.assertj.core.api.Assertions.assertThat(events(ref, "BenefitLimitConsumed")).isZero();
+        // Section 07 / NS-SH05-005: the assessed event reserves its days; the approval consumes them.
         mockMvc.perform(get(base).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policyDaysUsed").value(12))
-                .andExpect(jsonPath("$.lives[0].usedThisYear").value(12));
+                .andExpect(jsonPath("$.lives[0].usedThisYear").value(0))
+                .andExpect(jsonPath("$.lives[0].reservedDays").value(12));
 
         // A day case pays 50%; an 80-night stay is capped at 60 days per event; ICU at 15 days.
         mockMvc.perform(json(post(base + "/assessment"), "admin", event("DAY_CASE", "ILLNESS", 5, 5, 0, false)))
@@ -189,7 +191,8 @@ class CareCashApiTest {
 
     private static String event(String type, String cause, int admittedDaysAgo, int dischargedDaysAgo, int icu, boolean surgery) {
         return "{\"eventType\":\"" + type + "\",\"cause\":\"" + cause + "\",\"admitDate\":\"" + LocalDate.now().minusDays(admittedDaysAgo)
-                + "\",\"dischargeDate\":\"" + LocalDate.now().minusDays(dischargedDaysAgo) + "\",\"icuDays\":" + icu + ",\"surgery\":" + surgery + "}";
+                + "\",\"dischargeDate\":\"" + LocalDate.now().minusDays(dischargedDaysAgo) + "\",\"icuDays\":" + icu + ",\"surgery\":" + surgery
+                + ",\"procedure\":\"Appendectomy\",\"deathEvidence\":\"Death certificate and police report\"}";
     }
 
     /** An active Care Cash policy whose cover started the given number of months ago. */

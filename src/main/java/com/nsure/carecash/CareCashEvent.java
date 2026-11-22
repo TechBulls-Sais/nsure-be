@@ -78,4 +78,32 @@ public class CareCashEvent {
     LocalDateTime paymentSentAt;
     @Column(name = "payment_failure", length = 500)
     String paymentFailure;
+    // Section 07 detail: the insured life (by key), the rule version, readmission link, the days after a cover
+    // anniversary, the procedure, death evidence, the premium waiver window and a reversal.
+    @Column(name = "life_key", length = 40)
+    String lifeKey;
+    @Column(name = "rule_version")
+    Integer ruleVersion;
+    @Column(name = "pre_existing", nullable = false)
+    int preExisting;
+    @Column(nullable = false)
+    int births = 1;
+    @Column(name = "linked_event_ref", length = 20)
+    String linkedEventRef;
+    @Column(name = "days_next_year", nullable = false)
+    int daysNextYear;
+    @Column(name = "procedure_name", length = 150)
+    String procedureName;
+    @Column(name = "death_evidence", length = 300)
+    String deathEvidence;
+    @Column(name = "waiver_from")
+    java.time.LocalDate waiverFrom;
+    @Column(name = "waiver_to")
+    java.time.LocalDate waiverTo;
+    @Column(name = "reversed_by", length = 100)
+    String reversedBy;
+    @Column(name = "reversed_at")
+    LocalDateTime reversedAt;
+    @Column(name = "reversal_reason", length = 500)
+    String reversalReason;
 }

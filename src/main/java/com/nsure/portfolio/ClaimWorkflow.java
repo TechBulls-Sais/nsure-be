@@ -1025,6 +1025,24 @@ public class ClaimWorkflow {
     }
 
     /**
+     * Whether the policy's cover was in force on {@code day}, judged on its effective-dated history rather than its
+     * status today (NS-SH05-002): for other benefit engines, e.g. Care Cash admissions.
+     */
+    public boolean coverInForceOnDate(InsurancePolicy policy, LocalDate day) {
+        return coverInForceOn(policy, day);
+    }
+
+    /** The policy's state in force on {@code day} (Active when no change is recorded since cover started). */
+    public String policyStateOn(InsurancePolicy policy, LocalDate day) {
+        LocalDate start = policy.getCoverStartDate();
+        if (start == null || start.isAfter(day)) {
+            return "Not yet in cover";
+        }
+        String state = stateOn(policy, day);
+        return state == null ? PolicyWorkflow.ACTIVE : state;
+    }
+
+    /**
      * The policy state in force on {@code event}: the last change effective on or before it, or null when no change
      * is recorded (the policy has simply been in force since cover started).
      */
