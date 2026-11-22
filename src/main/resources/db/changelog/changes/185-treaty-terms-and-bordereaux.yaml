@@ -24,7 +24,7 @@ databaseChangeLog:
               - column: {name: treaty_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_ri_participant_treaty, references: ri_treaty(id)}}
               - column: {name: reinsurer, type: varchar(150), constraints: {nullable: false}}
               - column: {name: share_percent, type: 'decimal(5,2)', constraints: {nullable: false}}
-              - column: {name: lead, type: varchar(5), constraints: {nullable: false}}
+              - column: {name: lead_flag, type: varchar(5), constraints: {nullable: false}}
         - addColumn:
             tableName: ri_bordereau
             columns:

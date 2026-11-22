@@ -30,8 +30,8 @@ public class TreatyParticipant {
     @Column(name = "share_percent", nullable = false, precision = 5, scale = 2)
     private BigDecimal sharePercent;
 
-    // "true" for the lead reinsurer (kept as text to stay portable across databases).
-    @Column(nullable = false, length = 5)
+    // "true" for the lead reinsurer (kept as text to stay portable across databases; LEAD is reserved on MySQL).
+    @Column(name = "lead_flag", nullable = false, length = 5)
     private String lead;
 
     protected TreatyParticipant() {
