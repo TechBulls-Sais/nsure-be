@@ -1,0 +1,38 @@
+# IL01 new business (Nsure Life NS-IL01-001/002/003): party roles reused by reference, beneficiaries captured on the
+# application and carried to the policy, and each product's distribution scope. The scope rows are DEMO DEFAULTS
+# awaiting the insurer's distribution decision (D01): a product without rows is sold on every channel.
+databaseChangeLog:
+  - changeSet:
+      id: 121-new-business-capture-schema
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ins_application
+            columns:
+              # The proposer and payer as existing party records (customer references), when they are parties.
+              - column: {name: proposer_ref, type: varchar(20)}
+              - column: {name: payer_ref, type: varchar(20)}
+              # Nominated beneficiaries as JSON [{fullName, relationship, nationalId, mobile, primary}], added to the
+              # policy when it is issued.
+              - column: {name: beneficiaries, type: varchar(4000)}
+        - createTable:
+            tableName: nb_distribution_scope
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: product, type: varchar(100), constraints: {nullable: false}}
+              # DIRECT, BRANCH, AGENT, BROKER, CALL_CENTRE, PORTAL or LENDER.
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: nb_distribution_scope
+            columnNames: product, channel
+            constraintName: uk_nb_distribution_scope
+  - changeSet:
+      id: 121-new-business-distribution-seed
+      author: nsure
+      comment: Demo default - Individual Credit is sold only through lenders (IL05 loan submissions), never as an application.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO nb_distribution_scope (product, channel)
+              SELECT 'Individual Credit', 'LENDER'
+              WHERE NOT EXISTS (SELECT 1 FROM nb_distribution_scope x WHERE x.product = 'Individual Credit');

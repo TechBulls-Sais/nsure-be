@@ -94,6 +94,17 @@ public class InsuranceApplication extends CoverRecord implements TieredCover {
     @jakarta.persistence.Column(name = "intermediary_code", length = 30)
     private String intermediaryCode;
 
+    /** The proposer and payer as existing party records, when they are parties (NS-IL01-002). */
+    @jakarta.persistence.Column(name = "proposer_ref", length = 20)
+    private String proposerRef;
+
+    @jakarta.persistence.Column(name = "payer_ref", length = 20)
+    private String payerRef;
+
+    /** Nominated beneficiaries as JSON, added to the policy at issue (NS-IL01-002). */
+    @jakarta.persistence.Column(name = "beneficiaries", length = 4000)
+    private String beneficiaries;
+
     /** The main life's occupation, assessed by the underwriting rules (NS-IL02-001). */
     @jakarta.persistence.Column(name = "occupation", length = 100)
     private String occupation;
@@ -191,6 +202,30 @@ public class InsuranceApplication extends CoverRecord implements TieredCover {
 
     public void setIntermediaryCode(String intermediaryCode) {
         this.intermediaryCode = intermediaryCode;
+    }
+
+    public String getProposerRef() {
+        return proposerRef;
+    }
+
+    public void setProposerRef(String proposerRef) {
+        this.proposerRef = proposerRef;
+    }
+
+    public String getPayerRef() {
+        return payerRef;
+    }
+
+    public void setPayerRef(String payerRef) {
+        this.payerRef = payerRef;
+    }
+
+    public String getBeneficiaries() {
+        return beneficiaries;
+    }
+
+    public void setBeneficiaries(String beneficiaries) {
+        this.beneficiaries = beneficiaries;
     }
 
     public String getOccupation() {

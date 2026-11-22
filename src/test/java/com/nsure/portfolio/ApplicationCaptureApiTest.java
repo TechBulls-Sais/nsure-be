@@ -69,7 +69,7 @@ class ApplicationCaptureApiTest {
                         org.hamcrest.Matchers.containsString("intermediary's code"))));
         mockMvc.perform(json(put("/portfolio/applications/" + app + "/details"), "admin", "{\"payerName\":\"Kabo Draft\","
                         + "\"payerRelationship\":\"Spouse\",\"mandateMethod\":\"DEBIT_ORDER\",\"mandateInstitution\":\"First National Bank\","
-                        + "\"mandateAccount\":\"62001234\",\"mandateDebitDay\":25,\"channel\":\"BROKER\",\"intermediaryCode\":\"BRK-0001\"}"))
+                        + "\"mandateAccount\":\"62001234\",\"mandateDebitDay\":25,\"channel\":\"BROKER\",\"intermediaryCode\":\"INT-00001\"}"))
                 .andExpect(jsonPath("$.submissionProblems").isEmpty())
                 .andExpect(jsonPath("$.mandateAccount").value("•••1234"))
                 .andExpect(jsonPath("$.payer").value("Kabo Draft (Spouse)"));

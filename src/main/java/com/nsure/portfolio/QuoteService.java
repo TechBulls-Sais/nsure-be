@@ -61,9 +61,12 @@ public class QuoteService {
     private final RateTableService rates;
     private final Outbox outbox;
     private final int validityDays;
+    /** NS-IL01-001: every quote names the approved product terms (wording included) it was priced under. */
+    private final ProductTerms terms;
 
     public QuoteService(EntityManager em, ObjectMapper mapper, ReferenceNumbers references, RateTableService rates,
-            Outbox outbox, @Value("${nsure.quotes.validity-days:30}") int validityDays) {
+            Outbox outbox, @Value("${nsure.quotes.validity-days:30}") int validityDays, ProductTerms terms) {
+        this.terms = terms;
         this.em = em;
         this.mapper = mapper;
         this.references = references;
@@ -372,8 +375,32 @@ public class QuoteService {
             node.put("dateOfBirth", life.dateOfBirth() == null ? null : life.dateOfBirth().toString());
         }
 
+        // NS-IL01-001: only a product with approved terms in force today can be quoted; the version is on the trace.
+        ProductVersion terms;
+        try {
+            terms = this.terms.inForce(product, today);
+        } catch (IllegalStateException ex) {
+            throw new IllegalArgumentException(product + " cannot be quoted: it has no approved product terms in force"
+                    + " today.");
+        }
         ObjectNode trace = mapper.createObjectNode();
         trace.put("method", rated ? Quote.RATE_TABLE : Quote.FLAT_TIER);
+        ObjectNode productVersion = trace.putObject("productVersion");
+        productVersion.put("id", terms.getId());
+        productVersion.put("label", terms.getLabel());
+        productVersion.put("effectiveFrom", terms.getEffectiveFrom().toString());
+        productVersion.put("wordingRef", terms.getWordingRef());
+        productVersion.put("waitingPeriodDays", terms.getWaitingPeriodDays());
+        // The benefits the plan was offered with, as the tier described them when quoted.
+        ArrayNode benefits = trace.putArray("benefits");
+        for (String benefit : (tier.getBenefits() == null ? "" : tier.getBenefits()).split("[\\n;|]")) {
+            if (!benefit.isBlank()) {
+                benefits.add(benefit.trim());
+            }
+        }
+        if (benefits.isEmpty()) {
+            benefits.add(tier.getName() + " cover of BWP " + Money.text(Money.of(tier.getCoverAmount())));
+        }
         trace.put("rateVersion", rateVersion);
         trace.put("pricedOn", today.toString());
         ArrayNode lines = trace.putArray("lines");

@@ -95,6 +95,12 @@ nsure:
   # Where claim and policy documents are kept, one folder per reference (data/ is git-ignored).
   documents:
     dir: ${NSURE_DOCUMENTS_DIR:data/documents}
+  # Individual new business (Nsure Life NS-IL01-003/005/006). Every policy is issued from an application the
+  # underwriting rules or an underwriter cleared, and a portal purchase answers the product's disclosure questions.
+  # (The code defaults allow direct issue and question-less purchases only for legacy data loads and older tests.)
+  new-business:
+    direct-issue-enabled: ${NSURE_DIRECT_ISSUE_ENABLED:false}
+    portal-disclosures-required: ${NSURE_PORTAL_DISCLOSURES_REQUIRED:true}
 
 management:
   endpoints:

@@ -130,6 +130,18 @@ public class PortfolioController {
         return portfolio.shopClaim(body);
     }
 
+    /** The disclosure questions the portal asks for a product (NS-IL01-003). */
+    @GetMapping("/shop/questions")
+    public List<PortfolioViews.DisclosureItem> shopQuestions(@RequestParam String product) {
+        return portfolio.shopQuestions(product);
+    }
+
+    /** {accept}: the customer's answer to an underwriting offer on their own application. */
+    @PostMapping("/shop/applications/{ref}/offer")
+    public PortfolioViews.ShopView shopAnswerOffer(@PathVariable String ref, @RequestBody JsonNode body) {
+        return portfolio.shopAnswerOffer(ref, body);
+    }
+
     // ── policy workflow (staff) ───────────────────────────────────────────────────────────────────
 
     @PostMapping("/policies/{ref}/payments")
@@ -177,6 +189,18 @@ public class PortfolioController {
     @GetMapping("/applications")
     public List<PortfolioViews.CoverView> applications() {
         return portfolio.applications();
+    }
+
+    /** IL01 missing-evidence queue: every item still outstanding on an open application, with its due date. */
+    @GetMapping("/applications/evidence-queue")
+    public List<PortfolioViews.EvidenceQueueItem> evidenceQueue() {
+        return portfolio.evidenceQueue();
+    }
+
+    /** The relationships a payer or proposer may have (NS-IL01-003). */
+    @GetMapping("/application-relationships")
+    public List<String> applicationRelationships() {
+        return portfolio.applicationRelationships();
     }
 
     @PostMapping("/applications")

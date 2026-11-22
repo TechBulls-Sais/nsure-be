@@ -590,12 +590,28 @@ public class UnderwritingService {
         AppUser user = security.authenticatedUser();
         user.validateHasAnyPermission("UNDERWRITE_APPLICATION", "UPDATE_APPLICATION");
         Case c = find(ref);
-        if (!OFFERED.equals(c.status) || !OFFER_PENDING.equals(c.offerStatus)) {
-            throw new ConflictException(ref + " has no offer waiting for an answer.");
-        }
         String note = required(body, "note", 500);
         if (note.length() < 5) {
             throw new IllegalArgumentException("Say how the applicant gave their answer.");
+        }
+        recordAnswer(c, body.path("accept").asBoolean(false), note, user.getUsername());
+        return detail(c, user);
+    }
+
+    /** The applicant answers the offer on their own application themselves (customer portal). */
+    @Transactional
+    public void answerOfferAsApplicant(InsuranceApplication app, boolean accept, String note, String actor) {
+        Case c = byApplication(app.getRef());
+        if (c == null) {
+            throw new ConflictException(app.getRef() + " has no offer waiting for an answer.");
+        }
+        recordAnswer(c, accept, note, actor);
+    }
+
+    private void recordAnswer(Case c, boolean accept, String note, String actor) {
+        String ref = c.ref;
+        if (!OFFERED.equals(c.status) || !OFFER_PENDING.equals(c.offerStatus)) {
+            throw new ConflictException(ref + " has no offer waiting for an answer.");
         }
         if (expired(c)) {
             throw new ConflictException("Offer v" + c.offerVersion + " on " + ref + " expired on "
@@ -604,8 +620,7 @@ public class UnderwritingService {
         InsuranceApplication app = application(c);
         String before = app.getStatus();
         LocalDateTime now = LocalDateTime.now();
-        boolean accept = body.path("accept").asBoolean(false);
-        c.offerAcceptedBy = user.getUsername();
+        c.offerAcceptedBy = actor;
         c.offerAcceptedAt = now;
         c.updatedAt = now;
         if (accept) {
@@ -616,7 +631,7 @@ public class UnderwritingService {
             if (c.offerPremium != null && (app.getPremium() == null || c.offerPremium.compareTo(app.getPremium()) != 0)) {
                 if (app.getQuoteRef() != null) {
                     com.nsure.portfolio.Quote version = quotes.underwritten(app.getQuoteRef(), c.appliedPremium,
-                            c.offerPremium, c.loadingPercent, c.ref, c.offerVersion, user.getUsername(), note);
+                            c.offerPremium, c.loadingPercent, c.ref, c.offerVersion, actor, note);
                     app.setQuote(version.getRef(), version.getVersionNo());
                 }
                 app.setPremium(c.offerPremium);
@@ -630,7 +645,7 @@ public class UnderwritingService {
             accepted.put("quoteRef", app.getQuoteRef() == null ? "" : app.getQuoteRef());
             accepted.put("version", app.getQuoteVersion() == null ? 0 : app.getQuoteVersion());
             accepted.put("premium", app.getPremium() == null ? "" : app.getPremium().toPlainString());
-            outbox.publish(Events.OFFER_ACCEPTED, c.ref, accepted, user.getUsername());
+            outbox.publish(Events.OFFER_ACCEPTED, c.ref, accepted, actor);
         } else {
             c.offerStatus = OFFER_REFUSED;
             c.status = DECLINED;
@@ -642,12 +657,11 @@ public class UnderwritingService {
         data.put("customerRef", c.customerRef == null ? "" : c.customerRef);
         data.put("offerVersion", c.offerVersion);
         data.put("accepted", accept);
-        outbox.publish(Events.OFFER_ANSWERED, c.ref, data, user.getUsername());
+        outbox.publish(Events.OFFER_ANSWERED, c.ref, data, actor);
         logApplication(app, accept ? "Offer accepted" : "Offer refused", before, "Offer v" + c.offerVersion + " ("
-                + c.ref + ")", user.getUsername());
-        audit.record(user.getUsername(), accept ? "Offer accepted" : "Offer refused", "UnderwritingCase", c.ref,
+                + c.ref + ")", actor);
+        audit.record(actor, accept ? "Offer accepted" : "Offer refused", "UnderwritingCase", c.ref,
                 "Offer v" + c.offerVersion + ": " + note);
-        return detail(c, user);
     }
 
     private void logApplication(InsuranceApplication app, String action, String previous, String details, String actor) {
@@ -776,6 +790,73 @@ public class UnderwritingService {
                 .append(c.offerAcceptedAt == null ? "" : c.offerAcceptedAt.toLocalDate()).append(" (").append(c.ref)
                 .append(").");
         return new Terms(c.ref, c.loadingPercent == null ? null : c.offerPremium, clip(text.toString().trim(), 1000));
+    }
+
+    /**
+     * NS-IL01-001: why a flat-priced plan cannot be quoted for this date of birth under the product's rule set entry
+     * ages (age last birthday, the rule set's basis), or null. Rated plans check each life's age when priced.
+     */
+    @Transactional(readOnly = true)
+    public String entryAgeProblem(String product, LocalDate dateOfBirth) {
+        if (dateOfBirth == null) {
+            return null;
+        }
+        RuleSet rules = rulesFor(product);
+        int age = Period.between(dateOfBirth, LocalDate.now()).getYears();
+        if (age < rules.minEntryAge || age > rules.maxEntryAge) {
+            return product + " is open to entry ages " + rules.minEntryAge + "–" + rules.maxEntryAge + "; the life"
+                    + " insured is " + age + ".";
+        }
+        return null;
+    }
+
+    /**
+     * The offers waiting for the applicant's answer on these applications (customer portal): the terms the applicant
+     * is asked to accept, never the underwriter's reasons.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Map<String, Object>> pendingOffers(List<String> applicationRefs) {
+        Map<String, Map<String, Object>> offers = new LinkedHashMap<>();
+        if (applicationRefs.isEmpty()) {
+            return offers;
+        }
+        for (Case c : em.createQuery("select c from UwCase c where c.applicationRef in :refs and c.status = :s",
+                Case.class).setParameter("refs", applicationRefs).setParameter("s", OFFERED).getResultList()) {
+            if (!OFFER_PENDING.equals(c.offerStatus)) {
+                continue;
+            }
+            Map<String, Object> offer = new LinkedHashMap<>();
+            offer.put("offerVersion", c.offerVersion);
+            offer.put("premium", c.offerPremium);
+            offer.put("previousPremium", c.appliedPremium);
+            offer.put("loadingPercent", c.loadingPercent);
+            offer.put("exclusion", c.exclusion);
+            offer.put("validUntil", c.decisionValidUntil);
+            offers.put(c.applicationRef, offer);
+        }
+        return offers;
+    }
+
+    /** Every evidence request still outstanding, for the new business missing-evidence queue (no clinical notes). */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> outstandingEvidenceItems() {
+        Map<String, String> applications = new LinkedHashMap<>();
+        em.createQuery("select c from UwCase c", Case.class).getResultList()
+                .forEach(c -> applications.put(c.ref, c.applicationRef));
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Evidence e : em.createQuery("select e from UwEvidence e where e.status = :s order by e.dueDate",
+                Evidence.class).setParameter("s", EV_REQUESTED).getResultList()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("caseRef", e.caseRef);
+            row.put("applicationRef", applications.get(e.caseRef));
+            row.put("requirement", e.requirement);
+            row.put("restricted", e.restricted);
+            row.put("lifeName", e.lifeName);
+            row.put("dueDate", e.dueDate);
+            row.put("reminders", e.reminderCount);
+            rows.add(row);
+        }
+        return rows;
     }
 
     /** Whether the application's case lets it move to "Ready to issue" (used when its last evidence arrives). */

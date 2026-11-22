@@ -72,6 +72,8 @@ public final class ApiAccessRules {
             rule(GET, "/portfolio/shop", customer()),
             rule(POST, "/portfolio/shop", customer()),
             rule(POST, "/portfolio/shop/quote", customer()),
+            rule(GET, "/portfolio/shop/questions", customer()),
+            rule(POST, "/portfolio/shop/applications/*/offer", customer()),
             rule(GET, "/portfolio/shop/identity-documents", customer()),
             rule(POST, "/portfolio/shop/identity-documents", customer()),
             rule(POST, "/portfolio/shop/claims", customer()),
@@ -103,6 +105,8 @@ public final class ApiAccessRules {
 
             // ── applications ───────────────────────────────────────────────────────────────────────────
             rule(GET, "/portfolio/applications", anyOf("READ_APPLICATION")),
+            rule(GET, "/portfolio/applications/evidence-queue", anyOf("READ_APPLICATION")),
+            rule(GET, "/portfolio/application-relationships", anyOf("READ_APPLICATION", "CREATE_APPLICATION")),
             rule(POST, "/portfolio/applications", anyOf("CREATE_APPLICATION")),
             rule(PUT, "/portfolio/applications/*", anyOf("UPDATE_APPLICATION")),
             rule(GET, "/portfolio/applications/*/checklist", anyOf("READ_APPLICATION")),
