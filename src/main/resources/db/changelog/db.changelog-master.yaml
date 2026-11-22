@@ -320,3 +320,6 @@ databaseChangeLog:
   - include:
       file: changes/214-kyc-aml-screening.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/215-batch-manifests.yaml
+      relativeToChangelogFile: true

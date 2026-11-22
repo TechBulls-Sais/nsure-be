@@ -1,0 +1,35 @@
+databaseChangeLog:
+  # §11 batch contract and NS-SH12-002: a partner batch arrives with a manifest (schema version, source, external
+  # batch id, dates, record count, currency, control total, checksum) that is validated before any row is staged; the
+  # receipt keeps the manifest, the outcome and the lineage to an earlier batch it corrects, and an acknowledgement is
+  # produced from it.
+  - changeSet:
+      id: 215-batch-manifests
+      author: nsure
+      changes:
+        - createTable:
+            tableName: int_batch_receipt
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_int_batch_receipt}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_int_batch_receipt_ref}}
+              - column: {name: interface_code, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: batch_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: target_ref, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: schema_version, type: varchar(30)}
+              - column: {name: source, type: varchar(100)}
+              - column: {name: external_batch_id, type: varchar(80)}
+              - column: {name: created_on, type: varchar(30)}
+              - column: {name: as_of, type: varchar(30)}
+              - column: {name: declared_count, type: int}
+              - column: {name: actual_count, type: int, constraints: {nullable: false}}
+              - column: {name: currency, type: varchar(3)}
+              - column: {name: declared_total, type: 'decimal(19,2)'}
+              - column: {name: actual_total, type: 'decimal(19,2)'}
+              - column: {name: declared_checksum, type: varchar(64)}
+              - column: {name: actual_checksum, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: corrects_ref, type: varchar(20)}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: problems, type: varchar(1000)}
+              - column: {name: staged_ref, type: varchar(20)}
+              - column: {name: received_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: received_at, type: datetime, constraints: {nullable: false}}

@@ -24,10 +24,12 @@ public class IntegrationController {
     private final PaymentCallbacks callbacks;
     private final ScreeningService screening;
     private final CompensationTracker compensations;
+    private final BatchGateway batchGateway;
 
     public IntegrationController(IntegrationService integration, PaymentNotifications payments,
             ProviderStatusClient providerStatus, InterfaceCatalogue catalogue, PaymentCallbacks callbacks,
-            ScreeningService screening, CompensationTracker compensations) {
+            ScreeningService screening, CompensationTracker compensations, BatchGateway batchGateway) {
+        this.batchGateway = batchGateway;
         this.compensations = compensations;
         this.callbacks = callbacks;
         this.screening = screening;
@@ -94,6 +96,23 @@ public class IntegrationController {
     @GetMapping("/reconciliation")
     public List<Map<String, Object>> reconciliation() {
         return catalogue.reconciliation();
+    }
+
+    /** A census batch with its manifest, validated before any row is staged (§11 batch contract). */
+    @PostMapping("/batches/census")
+    public Map<String, Object> receiveCensus(@RequestBody JsonNode body) {
+        return batchGateway.receiveCensus(body);
+    }
+
+    @GetMapping("/batch-receipts")
+    public List<Map<String, Object>> batchReceipts() {
+        return batchGateway.receipts();
+    }
+
+    /** The acknowledgement returned to the partner: counts, row errors and created references. */
+    @GetMapping("/batch-receipts/{ref}/acknowledgement")
+    public Map<String, Object> acknowledgement(@PathVariable String ref) {
+        return batchGateway.acknowledgement(ref);
     }
 
     /** NS-TXN-004: compensating events with the legs each must correct and whether they did. */

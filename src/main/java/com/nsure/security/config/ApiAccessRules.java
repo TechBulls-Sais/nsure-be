@@ -446,6 +446,9 @@ public final class ApiAccessRules {
             rule(POST, "/integration/screening", anyOf("KYC_CUSTOMER")),
             rule(POST, "/integration/screening/retry", anyOf("KYC_CUSTOMER")),
             rule(POST, "/integration/screening/*/disposition", anyOf("DISPOSE_SCREENING")),
+            // §11 batch contract: census batches with a manifest, and their acknowledgement.
+            rule(POST, "/integration/batches/census", anyOf("PROCESS_CENSUS")),
+            rule(GET, "/integration/batch-receipts/*/acknowledgement", anyOf("READ_INTEGRATION", "PROCESS_CENSUS")),
             rule(GET, "/integration/**", anyOf("READ_INTEGRATION")),
             rule(POST, "/integration/outbox/dispatch", anyOf("MANAGE_INTEGRATION")),
             rule(POST, "/integration/deliveries/*/replay", anyOf("MANAGE_INTEGRATION")),
