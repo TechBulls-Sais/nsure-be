@@ -146,6 +146,34 @@ with 409 (`WorkOwnershipGuard`; service desk cases check their own owner). Event
 `SlaBreached` (once per item, checked every 10 minutes, `nsure.workflow.sla-check-cron`), `CaseOpened`/`CaseClosed`
 (service desk, alongside `ServiceCaseOpened`) and `ApprovalGranted` (maker-checker approvals).
 
+### Integration workspace (SH12), management reporting (SH13) and governed assistants (section 15)
+
+- **Interface catalogue** (`/integration/interfaces`, table `int_interface`): owner, authentication, contract, SLA,
+  reconciliation, retention, runbook, connection (SIMULATED / MANUAL / NOT_CONNECTED / in process) and live health
+  per interface. Register values marked "(demo default)" await decisions D10/D12/D14. With the provider simulator on,
+  `PUT /integration/interfaces/{code}/availability {available, reason}` simulates an outage: deliveries to that
+  interface fail as TRANSIENT, retry with backoff, are dead-lettered after `nsure.integration.max-attempts` with owner,
+  reason and an alert, and resume automatically when it is restored. A backlog older than
+  `nsure.integration.backlog-alert-minutes` (15) is alerted. Replay needs a reason and is logged
+  (`/integration/operator-actions` and audit evidence). Also: `/dead-letters`, `/batches`, `/reconciliation`,
+  `/compensations` (NS-TXN-004 legs) and simulated outbound feeds (`partner.webhooks`, `reinsurer.bordereau-feed`,
+  signed, no outbound HTTP).
+- **Payments**: signed provider callbacks at `POST /integration/callbacks/payments` (`X-Nsure-Signature` over
+  `X-Nsure-Timestamp.body`, `nsure.integration.payment-callback-secret`, replay window
+  `nsure.integration.callback-replay-window-seconds` 300); a status query that times out leaves the confirmation
+  UNKNOWN and it is re-queried, never re-sent (`/integration/inbound/{id}/status-query`, sweep, and on restore).
+- **KYC/AML screening** (`/integration/screening`): simulated provider (`nsure.integration.screening.watchlist`),
+  evidence ref and expiry, PENDING during outages, referrals decided by `DISPOSE_SCREENING` (not the requester).
+- **Census manifests** (`POST /integration/batches/census`): schema version, count, salary total and SHA-256 checked
+  before staging; acknowledgement at `/integration/batch-receipts/{ref}/acknowledgement`.
+- **Reports**: `/reports/management?from&to&product&intermediary&scheme`, drill-through `/reports/drill?key=`
+  (module permission, masking without READ_CUSTOMER), logged exports `POST /reports/exports`, partner-scoped
+  `/reports/partner-portfolio`, metric dictionary versions with approval (`MANAGE_METRIC`/`APPROVE_METRIC`).
+- **Assistants**: no AI model is called. Register with permitted inputs, review permission, four eyes, threshold and
+  approved version changes (`/platform/assistants/{code}/changes`), reviews accept/override/reject with reason, drafts
+  from approved templates sent only after review, monitoring, and the section 17 registers
+  (`/platform/ai-coverage`, `/platform/scope-exceptions`).
+
 ### Idempotency, background operations and event consumers (spec §10)
 
 - **Idempotency-Key** (NS-API-002): on JSON commands under `nsure.idempotency.paths` (policy issue and premiums, claims,
