@@ -396,6 +396,11 @@ public final class ApiAccessRules {
             // ── partner portals, work queue, document register, payouts ────────────────────────────────
             rule(GET, "/ops/portal", anyOf("USE_PARTNER_PORTAL")),
             rule(POST, "/ops/portal/requests", anyOf("USE_PARTNER_PORTAL")),
+            // Spec 04 partner workspaces (work package e): structured submissions, the agent's quote, staff processing
+            // (the owning module's permission is checked in the service).
+            rule(POST, "/ops/portal/submissions", anyOf("USE_PARTNER_PORTAL")),
+            rule(POST, "/ops/portal/quote", anyOf("USE_PARTNER_PORTAL")),
+            rule(POST, "/ops/portal-requests/*/process", anyOf("CREATE_APPLICATION", "PROCESS_CENSUS", "MANAGE_CREDIT")),
             rule(GET, "/ops/portal-accounts", anyOf("READ_USER")),
             rule(PUT, "/ops/portal-accounts", anyOf("UPDATE_USER")),
             rule(DELETE, "/ops/portal-accounts/*", anyOf("UPDATE_USER")),

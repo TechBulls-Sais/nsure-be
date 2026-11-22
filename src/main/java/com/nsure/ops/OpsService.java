@@ -113,7 +113,20 @@ public class OpsService {
             }
         }
         out.put("requests", jdbc.query("select record_ref, request_type, detail, status, created_at, handled_by,"
-                + " handled_note from portal_request where created_by = ? order by id desc", ROW, user.getUsername()));
+                + " handled_note, result, result_ref, processed_at from portal_request where created_by = ? order by id"
+                + " desc", ROW, user.getUsername()));
+        if ("AGENT".equals(type)) {
+            // Spec 04 agent workspace: commission statements and the arrears tasks of the agent's book.
+            out.put("statements", jdbc.query("select s.record_ref, s.net_amount, s.line_count, s.status, s.issued_at,"
+                    + " s.paid_at from dist_statement s join dist_intermediary i on i.id = s.intermediary_id where"
+                    + " i.record_ref = ? order by s.id desc", ROW, scope));
+            out.put("arrears", jdbc.query("select p.record_ref, p.customer_name, p.product, p.status, p.premium from"
+                    + " ins_policy p where (p.record_ref in (select a.policy_ref from dist_policy_assignment a join"
+                    + " dist_intermediary i on i.id = a.intermediary_id where i.record_ref = ? and a.ended_on is null) or"
+                    + " p.application_ref in (select ap.record_ref from ins_application ap where ap.intermediary_code ="
+                    + " ?)) and p.status not in ('Active', 'Cancelled', 'Terminated', 'Matured') order by p.id desc", ROW,
+                    scope, scope));
+        }
         return out;
     }
 

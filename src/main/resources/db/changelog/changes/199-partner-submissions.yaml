@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # Spec 04 partner workspaces (work package e): structured submissions from the agent, employer and lender portals.
+  # The partner's data is validated against its own scope when sent; a member of staff then processes it through the
+  # owning module (application, census staging, loan registration, balance file), and the result (the record created,
+  # or the rows refused and why) is shown back to the partner.
+  - changeSet:
+      id: 199-partner-submissions
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: portal_request
+            columns:
+              - column: {name: payload, type: varchar(8000)}
+              - column: {name: result, type: varchar(4000)}
+              - column: {name: result_ref, type: varchar(40)}
+              - column: {name: processed_by, type: varchar(100)}
+              - column: {name: processed_at, type: timestamp(6)}

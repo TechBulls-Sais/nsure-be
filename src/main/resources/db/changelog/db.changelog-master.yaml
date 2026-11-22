@@ -317,3 +317,6 @@ databaseChangeLog:
   - include:
       file: changes/198-security-scoping.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/199-partner-submissions.yaml
+      relativeToChangelogFile: true
