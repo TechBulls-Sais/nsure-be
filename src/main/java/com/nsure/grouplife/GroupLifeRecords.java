@@ -182,5 +182,32 @@ public final class GroupLifeRecords {
         BigDecimal refund;
         @Column(name = "created_at", nullable = false)
         LocalDateTime createdAt;
+        // GL06 (WP g): eligibility data, elections, premium basis, lender balance and cover end (NS-GL06-001..004).
+        @Column(name = "loan_class", length = 20)
+        String loanClass;
+        @Column(name = "borrower_id_number", length = 30)
+        String borrowerIdNumber;
+        @Column(name = "date_of_birth")
+        LocalDate dateOfBirth;
+        @Column(name = "disbursement_date")
+        LocalDate disbursementDate;
+        @Column(length = 100)
+        String benefits;
+        @Column(name = "premium_basis", length = 20)
+        String premiumBasis;
+        @Column(name = "rate_per_mille", precision = 9, scale = 4)
+        BigDecimal ratePerMille;
+        @Column(precision = 19, scale = 2)
+        BigDecimal balance;
+        @Column(name = "balance_date")
+        LocalDate balanceDate;
+        @Column(name = "arrears_months")
+        Integer arrearsMonths;
+        @Column(name = "cover_end_date")
+        LocalDate coverEndDate;
+        @Column(name = "ci_paid", precision = 19, scale = 2)
+        BigDecimal ciPaid;
+        @Column(name = "interface_version", length = 10)
+        String interfaceVersion;
     }
 }

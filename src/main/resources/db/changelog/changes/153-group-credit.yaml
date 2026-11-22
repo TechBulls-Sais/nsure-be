@@ -1,0 +1,217 @@
+databaseChangeLog:
+  # GL06 group credit life (NS-GL06-001..006, AT-GL06-02/03): the lender agreement with limits, loan classes, premium
+  # basis and remittance cycle; per-loan eligibility data, cover history and premium schedule; lender remittance
+  # statements; versioned lender update files with control totals and retained exceptions; credit claims with payee
+  # split and recovery; early-settlement and cancellation refunds with an approval step.
+  - changeSet:
+      id: 153-group-credit
+      author: nsure
+      changes:
+        - createTable:
+            tableName: grp_lender_agreement
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_lender_agreement}}
+              - column: {name: scheme_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_lender_agreement_scheme}}
+              - column: {name: lender_ref, type: varchar(20)}
+              - column: {name: agreement_no, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: effective_from, type: date, constraints: {nullable: false}}
+              - column: {name: premium_basis, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: rate_per_mille, type: 'decimal(9,4)', constraints: {nullable: false}}
+              - column: {name: balance_basis, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: premium_timing, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: remittance_day, type: int, constraints: {nullable: false}}
+              - column: {name: death_cap, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: ci_cap, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: td_monthly_cap, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: td_max_months, type: int, constraints: {nullable: false}}
+              - column: {name: over_cap_rule, type: varchar(10), constraints: {nullable: false}}
+              - column: {name: min_age, type: int, constraints: {nullable: false}}
+              - column: {name: max_age, type: int, constraints: {nullable: false}}
+              - column: {name: max_age_at_end, type: int, constraints: {nullable: false}}
+              - column: {name: max_term, type: int, constraints: {nullable: false}}
+              - column: {name: notification_days, type: int, constraints: {nullable: false}}
+              - column: {name: claim_basis, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: refund_method, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: refund_deduction_percent, type: 'decimal(7,2)', constraints: {nullable: false}}
+              - column: {name: commission_percent, type: 'decimal(7,2)', constraints: {nullable: false}}
+              - column: {name: ceded_percent, type: 'decimal(7,2)', constraints: {nullable: false}}
+              - column: {name: stale_balance_days, type: int, constraints: {nullable: false}}
+              - column: {name: updated_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: updated_at, type: datetime, constraints: {nullable: false}}
+        - createTable:
+            tableName: grp_loan_class
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_loan_class}}
+              - column: {name: scheme_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: class_code, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: name, type: varchar(80), constraints: {nullable: false}}
+              - column: {name: max_term, type: int, constraints: {nullable: false}}
+              - column: {name: max_amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: benefits, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: rate_per_mille, type: 'decimal(9,4)'}
+        - addUniqueConstraint:
+            tableName: grp_loan_class
+            columnNames: scheme_ref, class_code
+            constraintName: uk_grp_loan_class
+        - addColumn:
+            tableName: grp_credit_loan
+            columns:
+              - column: {name: loan_class, type: varchar(20)}
+              - column: {name: borrower_id_number, type: varchar(30)}
+              - column: {name: date_of_birth, type: date}
+              - column: {name: disbursement_date, type: date}
+              - column: {name: benefits, type: varchar(100)}
+              - column: {name: premium_basis, type: varchar(20)}
+              - column: {name: rate_per_mille, type: 'decimal(9,4)'}
+              - column: {name: balance, type: 'decimal(19,2)'}
+              - column: {name: balance_date, type: date}
+              - column: {name: arrears_months, type: int}
+              - column: {name: cover_end_date, type: date}
+              - column: {name: ci_paid, type: 'decimal(19,2)'}
+              - column: {name: interface_version, type: varchar(10)}
+        - createTable:
+            tableName: grp_credit_loan_event
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_credit_loan_event}}
+              - column: {name: loan_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: event_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: effective_date, type: date, constraints: {nullable: false}}
+              - column: {name: balance, type: 'decimal(19,2)'}
+              - column: {name: cover_amount, type: 'decimal(19,2)'}
+              - column: {name: detail, type: varchar(300)}
+              - column: {name: source_ref, type: varchar(60)}
+              - column: {name: actor, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: recorded_at, type: datetime, constraints: {nullable: false}}
+        - createTable:
+            tableName: grp_credit_premium
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_credit_premium}}
+              - column: {name: loan_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: scheme_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: installment_no, type: int, constraints: {nullable: false}}
+              - column: {name: due_date, type: date, constraints: {nullable: false}}
+              - column: {name: period_from, type: date, constraints: {nullable: false}}
+              - column: {name: period_to, type: date, constraints: {nullable: false}}
+              - column: {name: basis_amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: rate_per_mille, type: 'decimal(9,4)', constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: premium_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: remittance_ref, type: varchar(20)}
+        - addUniqueConstraint:
+            tableName: grp_credit_premium
+            columnNames: loan_id, installment_no
+            constraintName: uk_grp_credit_premium
+        - createTable:
+            tableName: grp_credit_remittance
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_credit_remittance}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_credit_remittance_ref}}
+              - column: {name: scheme_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: billing_period, type: varchar(7), constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: paid_amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: outstanding, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: installments, type: int, constraints: {nullable: false}}
+              - column: {name: commission, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: ceded, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: remittance_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: reconciliation, type: varchar(1000)}
+              - column: {name: issued_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: issued_at, type: datetime, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: grp_credit_remittance
+            columnNames: scheme_ref, billing_period
+            constraintName: uk_grp_credit_remittance_period
+        - createTable:
+            tableName: grp_credit_file
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_credit_file}}
+              - column: {name: scheme_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: file_reference, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: file_kind, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: schema_version, type: varchar(10), constraints: {nullable: false}}
+              - column: {name: file_hash, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: row_count, type: int, constraints: {nullable: false}}
+              - column: {name: control_total, type: 'decimal(19,2)'}
+              - column: {name: file_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: file_result, type: varchar(4000)}
+              - column: {name: received_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: received_at, type: datetime, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: grp_credit_file
+            columnNames: scheme_ref, file_reference
+            constraintName: uk_grp_credit_file
+        - createTable:
+            tableName: grp_credit_exception
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_credit_exception}}
+              - column: {name: scheme_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: loan_id, type: bigint}
+              - column: {name: lender_loan_id, type: varchar(60)}
+              - column: {name: exception_type, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: detail, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: file_reference, type: varchar(60)}
+              - column: {name: exception_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: raised_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: resolved_by, type: varchar(100)}
+              - column: {name: resolved_at, type: datetime}
+              - column: {name: resolution_note, type: varchar(300)}
+        - createTable:
+            tableName: grp_credit_claim
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_credit_claim}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_credit_claim_ref}}
+              - column: {name: loan_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: scheme_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: benefit, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: event_date, type: date, constraints: {nullable: false}}
+              - column: {name: claim_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: balance_at_event, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: benefit_amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: lender_amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: borrower_amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: monthly_amount, type: 'decimal(19,2)'}
+              - column: {name: months, type: int}
+              - column: {name: calculation, type: varchar(500)}
+              - column: {name: recovery_amount, type: 'decimal(19,2)'}
+              - column: {name: recovery_status, type: varchar(20)}
+              - column: {name: note, type: varchar(500)}
+              - column: {name: notified_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: notified_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: datetime}
+              - column: {name: payment_reference, type: varchar(80)}
+              - column: {name: paid_at, type: datetime}
+        - createTable:
+            tableName: grp_credit_refund
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_credit_refund}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_credit_refund_ref}}
+              - column: {name: loan_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: scheme_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: effective_date, type: date, constraints: {nullable: false}}
+              - column: {name: months_unearned, type: int, constraints: {nullable: false}}
+              - column: {name: gross_unearned, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: deduction, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: refund_amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: commission_reversal, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: reinsurance_reversal, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: formula, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: refund_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: source_ref, type: varchar(60)}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: datetime}
+              - column: {name: decision_note, type: varchar(300)}
+              - column: {name: payment_reference, type: varchar(80)}
+              - column: {name: paid_at, type: datetime}
+        - sql:
+            sql: >-
+              INSERT INTO fin_posting_rule (event_type, debit_account, credit_account, amount_field, business_domain,
+              description, status, version, updated_by, updated_at, effective_from, approval_status, approved_by,
+              approved_at)
+              SELECT 'GroupClaimPaid', '5000', '1000', 'amount', 'GROUP', 'Group claim benefit paid',
+              'ACTIVE', 1, 'system', CURRENT_TIMESTAMP, DATE '2000-01-01', 'APPROVED', 'system', CURRENT_TIMESTAMP
+              WHERE NOT EXISTS (SELECT 1 FROM fin_posting_rule x WHERE x.event_type = 'GroupClaimPaid')

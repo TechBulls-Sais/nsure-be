@@ -138,6 +138,8 @@ public final class Events {
     public static final String CENSUS_BATCH_COMPLETED = "CensusBatchCompleted";
     /** schemeRef, certificateNo, settlementDate, amount. Raised with GroupPremiumRefunded when a settlement is made. */
     public static final String UNEARNED_PREMIUM_REFUND_APPROVED = "UnearnedPremiumRefundApproved";
+    /** schemeRef, claimRef, certificateNo, benefit, amount, lenderAmount, borrowerAmount. A group claim paid out. */
+    public static final String GROUP_CLAIM_PAID = "GroupClaimPaid";
 
     // Party master (spec SH01). References only, never identity numbers or contact details (NS-API-003).
     /** customerRef, partyType, channel (STAFF or SELF_SIGNUP), kycStatus, duplicateReview (boolean). */

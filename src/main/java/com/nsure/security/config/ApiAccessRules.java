@@ -363,6 +363,16 @@ public final class ApiAccessRules {
             rule(POST, "/group-life/events/*/decision", anyOf("UNDERWRITE_MEMBER")),
             rule(POST, "/group-life/schemes/*/credit-loans", anyOf("PROCESS_CENSUS")),
             rule(POST, "/group-life/credit-loans/*/settlement", anyOf("BILL_SCHEME")),
+            rule(PUT, "/group-life/schemes/*/lender-agreement", anyOf("MANAGE_SCHEME")),
+            rule(POST, "/group-life/credit-loans/*/underwriting", anyOf("UNDERWRITE_MEMBER")),
+            rule(POST, "/group-life/schemes/*/credit-files", anyOf("PROCESS_CENSUS")),
+            rule(POST, "/group-life/credit-exceptions/*/resolution", anyOf("PROCESS_CENSUS")),
+            rule(POST, "/group-life/schemes/*/credit-remittances", anyOf("BILL_SCHEME")),
+            rule(POST, "/group-life/credit-remittances/*/receipts", anyOf("BILL_SCHEME")),
+            rule(POST, "/group-life/credit-refunds/*/decision", anyOf("BILL_SCHEME")),
+            rule(POST, "/group-life/credit-refunds/*/payment", anyOf("BILL_SCHEME")),
+            rule(POST, "/group-life/credit-loans/*/claims", anyOf("CREATE_CLAIM")),
+            rule(POST, "/group-life/credit-claims/*/decision", anyOf("APPROVE_CLAIM", "ASSESS_CLAIM", "SETTLE_CLAIM")),
 
             // ── shared services: party merges, wordings, extracts, governed assistants ─────────────────
             rule(GET, "/platform/parties/**", anyOf("READ_CUSTOMER")),

@@ -153,8 +153,15 @@ class GroupEventsApiTest {
                 .andExpect(jsonPath("$.monthsUnearned").value(12))
                 .andReturn().getResponse().getContentAsString(), "$.refundPreview");
         assertThat(events(Events.UNEARNED_PREMIUM_REFUND_APPROVED, scheme)).isEmpty();
-        mockMvc.perform(json(post("/group-life/credit-loans/" + loan + "/settlement"), "admin", "{}"))
-                .andExpect(jsonPath("$.refund").value(preview));
+        String refund = JsonPath.read(mockMvc.perform(json(post("/group-life/credit-loans/" + loan + "/settlement"), "admin", "{}"))
+                .andExpect(jsonPath("$.refund").value(preview))
+                .andExpect(jsonPath("$.refundStatus").value("PENDING"))
+                .andReturn().getResponse().getContentAsString(), "$.refundRef");
+        // NS-GL06-006: the refund is approved by a second person, and only then announced.
+        assertThat(events(Events.UNEARNED_PREMIUM_REFUND_APPROVED, scheme)).isEmpty();
+        mockMvc.perform(json(post("/group-life/credit-refunds/" + refund + "/decision"), "secadmin",
+                        "{\"approve\":true,\"note\":\"Settlement letter checked\"}"))
+                .andExpect(jsonPath("$.status").value("APPROVED"));
         assertThat(events(Events.UNEARNED_PREMIUM_REFUND_APPROVED, scheme)).singleElement()
                 .satisfies(e -> assertThat(e.getPayload()).contains("\"amount\":\"" + String.format("%.2f", preview) + "\""));
     }

@@ -110,26 +110,4 @@ public class GroupLifeController {
     public List<Map<String, Object>> certificates(@PathVariable String ref) {
         return groupLife.certificates(ref);
     }
-
-    @GetMapping("/schemes/{ref}/credit-loans")
-    public List<Map<String, Object>> creditLoans(@PathVariable String ref) {
-        return groupLife.creditLoans(ref);
-    }
-
-    /** {batchReference, ratePerMille?, rows [{lenderLoanId, borrowerName, loanAmount, termMonths}]} */
-    @PostMapping("/schemes/{ref}/credit-loans")
-    public Map<String, Object> bordereau(@PathVariable String ref, @RequestBody JsonNode body) {
-        return groupLife.bordereau(ref, body);
-    }
-
-    @GetMapping("/credit-loans/{id}/settlement")
-    public Map<String, Object> settlementPreview(@PathVariable Long id,
-            @RequestParam(required = false) String settlementDate) {
-        return groupLife.settlementPreview(id, settlementDate);
-    }
-
-    @PostMapping("/credit-loans/{id}/settlement")
-    public Map<String, Object> settleLoan(@PathVariable Long id, @RequestBody(required = false) JsonNode body) {
-        return groupLife.settleLoan(id, body);
-    }
 }

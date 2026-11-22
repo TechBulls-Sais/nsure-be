@@ -1,0 +1,47 @@
+databaseChangeLog:
+  # Demonstration data (context demo): a lender scheme with a group credit benefit and a lender agreement, so the GL06
+  # workflow (bordereau, cover, remittance, update file, claim, settlement and refund) can be walked at once. The
+  # agreement values are demo defaults, not terms agreed with the insurer.
+  - changeSet:
+      id: 154-group-credit-demo
+      author: nsure
+      context: demo
+      changes:
+        - sql:
+            sql: >-
+              INSERT INTO ins_scheme (record_ref, name, sector, initials, members, premium, renewal, color, display_order,
+              inception_date, renewal_date, billing_frequency, scheme_status, policy_year)
+              SELECT 'SCH-010', 'Kalahari Microfinance (group credit)', 'Microfinance', 'KM', 0, 0, '01 Jan 2027', 'blue',
+              10, DATE '2026-01-01', DATE '2027-01-01', 'MONTHLY', 'ACTIVE', 1
+              WHERE NOT EXISTS (SELECT 1 FROM ins_scheme x WHERE x.record_ref = 'SCH-010')
+        - sql:
+            sql: >-
+              INSERT INTO grp_scheme_benefit (scheme_ref, benefit_type, basis, fixed_amount, terms, updated_by, updated_at,
+              approval_status, approved_by, approved_at)
+              SELECT 'SCH-010', 'CREDIT', 'FIXED', 750000.00,
+              'Demo group credit pack: death and permanent disability up to 750 000, critical illness up to 350 000,
+              temporary disability up to 15 000 a month.', 'system', CURRENT_TIMESTAMP, 'APPROVED', 'system',
+              CURRENT_TIMESTAMP
+              WHERE NOT EXISTS (SELECT 1 FROM grp_scheme_benefit x WHERE x.scheme_ref = 'SCH-010' AND x.benefit_type = 'CREDIT')
+        - sql:
+            sql: >-
+              INSERT INTO grp_lender_agreement (scheme_ref, lender_ref, agreement_no, effective_from, premium_basis,
+              rate_per_mille, balance_basis, premium_timing, remittance_day, death_cap, ci_cap, td_monthly_cap,
+              td_max_months, over_cap_rule, min_age, max_age, max_age_at_end, max_term, notification_days, claim_basis,
+              refund_method, refund_deduction_percent, commission_percent, ceded_percent, stale_balance_days, updated_by,
+              updated_at)
+              SELECT 'SCH-010', 'LND-0001', 'KMF-GC-2026 (demo)', DATE '2026-01-01', 'SINGLE', 0.8500, 'ORIGINAL',
+              'IN_ADVANCE', 7, 750000.00, 350000.00, 15000.00, 12, 'REFER', 18, 65, 70, 120, 90, 'OUTSTANDING_BALANCE',
+              'PRO_RATA', 10.00, 10.00, 50.00, 45, 'system', CURRENT_TIMESTAMP
+              WHERE NOT EXISTS (SELECT 1 FROM grp_lender_agreement x WHERE x.scheme_ref = 'SCH-010')
+        - sql:
+            sql: >-
+              INSERT INTO grp_loan_class (scheme_ref, class_code, name, max_term, max_amount, benefits)
+              SELECT 'SCH-010', 'PERSONAL', 'Personal loans', 60, 500000.00,
+              'DEATH,DISABILITY,CRITICAL_ILLNESS,TEMPORARY_DISABILITY'
+              WHERE NOT EXISTS (SELECT 1 FROM grp_loan_class x WHERE x.scheme_ref = 'SCH-010' AND x.class_code = 'PERSONAL')
+        - sql:
+            sql: >-
+              INSERT INTO grp_loan_class (scheme_ref, class_code, name, max_term, max_amount, benefits)
+              SELECT 'SCH-010', 'SME', 'Small business loans', 36, 750000.00, 'DEATH,DISABILITY'
+              WHERE NOT EXISTS (SELECT 1 FROM grp_loan_class x WHERE x.scheme_ref = 'SCH-010' AND x.class_code = 'SME')
