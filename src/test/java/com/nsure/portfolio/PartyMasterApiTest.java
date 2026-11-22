@@ -244,7 +244,7 @@ class PartyMasterApiTest {
 
     @Test
     void aDelegationGivesPortalAccessOnlyUntilItExpires() throws Exception {
-        String owner = customer("Masego Owner", "masego.o@example.com", "+267 71 300 030", "1960-02-02", null);
+        String owner = customer("Masego Owner", "masego.o@example.com", "+267 71 300 030", "1966-02-02", null);
         String delegate = customer("Lorato Delegate", "lorato.d@example.com", "+267 71 300 031", "1990-02-02",
                 "loratod");
         verify(owner);

@@ -44,8 +44,13 @@ class CompensationTrackerApiTest {
         mockMvc.perform(post("/integration/outbox/dispatch").with(signedIn("admin", "password"))).andExpect(status().isOk());
         String receipt = jdbc.queryForObject("select receipt_ref from premium_payment where policy_ref = ?", String.class,
                 policy);
-        mockMvc.perform(json(post("/collections/receipts/" + receipt + "/reverse"),
-                "{\"kind\":\"RETURNED\",\"reason\":\"Debit returned: insufficient funds\"}")).andExpect(status().isOk());
+        // A staff reversal is a request that a second person approves (NS-SH04-005).
+        String request = mockMvc.perform(json(post("/collections/receipts/" + receipt + "/reverse"),
+                "{\"kind\":\"RETURNED\",\"reason\":\"Debit returned: insufficient funds\"}")).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        mockMvc.perform(post("/collections/reversal-requests/" + JsonPath.read(request, "$.ref") + "/approve")
+                        .with(signedIn("secadmin", "password")).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isOk());
 
         String before = list();
         String path = "$[?(@.eventType == 'PaymentReturned' && @.aggregateRef == '" + policy + "')]";

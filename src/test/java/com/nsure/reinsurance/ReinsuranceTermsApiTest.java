@@ -58,9 +58,25 @@ class ReinsuranceTermsApiTest {
     @Autowired
     private TransactionTemplate tx;
 
+    /** The Whole of Life rule set's limits before this test raised them (restored after each test). */
+    private java.util.Map<String, Object> wholeOfLifeLimits;
+
     @BeforeEach
     void users() {
         ModuleTestUsers.provision(jdbc);
+        // Portal purchases are underwritten (NS-IL01-005). These tests are about cession, so the large plans they buy
+        // are kept inside the automatic acceptance limits for the duration of the test.
+        wholeOfLifeLimits = jdbc.queryForMap("select auto_max_sum_assured, medical_evidence_above, aggregate_exposure_limit"
+                + " from uw_rule_set where product = 'Whole of Life'");
+        jdbc.update("update uw_rule_set set auto_max_sum_assured = 100000000, medical_evidence_above = 100000000,"
+                + " aggregate_exposure_limit = 100000000 where product = 'Whole of Life'");
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void restoreLimits() {
+        jdbc.update("update uw_rule_set set auto_max_sum_assured = ?, medical_evidence_above = ?, aggregate_exposure_limit = ?"
+                + " where product = 'Whole of Life'", wholeOfLifeLimits.get("auto_max_sum_assured"),
+                wholeOfLifeLimits.get("medical_evidence_above"), wholeOfLifeLimits.get("aggregate_exposure_limit"));
     }
 
     @Test

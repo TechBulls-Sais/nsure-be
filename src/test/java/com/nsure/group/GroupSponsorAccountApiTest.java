@@ -204,6 +204,7 @@ class GroupSponsorAccountApiTest {
     }
 
     private String upload(String scheme, String id, String csv) throws Exception {
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme); // schemes start in SETUP (NS-GL01-004)
         return JsonPath.read(ok(post("/group/schemes/" + scheme + "/census-batches"), "grpadmin",
                 body(Map.of("externalBatchId", id, "csv", csv))).andReturn().getResponse().getContentAsString(), "$.ref");
     }

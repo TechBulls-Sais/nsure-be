@@ -50,6 +50,7 @@ class GroupCreditApiTest {
         String scheme = JsonPath.read(ok(post("/group/schemes"), "admin", "{\"name\":\"Credit Lender " + System.nanoTime()
                 + "\",\"sector\":\"Banking\",\"inceptionDate\":\"2026-01-01\",\"renewalDate\":\"2027-01-01\"}")
                 .andReturn().getResponse().getContentAsString(), "$.scheme.ref");
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme); // schemes start in SETUP (NS-GL01-004)
         ok(put("/group-life/schemes/" + scheme + "/benefits"), "admin",
                 "{\"benefitType\":\"CREDIT\",\"basis\":\"FIXED\",\"fixedAmount\":750000}");
         ok(put("/group-life/schemes/" + scheme + "/lender-agreement"), "admin", "{\"lenderRef\":\"LND-0001\","

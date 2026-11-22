@@ -238,6 +238,7 @@ class GroupMovementsApiTest {
     void aSchemeCanRequireAtomicBatchesAndASecondPersonToCommit() throws Exception {
         String scheme = scheme("2026-01-01");
         category(scheme, "STAFF", "2", "1000000", "0.60");
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme); // schemes start in SETUP (NS-GL01-004)
         mockMvc.perform(json(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(
                         "/group/schemes/" + scheme + "/census-terms"), "grpadmin", "{\"atomicRequired\":true,\"fourEyes\":true}"))
                 .andExpect(status().isOk())
@@ -279,6 +280,7 @@ class GroupMovementsApiTest {
     }
 
     private String upload(String scheme, String id, String csv) throws Exception {
+        com.nsure.testsupport.GroupSchemeSetup.activate(mockMvc, scheme); // schemes start in SETUP (NS-GL01-004)
         return JsonPath.read(ok(post("/group/schemes/" + scheme + "/census-batches"), "grpadmin",
                 body(Map.of("externalBatchId", id, "csv", csv))).andReturn().getResponse().getContentAsString(), "$.ref");
     }

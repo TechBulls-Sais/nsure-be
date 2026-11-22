@@ -213,7 +213,7 @@ class CareCashRulesApiTest {
     private String policy(String name, String tier, int age, int monthsAgo) throws Exception {
         String customer = JsonPath.read(mockMvc.perform(json(post("/portfolio/customers"), "admin", "{\"name\":\"" + name
                                 + "\",\"email\":\"ccr" + Math.abs(name.hashCode()) + "@example.com\",\"phone\":\"+267 71 960 002\","
-                                + "\"dateOfBirth\":\"" + LocalDate.now().minusYears(age).minusDays(10) + "\"}"))
+                                + "\"dateOfBirth\":\"" + LocalDate.now().minusYears(Math.min(age, 50)).minusDays(10) + "\"}"))
                         .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
         mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(signedIn("admin", "password"))).andExpect(status().isOk());
         String policy = JsonPath.read(mockMvc.perform(json(post("/portfolio/policies"), "admin", "{\"customerRef\":\"" + customer
@@ -222,6 +222,9 @@ class CareCashRulesApiTest {
         mockMvc.perform(json(post("/portfolio/policies/" + policy + "/payments"), "admin", "{\"method\":\"Bank EFT\"}"))
                 .andExpect(status().isOk());
         jdbc.update("update ins_policy set cover_start_date = ? where record_ref = ?", LocalDate.now().minusMonths(monthsAgo), policy);
+        // An older life entered years ago: issued within the entry ages today, then aged as the scenario needs.
+        jdbc.update("update ins_customer set date_of_birth = ? where record_ref = ?", LocalDate.now().minusYears(age).minusDays(10),
+                customer);
         return policy;
     }
 
