@@ -38,14 +38,16 @@ public class SchemeBillingService {
     private final GroupRecords records;
     private final Outbox outbox;
     private final CoverHistory cover;
+    private final SponsorAccountService account;
 
     public SchemeBillingService(EntityManager em, PlatformSecurityContext security, GroupRecords records,
-            Outbox outbox, CoverHistory cover) {
+            Outbox outbox, CoverHistory cover, SponsorAccountService account) {
         this.em = em;
         this.security = security;
         this.records = records;
         this.outbox = outbox;
         this.cover = cover;
+        this.account = account;
     }
 
     /** Issues the invoice for a month, or returns the one already issued for that scheme and month. */
@@ -145,6 +147,7 @@ public class SchemeBillingService {
                 .setParameter("today", today).getResultList();
         Map<String, GroupViews.InvoiceView> views = new java.util.HashMap<>();
         records.invoiceViews(owed).forEach(v -> views.put(v.ref(), v));
+        Map<Long, List<String>> blockers = new java.util.HashMap<>();
         List<Map<String, Object>> out = new ArrayList<>();
         for (SchemeInvoice i : owed) {
             Map<String, Object> v = new LinkedHashMap<>();
@@ -159,6 +162,13 @@ public class SchemeBillingService {
             v.put("disputedAmount", views.get(i.getRef()).disputedAmount());
             v.put("status", i.getStatus());
             v.put("daysOverdue", ChronoUnit.DAYS.between(i.getPeriodEnd(), today));
+            // NS-GL05-004: grace period, stage and what must be resolved before any adverse cover action.
+            v.putAll(account.arrearsStage(i, today));
+            v.put("blockers", blockers.computeIfAbsent(i.getScheme().getId(),
+                    k -> account.escalationBlockers(i.getScheme())));
+            v.put("pendingLapse", em.createQuery("select l.ref from SchemeLapse l where l.scheme = :s"
+                    + " and l.status = 'PROPOSED'", String.class).setParameter("s", i.getScheme()).setMaxResults(1)
+                    .getResultStream().findFirst().orElse(null));
             out.add(v);
         }
         return out;
@@ -200,6 +210,7 @@ public class SchemeBillingService {
         } else {
             throw new IllegalArgumentException("Action must be RAISE or RESOLVE");
         }
+        account.disputeChanged(invoice, line, user.getUsername());
         em.flush();
         return records.invoiceView(invoice);
     }
@@ -242,6 +253,7 @@ public class SchemeBillingService {
         SponsorReceipt receipt = new SponsorReceipt(records.nextRef(SponsorReceipt.class, "GRC-", 5), invoice,
                 reference, amount, user.getUsername());
         em.persist(receipt);
+        account.afterAllocation(invoice, user.getUsername());
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("schemeRef", invoice.getScheme().getRef());

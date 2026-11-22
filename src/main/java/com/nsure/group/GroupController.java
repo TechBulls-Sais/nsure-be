@@ -20,13 +20,58 @@ public class GroupController {
     private final CensusService census;
     private final SchemeBillingService billing;
     private final GroupClaimService claims;
+    private final SponsorAccountService account;
 
     public GroupController(GroupSchemeService schemes, CensusService census, SchemeBillingService billing,
-            GroupClaimService claims) {
+            GroupClaimService claims, SponsorAccountService account) {
         this.schemes = schemes;
         this.census = census;
         this.billing = billing;
         this.claims = claims;
+        this.account = account;
+    }
+
+    // ── sponsor account (GL05, NS-GL05-003/004, AT-GL05-02) ────────────────────────────────────────
+
+    @GetMapping("/schemes/{ref}/sponsor-account")
+    public java.util.Map<String, Object> sponsorAccount(@PathVariable String ref) {
+        return account.account(ref);
+    }
+
+    /** {reference, amount, receivedDate?, rule OLDEST_FIRST|INVOICES|MEMBERS, invoices?, members?, note?} */
+    @PostMapping("/schemes/{ref}/sponsor-payments")
+    public java.util.Map<String, Object> sponsorPayment(@PathVariable String ref, @RequestBody JsonNode body) {
+        return account.pay(ref, body);
+    }
+
+    /** {invoiceRef, amount?}: allocates held (unallocated) sponsor money or credit to an invoice. */
+    @PostMapping("/sponsor-payments/{ref}/allocations")
+    public java.util.Map<String, Object> allocateHeld(@PathVariable String ref, @RequestBody JsonNode body) {
+        return account.allocateHeld(ref, body);
+    }
+
+    @GetMapping("/billing-exceptions")
+    public List<java.util.Map<String, Object>> billingExceptions(
+            @org.springframework.web.bind.annotation.RequestParam(required = false) String status) {
+        return account.exceptions(status);
+    }
+
+    /** {note} */
+    @PostMapping("/billing-exceptions/{id}/resolution")
+    public java.util.Map<String, Object> resolveBillingException(@PathVariable Long id, @RequestBody JsonNode body) {
+        return account.resolveException(id, body);
+    }
+
+    /** {note}: proposes a lapse for non-payment after the grace period (escalates instead if disputes are open). */
+    @PostMapping("/schemes/{ref}/lapse")
+    public java.util.Map<String, Object> proposeLapse(@PathVariable String ref, @RequestBody JsonNode body) {
+        return account.proposeLapse(ref, body);
+    }
+
+    /** {approve, note}: decided by someone other than the proposer. */
+    @PostMapping("/scheme-lapses/{ref}/decision")
+    public java.util.Map<String, Object> decideLapse(@PathVariable String ref, @RequestBody JsonNode body) {
+        return account.decideLapse(ref, body);
     }
 
     @GetMapping("/schemes")
