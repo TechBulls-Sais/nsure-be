@@ -8,6 +8,8 @@ import com.nsure.common.exception.InvalidFieldException;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.integration.Events;
 import com.nsure.integration.Outbox;
+import com.nsure.payment.PayoutInstruction;
+import com.nsure.payment.PayoutService;
 import com.nsure.portfolio.InsurancePolicy;
 import com.nsure.portfolio.PolicyWorkflow;
 import com.nsure.portfolio.ReferenceNumbers;
@@ -95,9 +97,14 @@ public class CareCashService {
     private final EvidenceChain audit;
     private final WorkflowHistory history;
     private final PolicyWorkflow workflow;
+    private final PayoutService payouts;
+
+    /** Payout instructions for Care Cash events are of this source type. */
+    public static final String PAYOUT_SOURCE = "CARE_CASH";
 
     public CareCashService(EntityManager em, PlatformSecurityContext security, Outbox outbox, ReferenceNumbers numbers,
-            EvidenceChain audit, WorkflowHistory history, PolicyWorkflow workflow) {
+            EvidenceChain audit, WorkflowHistory history, PolicyWorkflow workflow, PayoutService payouts) {
+        this.payouts = payouts;
         this.em = em;
         this.security = security;
         this.outbox = outbox;
@@ -264,7 +271,12 @@ public class CareCashService {
         e.payeeName = payee;
         e.payoutMethod = method;
         e.payoutAccount = account;
-        e.paymentReference = numbers.next("CCP-", 6, () -> 0);
+        // NS-SH05-007 / NS-TXN-003: a persisted payout instruction (unique reference and idempotency key), approved by
+        // the payer and handed to the payout rail in this transaction; a failed one is replaced, never reused.
+        PayoutInstruction instruction = payouts.authorise(new PayoutService.Request(PAYOUT_SOURCE, e.ref, e.policyRef,
+                payee, method, account, e.amount, "BWP"), user.getUsername());
+        payouts.submit(instruction, user.getUsername());
+        e.paymentReference = instruction.getRef();
         e.paymentSentBy = user.getUsername();
         e.paymentSentAt = LocalDateTime.now();
         e.paymentFailure = null;
@@ -292,10 +304,20 @@ public class CareCashService {
             throw new ConflictException(ref + " has no payment in flight to confirm.");
         }
         String confirmed = text(body, "providerReference");
-        if (confirmed != null && !confirmed.equals(e.paymentReference)) {
+        boolean same = confirmed == null || confirmed.equals(e.paymentReference) || payouts.byReference(confirmed)
+                .map(i -> i.getRef().equals(e.paymentReference)).orElse(false);
+        if (!same) {
             throw new IllegalArgumentException("This confirmation is for " + confirmed + ", but the payment in flight"
                     + " on " + ref + " is " + e.paymentReference + ".");
         }
+        payouts.byReference(e.paymentReference).ifPresent(i -> payouts.settleManually(i, user.getUsername()));
+        markPaid(e, user.getUsername());
+        return view(e);
+    }
+
+    /** Settled (confirmed by a person or by the rail): PAID and the benefit posted. */
+    private void markPaid(CareCashEvent e, String actor) {
+        String ref = e.ref;
         e.status = PAID;
         e.paidAt = LocalDateTime.now();
         Map<String, Object> data = new LinkedHashMap<>();
@@ -306,10 +328,44 @@ public class CareCashService {
         data.put("benefitType", "CARE_CASH_" + e.eventType);
         data.put("amount", e.amount.toPlainString());
         data.put("paymentReference", e.paymentReference);
-        outbox.publish(Events.BENEFIT_PAID, e.ref, data, user.getUsername());
-        audit.record(user.getUsername(), "Care Cash payment settled", "Policy", e.policyRef, ref + " "
+        outbox.publish(Events.BENEFIT_PAID, e.ref, data, actor);
+        audit.record(actor, "Care Cash payment settled", "Policy", e.policyRef, ref + " "
                 + Money.display(e.amount) + " · " + e.paymentReference + " · settlement confirmed");
-        return view(e);
+    }
+
+    // ── the payout rail's answers (PayoutService → CareCashPayoutHandler) ─────────────────────────
+
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void settledByRail(PayoutInstruction instruction, String actor) {
+        CareCashEvent e = event(instruction.getSourceRef());
+        if (PAYMENT_SENT.equals(e.status) && instruction.getRef().equals(e.paymentReference)) {
+            markPaid(e, actor);
+        }
+    }
+
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void failedByRail(PayoutInstruction instruction, String reason, String actor) {
+        CareCashEvent e = event(instruction.getSourceRef());
+        if (PAYMENT_SENT.equals(e.status) && instruction.getRef().equals(e.paymentReference)) {
+            e.status = PAYMENT_FAILED;
+            e.paymentFailure = reason.length() <= 500 ? reason : reason.substring(0, 500);
+            audit.record(actor, "Care Cash payment failed", "Policy", e.policyRef, e.ref + " · " + e.paymentReference
+                    + " · " + reason);
+        }
+    }
+
+    /** A settled payment came back: unpaid again, sent again with corrected details. */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void returnedByRail(PayoutInstruction instruction, String reason, String actor) {
+        CareCashEvent e = event(instruction.getSourceRef());
+        if (PAID.equals(e.status) && instruction.getRef().equals(e.paymentReference)) {
+            e.status = PAYMENT_FAILED;
+            e.paidAt = null;
+            e.paymentFailure = ("Returned after settlement: " + reason).length() <= 500
+                    ? "Returned after settlement: " + reason : ("Returned after settlement: " + reason).substring(0, 500);
+            audit.record(actor, "Care Cash payment returned", "Policy", e.policyRef, e.ref + " · " + e.paymentReference
+                    + " · " + reason);
+        }
     }
 
     /** {reason}: the provider or bank failed or returned the payment; it is sent again with corrected details. */
@@ -328,6 +384,7 @@ public class CareCashService {
         if (reason.length() > 500) {
             throw new IllegalArgumentException("The reason is too long.");
         }
+        payouts.byReference(e.paymentReference).ifPresent(i -> payouts.failManually(i, reason, user.getUsername()));
         e.status = PAYMENT_FAILED;
         e.paymentFailure = reason;
         audit.record(user.getUsername(), "Care Cash payment failed", "Policy", e.policyRef, ref + " · "

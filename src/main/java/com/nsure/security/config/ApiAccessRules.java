@@ -140,6 +140,14 @@ public final class ApiAccessRules {
             rule(GET, "/portfolio/receipts", anyOf("READ_PAYMENT")),
             rule(GET, "/payments/transactions", anyOf("READ_PAYMENT")),
             rule(GET, "/payments/transactions/*/log", anyOf("READ_PAYMENT")),
+            // ── outgoing benefit payments (NS-SH05-007): instructions, exception queue, simulated bank ──────
+            rule(GET, "/payments/payouts", anyOf("READ_CLAIM")),
+            rule(GET, "/payments/payouts/exceptions", anyOf("READ_CLAIM")),
+            rule(GET, "/payments/payouts/*", anyOf("READ_CLAIM")),
+            rule(POST, "/payments/payouts/callback", anyOf("MANAGE_INTEGRATION")),
+            rule(POST, "/payments/payouts/*/reconcile", anyOf("SETTLE_CLAIM")),
+            rule(POST, "/payments/payouts/*/resolve", anyOf("SETTLE_CLAIM")),
+            rule(POST, "/payments/payouts/*/simulator", anyOf("SETTLE_CLAIM")),
             rule(GET, "/portfolio/schemes", anyOf("READ_POLICY")),
 
             // ── claims (Claims Assessor) ───────────────────────────────────────────────────────────────

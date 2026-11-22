@@ -71,7 +71,7 @@ class ClaimWorkflowApiTest {
         String sent = mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Payout Sent"))
-                .andExpect(jsonPath("$.payoutReference").value(org.hamcrest.Matchers.startsWith("PAYOUT-")))
+                .andExpect(jsonPath("$.payoutReference").value(org.hamcrest.Matchers.startsWith("PI-")))
                 .andExpect(jsonPath("$.paidAt").value(""))
                 .andExpect(jsonPath("$.actions[0]").value("confirm-payout"))
                 .andExpect(jsonPath("$.actions[1]").value("payout-failed"))

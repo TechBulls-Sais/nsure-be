@@ -90,6 +90,8 @@ public final class ClaimLedgers {
         static final String RESERVED = "RESERVED";
         static final String RELEASED = "RELEASED";
         static final String CONSUMED = "CONSUMED";
+        /** A corrective entry giving back consumption whose payment was returned (NS-SH05-005, §09). */
+        static final String REVERSED = "REVERSED";
 
         @Id
         @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -140,6 +142,14 @@ public final class ClaimLedgers {
 
         public String getClaimRef() {
             return claimRef;
+        }
+
+        public String getCreatedBy() {
+            return createdBy;
+        }
+
+        public LocalDateTime getCreatedAt() {
+            return createdAt;
         }
     }
 

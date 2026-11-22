@@ -169,6 +169,12 @@ public final class Events {
     public static final String CLAIM_DECLINED = "ClaimDeclined";
     /** claimRef, policyRef, customerName, product, amount, payoutRef. The payout is confirmed settled. */
     public static final String CLAIM_PAYMENT_SETTLED = "ClaimPaymentSettled";
+    /** instructionRef, sourceType, sourceRef, policyRef, amount, providerReference, reason. The bank refused a payout. */
+    public static final String PAYOUT_FAILED = "PayoutFailed";
+    /** instructionRef, sourceType, sourceRef, policyRef, amount, providerReference, reason. A settled payout came back. */
+    public static final String PAYOUT_RETURNED = "PayoutReturned";
+    /** claimRef, policyRef, amount, instructionRef, reason. A settled claim payment was returned; the claim is unpaid again. */
+    public static final String CLAIM_PAYMENT_RETURNED = "ClaimPaymentReturned";
 
     // Communications (spec SH09B). Payloads carry references only: never the message content or the contact.
     /** messageRef, eventType, businessRef, customerRef, recipientRole, channel, purpose, templateCode, templateVersion, status, reason. */

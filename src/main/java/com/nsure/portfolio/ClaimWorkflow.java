@@ -10,6 +10,8 @@ import com.nsure.controls.ProductStpPolicyRepository;
 import com.nsure.security.approval.ApprovalAuthorityService;
 import com.nsure.integration.Events;
 import com.nsure.integration.Outbox;
+import com.nsure.payment.PayoutInstruction;
+import com.nsure.payment.PayoutService;
 import com.nsure.security.domain.AppUser;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
@@ -24,7 +26,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,15 +37,18 @@ import org.springframework.transaction.annotation.Transactional;
  *   lodge ─▶ INITIATED ─five checks─┬─ all pass and STP-eligible ─▶ APPROVED (STP, no adjudicator)
  *                                    └─ otherwise ───────────────▶ UNDER REVIEW
  *   INITIATED / UNDER REVIEW ──assess──▶ RECOMMENDED ──approve (four-eyes)──▶ APPROVED
- *   APPROVED / PAYOUT FAILED ──pay──▶ PAYOUT SENT ─┬─ confirm-payout ─▶ PAID (ClaimPaid)
- *                                                  └─ payout-failed (reason) ─▶ PAYOUT FAILED
+ *   APPROVED / PAYOUT FAILED ──pay──▶ PAYOUT SENT ─┬─ confirm-payout / bank settles ─▶ PAID (ClaimPaid)
+ *                                                  └─ payout-failed / bank rejects ─▶ PAYOUT FAILED
+ *   PAID ──bank returns the settled payment──▶ PAYOUT FAILED (consumption reversed, amount reserved again)
  *   INITIATED / UNDER REVIEW / RECOMMENDED ──reject (reason required)──▶ REJECTED
  *   REJECTED / APPROVED (not yet sent) ──reopen (reason, senior)──▶ UNDER REVIEW
  *   PAID ──close (financial and recovery tasks resolved or retained)──▶ PAID, closed
  * </pre>
  *
  * A payout is Paid only when the provider or bank confirms it settled (NS-SH05-007, AT-SH05-03): sending the
- * instruction leaves it in flight, and a failed or returned payout waits for corrected, re-verified details.
+ * instruction leaves it in flight, and a failed or returned payout waits for corrected, re-verified details. The
+ * payment instruction itself ({@link PayoutInstruction}) is created and approved in the approval's transaction
+ * (NS-TXN-003) and carries its own state machine and exception queue in {@link PayoutService}.
  *
  * The system transitions (straight-through approval and routing to review) are reachable only from lodging,
  * never from an action a person sends.
@@ -100,11 +104,16 @@ public class ClaimWorkflow {
     private final ProductStpPolicyRepository stpPolicies;
     private final ReferenceNumbers references;
     private final ClaimFinancials financials;
+    private final PayoutService payouts;
+
+    /** Payout instructions for claims are of this source type. */
+    public static final String PAYOUT_SOURCE = "CLAIM";
 
     public ClaimWorkflow(EntityManager em, ControlService controls, FourEyesControl fourEyes,
             PolicyWorkflow policies, WorkflowHistory history, Outbox outbox,
             ApprovalAuthorityService approvalLimits, ProductStpPolicyRepository stpPolicies,
-            ReferenceNumbers references, ClaimFinancials financials) {
+            ReferenceNumbers references, ClaimFinancials financials, PayoutService payouts) {
+        this.payouts = payouts;
         this.references = references;
         this.financials = financials;
         this.approvalLimits = approvalLimits;
@@ -208,6 +217,7 @@ public class ClaimWorkflow {
             claim.setPayoutAmount(claim.getAmount());
             claim.resolve(null);
             financials.reserveLimit(claim, policy, claim.getAmount(), WorkflowHistory.SYSTEM);
+            payouts.authorise(payoutRequest(claim), WorkflowHistory.SYSTEM);
             history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Auto Approved", INITIATED,
                     APPROVED, "Straight-through: all five checks passed · payout " + Money.display(claim.getAmount()),
                     WorkflowHistory.SYSTEM);
@@ -476,6 +486,8 @@ public class ClaimWorkflow {
         financials.reserve(claim, payout, "Set to the approved payout", actor.getUsername());
         claim.setStatus(APPROVED);
         claim.resolve(actor.getUsername());
+        // NS-TXN-003: the payment instruction is created and approved with the decision, in this transaction.
+        PayoutInstruction instruction = payouts.authorise(payoutRequest(claim), actor.getUsername());
         boolean partial = payout.compareTo(claim.getAmount()) < 0;
         String decisionReason = softFailed.isEmpty() ? null : reason;
         if (!missing.isEmpty()) {
@@ -497,6 +509,7 @@ public class ClaimWorkflow {
         Map<String, Object> approved = decisionPayload(claim, null);
         approved.put("outcome", partial ? ClaimDecision.PARTIALLY_APPROVED : ClaimDecision.APPROVED);
         approved.put("claimed", claim.getAmount().toPlainString());
+        approved.put("instructionRef", instruction.getRef());
         outbox.publish(Events.CLAIM_APPROVED, ref, approved, actor.getUsername());
         return claim;
     }
@@ -539,14 +552,20 @@ public class ClaimWorkflow {
             throw new IllegalArgumentException("The last payout failed. Correct and verify the payee's payout details"
                     + " before sending it again.");
         }
-        String reference = "PAYOUT-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(Locale.ROOT);
+        // The approved instruction is sent; a failed or returned one is replaced by a new instruction to the
+        // corrected, re-verified payee, approved by whoever sends it (it names the instruction it replaces).
+        PayoutInstruction instruction = payouts.of(PAYOUT_SOURCE, ref).stream()
+                .filter(i -> PayoutInstruction.APPROVED.equals(i.getStatus())).findFirst()
+                .orElseGet(() -> payouts.authorise(payoutRequest(claim), actor.getUsername()));
+        payouts.submit(instruction, actor.getUsername());
+        String reference = instruction.getRef();
         claim.sendPayout(reference);
         claim.setStatus(PAYOUT_SENT);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(),
                 PAYOUT_FAILED.equals(previous) ? "Payout Resent" : "Payout Sent", previous, PAYOUT_SENT,
                 Money.display(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
                         + claim.getPayeePayoutMethod() + " " + mask(claim.getPayeeAccountRef()) + " · " + reference
-                        + " · awaiting the provider's confirmation",
+                        + " (bank " + instruction.getProviderReference() + ") · awaiting the provider's confirmation",
                 actor.getUsername());
         return claim;
     }
@@ -576,8 +595,10 @@ public class ClaimWorkflow {
             setAside.supersededBy(reopening.getSequenceNo());
         }
         if (APPROVED.equals(previous)) {
-            // The approval is set aside before anything was sent: its limit reservation is given back.
+            // The approval is set aside before anything was sent: its limit reservation is given back and its
+            // unsent payment instruction cancelled.
             financials.releaseLimit(claim, actor.getUsername());
+            payouts.cancelUnsent(PAYOUT_SOURCE, ref, "Approval set aside on reopening: " + text, actor.getUsername());
         }
         claim.reopen();
         claim.setStatus(UNDER_REVIEW);
@@ -611,6 +632,12 @@ public class ClaimWorkflow {
         }
         if (financials.reservedLimit(ref).signum() > 0) {
             open.add("a benefit-limit reservation of " + Money.display(financials.reservedLimit(ref)));
+        }
+        for (PayoutInstruction instruction : payouts.of(PAYOUT_SOURCE, ref)) {
+            if (instruction.isExceptionOpen()) {
+                open.add("payout exception " + instruction.getRef() + " (" + instruction.getStatus().toLowerCase(Locale.ROOT)
+                        + ")");
+            }
         }
         if (!open.isEmpty()) {
             throw new IllegalArgumentException("Cannot close " + ref + " while it still holds " + String.join(" and ", open)
@@ -679,6 +706,8 @@ public class ClaimWorkflow {
         if (text.length() > 500) {
             throw new IllegalArgumentException("The reason is too long.");
         }
+        payouts.byReference(claim.getPayoutReference())
+                .ifPresent(instruction -> payouts.failManually(instruction, text, actor.getUsername()));
         claim.clearPayoutVerification();
         claim.setStatus(PAYOUT_FAILED);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Payout Failed", previous, PAYOUT_FAILED,
@@ -696,20 +725,30 @@ public class ClaimWorkflow {
         InsuranceClaim claim = claim(ref);
         String previous = guard(claim, "confirm-payout", actor);
         String confirmed = trim(providerReference);
-        if (!confirmed.isEmpty() && !confirmed.equals(claim.getPayoutReference())) {
+        boolean sameInstruction = confirmed.isEmpty() || confirmed.equals(claim.getPayoutReference())
+                || payouts.byReference(confirmed).map(i -> i.getRef().equals(claim.getPayoutReference())).orElse(false);
+        if (!sameInstruction) {
             throw new IllegalArgumentException("This confirmation is for " + confirmed + ", but the payout in flight"
                     + " on " + ref + " is " + claim.getPayoutReference() + ".");
         }
         String reference = claim.getPayoutReference();
+        payouts.byReference(reference).ifPresent(instruction -> payouts.settleManually(instruction, actor.getUsername()));
+        settle(claim, previous, reference, actor.getUsername());
+        return claim;
+    }
+
+    /** The settlement's effects, whoever confirmed it: limit consumed, reserve released, Paid, ClaimPaid. */
+    private void settle(InsuranceClaim claim, String previous, String reference, String actor) {
+        String ref = claim.getRef();
         claim.confirmPayout();
-        financials.consume(claim, actor.getUsername());
-        financials.reserve(claim, BigDecimal.ZERO, "Released: payout settled", actor.getUsername());
+        financials.consume(claim, actor);
+        financials.reserve(claim, BigDecimal.ZERO, "Released: payout settled", actor);
         claim.setStatus(PAID);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Paid", previous, PAID,
                 Money.display(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
                         + claim.getPayeePayoutMethod() + " " + mask(claim.getPayeeAccountRef()) + " · " + reference
                         + " · settlement confirmed",
-                actor.getUsername());
+                actor);
         Map<String, Object> paid = new LinkedHashMap<>();
         paid.put("claimRef", ref);
         paid.put("policyRef", claim.getPolicyRef());
@@ -717,12 +756,74 @@ public class ClaimWorkflow {
         paid.put("product", claim.getProduct());
         paid.put("amount", claim.getPayoutAmount().toPlainString());
         paid.put("payoutRef", reference);
-        outbox.publish(Events.CLAIM_PAID, ref, paid, actor.getUsername());
-        outbox.publish(Events.CLAIM_PAYMENT_SETTLED, ref, paid, actor.getUsername());
+        outbox.publish(Events.CLAIM_PAID, ref, paid, actor);
+        outbox.publish(Events.CLAIM_PAYMENT_SETTLED, ref, paid, actor);
         if (claim.getPolicyRef() != null) {
-            policies.terminateIfClaimEndsCover(policies.policy(claim.getPolicyRef()), claim, actor.getUsername());
+            policies.terminateIfClaimEndsCover(policies.policy(claim.getPolicyRef()), claim, actor);
         }
-        return claim;
+    }
+
+    // ── the payout rail's answers (PayoutService → ClaimPayoutHandler) ────────────────────────────
+
+    /** The bank settled the instruction in flight: the claim is Paid, exactly as a confirmed settlement. */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void settledByRail(PayoutInstruction instruction, String actor) {
+        InsuranceClaim claim = claim(instruction.getSourceRef());
+        if (!PAYOUT_SENT.equals(claim.getStatus()) || !instruction.getRef().equals(claim.getPayoutReference())) {
+            history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Payout Notice",
+                    claim.getStatus(), claim.getStatus(), "Bank settled " + instruction.getRef()
+                            + ", which is not the payout in flight; see the payout exception queue", actor);
+            return;
+        }
+        settle(claim, PAYOUT_SENT, instruction.getRef(), actor);
+    }
+
+    /** The bank refused the instruction in flight: unpaid, payee details to be corrected and re-verified. */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void failedByRail(PayoutInstruction instruction, String reason, String actor) {
+        InsuranceClaim claim = claim(instruction.getSourceRef());
+        if (!PAYOUT_SENT.equals(claim.getStatus()) || !instruction.getRef().equals(claim.getPayoutReference())) {
+            return;
+        }
+        claim.clearPayoutVerification();
+        claim.setStatus(PAYOUT_FAILED);
+        history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Payout Failed", PAYOUT_SENT,
+                PAYOUT_FAILED, instruction.getRef() + " · " + reason + " · payout details need verifying again", actor);
+    }
+
+    /**
+     * A settled payout came back (§09): the claim is unpaid again. The limit consumption is reversed by a corrective
+     * entry, the amount reserved again and the case reserve re-established; a new instruction to verified details is
+     * needed. ClaimPaymentReturned is raised so finance and reinsurance can follow the reversal.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void returnedByRail(PayoutInstruction instruction, String reason, String actor) {
+        InsuranceClaim claim = claim(instruction.getSourceRef());
+        if (!PAID.equals(claim.getStatus()) || !instruction.getRef().equals(claim.getPayoutReference())) {
+            return;
+        }
+        financials.reverseConsumption(claim, instruction.getRef(), actor);
+        financials.reserve(claim, claim.getPayoutAmount(), "Re-established: payout " + instruction.getRef()
+                + " returned by the bank", actor);
+        claim.payoutReturned();
+        claim.clearPayoutVerification();
+        claim.setStatus(PAYOUT_FAILED);
+        history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Payout Returned", PAID,
+                PAYOUT_FAILED, instruction.getRef() + " returned after settlement · " + reason
+                        + " · limit consumption reversed; a new instruction to verified details is needed", actor);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("claimRef", claim.getRef());
+        data.put("policyRef", claim.getPolicyRef());
+        data.put("amount", claim.getPayoutAmount().toPlainString());
+        data.put("instructionRef", instruction.getRef());
+        data.put("reason", reason.length() <= 200 ? reason : reason.substring(0, 200));
+        outbox.publish(Events.CLAIM_PAYMENT_RETURNED, claim.getRef(), data, actor);
+    }
+
+    private PayoutService.Request payoutRequest(InsuranceClaim claim) {
+        return new PayoutService.Request(PAYOUT_SOURCE, claim.getRef(), claim.getPolicyRef(), claim.getPayeeName(),
+                claim.getPayeePayoutMethod(), claim.getPayeeAccountRef(),
+                claim.getPayoutAmount() == null ? claim.getAmount() : claim.getPayoutAmount(), "BWP");
     }
 
     InsuranceClaim claim(String ref) {

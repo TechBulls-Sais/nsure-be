@@ -27,7 +27,8 @@ public class ReferenceNumbers implements ApplicationRunner {
             "POL-", "InsurancePolicy",
             "CFG-", "ProductConfiguration",
             "CLM-", "InsuranceClaim",
-            "INV-", "PremiumReceipt");
+            "INV-", "PremiumReceipt",
+            "PI-", "PayoutInstruction");
 
     private final EntityManager em;
     private final TransactionTemplate tx;

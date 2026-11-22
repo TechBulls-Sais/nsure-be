@@ -520,6 +520,14 @@ public class InsuranceClaim extends CoverRecord {
         this.fourEyesApplied = Boolean.FALSE;
     }
 
+    /** A settled payout came back (§09): the claim is unpaid again, and no longer closed. */
+    void payoutReturned() {
+        this.paidAt = null;
+        this.closedAt = null;
+        this.closedBy = null;
+        this.closeNote = null;
+    }
+
     void close(String by, String note) {
         this.closedAt = LocalDateTime.now();
         this.closedBy = by;

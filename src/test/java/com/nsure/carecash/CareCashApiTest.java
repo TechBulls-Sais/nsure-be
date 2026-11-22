@@ -94,7 +94,7 @@ class CareCashApiTest {
                         "{\"payoutMethod\":\"Bank Account\",\"accountRef\":\"62001234\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PAYMENT_SENT"))
-                .andExpect(jsonPath("$.paymentReference").value(org.hamcrest.Matchers.startsWith("CCP-")))
+                .andExpect(jsonPath("$.paymentReference").value(org.hamcrest.Matchers.startsWith("PI-")))
                 .andExpect(jsonPath("$.payment.payeeName").value("Dineo Hospital"))
                 .andExpect(jsonPath("$.payment.sentBy").value("assessor"))
                 .andExpect(jsonPath("$.payment.settledAt").doesNotExist())
@@ -141,6 +141,13 @@ class CareCashApiTest {
                 .andExpect(status().isConflict());
         mockMvc.perform(json(post("/care-cash/events/" + ref + "/payment/failed"), "onboarding", "{\"reason\":\"x\"}"))
                 .andExpect(status().isForbidden());
+        // NS-SH05-007: both payments are persisted instructions on the payout rail; the failed one stays on record.
+        mockMvc.perform(get("/payments/payouts?source=CARE_CASH&ref=" + ref).with(signedIn("assessor", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].ref").value(second))
+                .andExpect(jsonPath("$[0].status").value("SETTLED"))
+                .andExpect(jsonPath("$[0].replacesRef").value(instruction))
+                .andExpect(jsonPath("$[1].status").value("FAILED"));
     }
 
     private int benefitPaidEvents(String ref) {

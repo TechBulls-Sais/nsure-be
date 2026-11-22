@@ -147,6 +147,39 @@ public class ClaimFinancials {
         outbox.publish(Events.BENEFIT_LIMIT_CONSUMED, claim.getPolicyRef(), data, who);
     }
 
+    /**
+     * A settled payout came back (§09, NS-SH05-005): the consumption is reversed by a corrective entry that names the
+     * returned instruction, and the amount is reserved again, because the benefit is still owed.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void reverseConsumption(InsuranceClaim claim, String instructionRef, String actor) {
+        String who = actor == null ? WorkflowHistory.SYSTEM : actor;
+        BigDecimal consumed = BigDecimal.ZERO;
+        for (ClaimLedgers.LimitEntry e : entries(claim.getRef())) {
+            consumed = ClaimLedgers.LimitEntry.CONSUMED.equals(e.getEntry()) ? consumed.add(e.getAmount())
+                    : ClaimLedgers.LimitEntry.REVERSED.equals(e.getEntry()) ? consumed.subtract(e.getAmount()) : consumed;
+        }
+        if (consumed.signum() <= 0) {
+            return;
+        }
+        em.persist(new ClaimLedgers.LimitEntry(claim.getPolicyRef(), lifeKey(claim), claim.getRef(),
+                ClaimLedgers.LimitEntry.REVERSED, consumed, who));
+        em.persist(new ClaimLedgers.LimitEntry(claim.getPolicyRef(), lifeKey(claim), claim.getRef(),
+                ClaimLedgers.LimitEntry.RESERVED, consumed, who));
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("claimRef", claim.getRef());
+        data.put("policyRef", claim.getPolicyRef());
+        data.put("lifeKey", lifeKey(claim));
+        data.put("amount", consumed.negate().toPlainString());
+        data.put("reversalOf", instructionRef);
+        outbox.publish(Events.BENEFIT_LIMIT_CONSUMED, claim.getPolicyRef(), data, who);
+    }
+
+    /** Limit entries of a claim, oldest first, for its ledger view. */
+    public List<ClaimLedgers.LimitEntry> limitEntries(String claimRef) {
+        return entries(claimRef);
+    }
+
     // ── evidence and related claims ──────────────────────────────────────────────────────────────
 
     /** The claim type's evidence checklist, each item marked received when a current document of that type is on file. */
@@ -235,7 +268,8 @@ public class ClaimFinancials {
                         Object[].class)
                 .setParameter("policy", policyRef).setParameter("life", lifeKey).getResultList()) {
             BigDecimal sum = (BigDecimal) row[1];
-            total = ClaimLedgers.LimitEntry.RELEASED.equals(row[0]) ? total.subtract(sum) : total.add(sum);
+            total = ClaimLedgers.LimitEntry.RELEASED.equals(row[0]) || ClaimLedgers.LimitEntry.REVERSED.equals(row[0])
+                    ? total.subtract(sum) : total.add(sum);
         }
         return total;
     }

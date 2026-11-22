@@ -1,0 +1,95 @@
+databaseChangeLog:
+  # NS-SH05-007, §09 payment state machine, NS-TXN-003, AT-SH05-02/03: an outgoing benefit payment is a persisted
+  # instruction with a unique reference and idempotency key, created with the approval and settled, failed or returned
+  # only on the payout rail's answer. Callbacks are kept by event id (a repeat has no second effect). The simulated
+  # bank keeps its own book so a lost callback can be reconciled by status enquiry. open_key is set only while an
+  # instruction is live, so the unique index allows one live instruction per benefit (NULLs are not compared).
+  - changeSet:
+      id: 165-payout-instructions
+      author: nsure
+      changes:
+        - createTable:
+            tableName: pay_instruction
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_pay_instruction}}
+              - column: {name: instruction_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_pay_instruction_ref}}
+              - column: {name: source_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: source_ref, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: policy_ref, type: varchar(30)}
+              - column: {name: attempt_no, type: int, constraints: {nullable: false}}
+              - column: {name: idempotency_key, type: varchar(80), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_pay_instruction_idem}}
+              - column: {name: open_key, type: varchar(60), constraints: {unique: true, uniqueConstraintName: uk_pay_instruction_open}}
+              - column: {name: payee_name, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: payout_method, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: account_ref, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: amount, type: "decimal(15,2)", constraints: {nullable: false}}
+              - column: {name: currency, type: varchar(3), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: provider, type: varchar(30)}
+              - column: {name: provider_reference, type: varchar(60), constraints: {unique: true, uniqueConstraintName: uk_pay_instruction_provider}}
+              - column: {name: replaces_ref, type: varchar(20)}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+              - column: {name: submitted_by, type: varchar(100)}
+              - column: {name: submitted_at, type: datetime}
+              - column: {name: outcome_at, type: datetime}
+              - column: {name: failure_code, type: varchar(20)}
+              - column: {name: failure_reason, type: varchar(500)}
+              - column: {name: exception_state, type: varchar(20)}
+              - column: {name: exception_note, type: varchar(500)}
+              - column: {name: exception_resolved_by, type: varchar(100)}
+              - column: {name: exception_resolved_at, type: datetime}
+              - column: {name: row_version, type: bigint, defaultValueNumeric: 0, constraints: {nullable: false}}
+        - createIndex:
+            tableName: pay_instruction
+            indexName: ix_pay_instruction_source
+            columns:
+              - column: {name: source_type}
+              - column: {name: source_ref}
+        - createTable:
+            tableName: pay_instruction_step
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_pay_instruction_step}}
+              - column: {name: instruction_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: from_status, type: varchar(20)}
+              - column: {name: to_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: note, type: varchar(500)}
+              - column: {name: actor, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: occurred_at, type: datetime, constraints: {nullable: false}}
+        - createIndex:
+            tableName: pay_instruction_step
+            indexName: ix_pay_instruction_step_ref
+            columns:
+              - column: {name: instruction_ref}
+        - createTable:
+            tableName: pay_callback
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_pay_callback}}
+              - column: {name: event_id, type: varchar(80), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_pay_callback_event}}
+              - column: {name: instruction_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: provider_reference, type: varchar(60)}
+              - column: {name: outcome, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: reason_code, type: varchar(20)}
+              - column: {name: reason_text, type: varchar(300)}
+              - column: {name: call_result, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: note, type: varchar(300)}
+              - column: {name: received_at, type: datetime, constraints: {nullable: false}}
+        - createIndex:
+            tableName: pay_callback
+            indexName: ix_pay_callback_ref
+            columns:
+              - column: {name: instruction_ref}
+        - createTable:
+            tableName: pay_sim_bank
+            columns:
+              - column: {name: provider_reference, type: varchar(60), constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_pay_sim_bank}}
+              - column: {name: instruction_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: amount, type: "decimal(15,2)", constraints: {nullable: false}}
+              - column: {name: account_ref, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: reason_code, type: varchar(20)}
+              - column: {name: reason_text, type: varchar(300)}
+              - column: {name: last_event_id, type: varchar(80)}
+              - column: {name: updated_at, type: datetime, constraints: {nullable: false}}
