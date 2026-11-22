@@ -97,6 +97,10 @@ class ClaimCalculationApiTest {
     @Test
     void aPolicyWithUnderwritingTermsNeedsAnExclusionNoteAndIsNeverStraightThrough() throws Exception {
         String policy = policy("Boitshepo Terms", "boitshepoterms", "Lesego Terms", 5000);
+        // NS-SH03-003: a policy saved without a plan carries a manual, uncalculated premium on its trail.
+        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.action == 'Created')].details").value(org.hamcrest.Matchers.hasItem(
+                        Matchers.containsString("manual premium, not calculated"))));
         tx.executeWithoutResult(s -> em.createQuery("update InsurancePolicy p set p.uwTerms = :terms where p.ref = :ref")
                 .setParameter("terms", "Exclusion: hazardous sports").setParameter("ref", policy).executeUpdate());
         String lodged = mockMvc.perform(json(post("/portfolio/claims"), "assessor",

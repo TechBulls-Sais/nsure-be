@@ -93,6 +93,9 @@ public class PolicyWorkflow {
     void logOpened(InsurancePolicy policy, String actor) {
         history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Created", null,
                 policy.getStatus(), policy.getProduct() + tierSuffix(policy) + " · premium " + bwp(policy.getPremium())
+                        // NS-SH03-003: a premium entered without a plan was not calculated; the trail says so.
+                        + (policy.getTier() == null || policy.getTier().isBlank()
+                                ? " · manual premium, not calculated (no plan)" : "")
                         + (policy.getPaymentDueBy() == null ? "" : " · pay by " + policy.getPaymentDueBy().withNano(0)),
                 actor);
     }
