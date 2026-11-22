@@ -642,6 +642,50 @@ public class ProductRelease {
         }
     }
 
+    // ── rate publication gate (NS-SH03-006) ─────────────────────────────────────────────────────
+
+    /**
+     * The approved golden cases a rate version would change: every configuration priced from {@code table} (and not
+     * withdrawn) re-prices its approved cases under {@code candidate}; a case whose result differs from its approved
+     * baseline is listed. Publishing is refused until an actuary approves a revised baseline for each one.
+     */
+    public List<String> goldenFailures(RateTable table, RateTableVersion candidate) {
+        List<String> failures = new ArrayList<>();
+        for (ProductConfiguration row : em.createQuery("select c from ProductConfiguration c where c.rateTableRef = :r"
+                + " and c.status <> :withdrawn", ProductConfiguration.class).setParameter("r", table.getRef())
+                .setParameter("withdrawn", WITHDRAWN).getResultList()) {
+            for (ProductGoldenCase c : goldenCases(row.getRef())) {
+                if (!ProductGoldenCase.APPROVED.equals(c.getStatus())) {
+                    continue;
+                }
+                String actual;
+                String basis = ProductRules.text(ProductRules.parse(mapper, row.getRules()), "ageBasis");
+                int age = ProductRules.age(basis, c.getDateOfBirth(), c.getPricedOn());
+                if (age < row.getMinAge() || age > row.getMaxAge()) {
+                    actual = "REFUSED";
+                } else {
+                    try {
+                        actual = rates.priceAtVersion(table.getTier(), List.of(new RateTableService.LifeToPrice(
+                                        selfRelationship(), "Golden case", c.getDateOfBirth())), c.getPricedOn(),
+                                        candidate.getLabel())
+                                .map(p -> p.monthlyTotal().setScale(2, RoundingMode.HALF_UP).toPlainString())
+                                .orElse("REFUSED");
+                    } catch (IllegalArgumentException ex) {
+                        actual = "REFUSED";
+                    }
+                }
+                String expected = c.getExpectedPremium() == null ? "REFUSED" : c.getExpectedPremium().toPlainString();
+                boolean same = expected.equals("REFUSED") ? actual.equals("REFUSED")
+                        : !actual.equals("REFUSED") && new BigDecimal(actual).compareTo(c.getExpectedPremium()) == 0;
+                if (!same) {
+                    failures.add(row.getRef() + " golden case \"" + c.getLabel() + "\" (baseline " + c.getBaselineNo()
+                            + "): validated " + expected + ", " + candidate.getLabel() + " gives " + actual);
+                }
+            }
+        }
+        return failures;
+    }
+
     // ── internals: evaluation ────────────────────────────────────────────────────────────────────
 
     private record Evaluation(List<CheckItem> items, ObjectNode manifest, List<GoldenCaseView> golden) {

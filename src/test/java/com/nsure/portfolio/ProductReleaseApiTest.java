@@ -241,6 +241,46 @@ class ProductReleaseApiTest {
                 .andExpect(jsonPath("$.goldenCases[0].status").value("PROPOSED"));
     }
 
+    @Test
+    void aRateChangeThatAltersValidatedGoldenResultsIsNotPublishedWithoutABaselineRevision() throws Exception {
+        // A configuration of Family Funeral's Bronze plan priced from rate table RT-00001.
+        String created = mockMvc.perform(json(post("/portfolio/product-configs"), "configurator",
+                        "{\"name\":\"Rated Funeral\",\"code\":\"RF-01\",\"status\":\"Draft\",\"premium\":105,\"cover\":25000,"
+                                + "\"benefits\":[\"Funeral benefit\"],\"channels\":[\"Customer portal\"],\"catalogueProduct\":"
+                                + "\"Family Funeral\",\"plan\":\"Bronze\",\"rateTableRef\":\"RT-00001\",\"rules\":" + RULES + "}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String ref = JsonPath.read(created, "$.id");
+        LocalDate born = LocalDate.now().minusYears(32).minusDays(10);
+        long id = golden(ref, "configurator", born, "17.50");
+        mockMvc.perform(post("/portfolio/product-configs/" + ref + "/golden-cases/" + id + "/approve")
+                .with(signedIn("actuary", "password"))).andExpect(status().isOk());
+        mockMvc.perform(post("/portfolio/product-configs/" + ref + "/golden-cases/run").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[0].result").value("PASS"));
+        // A 10% re-rate of the main insured is drafted and submitted; publishing it would change the validated result.
+        mockMvc.perform(post("/admin/rate-tables/RT-00001/scale").with(signedIn("configurator", "password"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"factor\":1.10,\"lifeType\":\"Main Insured\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/admin/rate-tables/RT-00001/versions/2/submit").with(signedIn("configurator", "password")))
+                .andExpect(status().isOk());
+        String approve = "{\"overrideReason\":\"Board-approved re-rate\"}";
+        mockMvc.perform(post("/admin/rate-tables/RT-00001/versions/2/approve").with(signedIn("actuary", "password"))
+                        .contentType(MediaType.APPLICATION_JSON).content(approve))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(Matchers.containsString("changes validated golden results")))
+                .andExpect(jsonPath("$.message").value(Matchers.containsString("gives 19.25")));
+        // The actuary approves a revised baseline proposed with a reason; then the re-rate publishes.
+        String revised = mockMvc.perform(json(post("/portfolio/product-configs/" + ref + "/golden-cases"), "configurator",
+                        "{\"label\":\"Age 32\",\"dateOfBirth\":\"" + born + "\",\"expectedPremium\":\"19.25\",\"supersedes\":"
+                                + id + ",\"reason\":\"Board-approved 10% re-rate of main insured lives\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        mockMvc.perform(post("/portfolio/product-configs/" + ref + "/golden-cases/"
+                        + ((Number) JsonPath.read(revised, "$.id")).longValue() + "/approve").with(signedIn("actuary", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/admin/rate-tables/RT-00001/versions/2/approve").with(signedIn("actuary", "password"))
+                        .contentType(MediaType.APPLICATION_JSON).content(approve))
+                .andExpect(status().isOk());
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
 
     private String create(String name, String code, String rules, int premium) throws Exception {

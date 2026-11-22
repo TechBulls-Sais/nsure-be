@@ -44,8 +44,12 @@ public class RateVersionService {
     private final PlatformSecurityContext security;
     private final EntityManager em;
 
+    /** NS-SH03-006: golden cases of product configurations priced from a table gate its publication. */
+    private final org.springframework.beans.factory.ObjectProvider<com.nsure.portfolio.ProductRelease> releases;
+
     public RateVersionService(RateTableService rates, ControlService controls, PlatformSecurityContext security,
-            EntityManager em) {
+            EntityManager em, org.springframework.beans.factory.ObjectProvider<com.nsure.portfolio.ProductRelease> releases) {
+        this.releases = releases;
         this.rates = rates;
         this.controls = controls;
         this.security = security;
@@ -97,6 +101,12 @@ public class RateVersionService {
         List<String> gaps = rates.gaps(rates.items(version), rates.rules(table.getTier()));
         if (!gaps.isEmpty()) {
             throw new IllegalArgumentException("A version with gaps cannot be published:\n" + String.join("\n", gaps));
+        }
+        // NS-SH03-006: a rate change that alters validated golden results needs an approved baseline revision first.
+        List<String> golden = releases.getObject().goldenFailures(table, version);
+        if (!golden.isEmpty()) {
+            throw new IllegalArgumentException(version.getLabel() + " changes validated golden results. Approve a"
+                    + " revised baseline for each before publishing:\n" + String.join("\n", golden));
         }
         LocalDate today = LocalDate.now();
         LocalDate effective = effectiveFrom == null ? today : effectiveFrom;
