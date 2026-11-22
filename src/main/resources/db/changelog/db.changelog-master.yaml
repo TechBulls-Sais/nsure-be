@@ -320,3 +320,6 @@ databaseChangeLog:
   - include:
       file: changes/169-terms-migrations.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/170-claim-links.yaml
+      relativeToChangelogFile: true

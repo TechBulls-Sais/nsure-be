@@ -242,7 +242,7 @@ public final class PortfolioViews {
 
     /** Another claim on the same policy; {@code possibleDuplicate} when it is for the same life within a week. */
     public record RelatedClaim(String ref, String status, String eventDate, String coveredLife, String type,
-            boolean possibleDuplicate) {
+            boolean possibleDuplicate, String link, String linkNote, String linkedBy) {
     }
 
     /**

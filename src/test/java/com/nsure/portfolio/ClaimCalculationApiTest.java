@@ -129,7 +129,35 @@ class ClaimCalculationApiTest {
                 .andExpect(status().isBadRequest());
     }
 
-    /** A paid-up Term Life policy whose cover started 60 days ago, with a registered beneficiary. */
+    @Test
+    void relatedClaimsAreLinkedAsTheSameEventOrSeparateBenefits() throws Exception {
+        String policy = policy("Ditiro Links", "ditirolinks", "Mmoloki Links", 30000);
+        String lodge = "{\"policy\":\"" + policy + "\",\"claimantName\":\"Mmoloki Links\",\"claimantMobile\":\"+267 72 000 000\","
+                + "\"claimantRelationship\":\"Spouse\",\"eventDate\":\"" + LocalDate.now().minusDays(2) + "\",\"type\":\"%s\","
+                + "\"description\":\"Accident on the A1.\"}";
+        String first = JsonPath.read(mockMvc.perform(json(post("/portfolio/claims"), "assessor", lodge.formatted("Death benefit")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
+        String second = JsonPath.read(mockMvc.perform(json(post("/portfolio/claims"), "assessor", lodge.formatted("Funeral benefit")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.related[0].possibleDuplicate").value(true))
+                .andReturn().getResponse().getContentAsString(), "$.id");
+        mockMvc.perform(json(post("/portfolio/claims/" + second + "/links"), "assessor",
+                        "{\"relatedRef\":\"" + first + "\",\"type\":\"MAYBE\",\"note\":\"Not sure\"}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(json(post("/portfolio/claims/" + second + "/links"), "assessor",
+                        "{\"relatedRef\":\"" + first + "\",\"type\":\"SEPARATE_BENEFIT\",\"note\":\"Funeral benefit beside the death benefit\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.related[0].link").value("SEPARATE_BENEFIT"))
+                .andExpect(jsonPath("$.related[0].possibleDuplicate").value(false));
+        // The link is kept for both claims, and is made once.
+        mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.id == '" + first + "')].related[0].link").value(Matchers.hasItem("SEPARATE_BENEFIT")));
+        mockMvc.perform(json(post("/portfolio/claims/" + first + "/links"), "assessor",
+                        "{\"relatedRef\":\"" + second + "\",\"type\":\"SAME_EVENT\",\"note\":\"Changed my mind\"}"))
+                .andExpect(status().isConflict());
+    }
+
+        /** A paid-up Term Life policy whose cover started 60 days ago, with a registered beneficiary. */
     private String policy(String name, String username, String beneficiary, int cover) throws Exception {
         String customer = mockMvc.perform(json(post("/portfolio/customers"), "admin",
                         "{\"name\":\"" + name + "\",\"email\":\"" + username + "@example.com\",\"phone\":\"+267 71 000 001\","

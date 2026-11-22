@@ -165,6 +165,7 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/claims/*/reopen", anyOf("APPROVE_CLAIM")),
             rule(POST, "/portfolio/claims/*/close", anyOf("SETTLE_CLAIM")),
             rule(GET, "/portfolio/claims/*/financials", anyOf("READ_CLAIM")),
+            rule(POST, "/portfolio/claims/*/links", anyOf("ASSESS_CLAIM", "UPDATE_CLAIM")),
             rule(GET, "/portfolio/claims/*/documents", anyOf("READ_CLAIM")),
             rule(GET, "/portfolio/claims/*/documents/*", anyOf("READ_CLAIM")),
             rule(POST, "/portfolio/claims/*/documents", anyOf("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM")),

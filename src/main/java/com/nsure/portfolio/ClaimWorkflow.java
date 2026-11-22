@@ -735,6 +735,41 @@ public class ClaimWorkflow {
         return claim;
     }
 
+    /**
+     * Links another claim on the same policy as the same event or a separate benefit (NS-SH05-001), with a note. The
+     * link is kept for both claims; a separate benefit is no longer shown as a possible duplicate.
+     */
+    @Transactional
+    public InsuranceClaim link(String ref, String relatedRef, String type, String note, AppUser actor) {
+        if (!actor.hasPermissionTo("ASSESS_CLAIM")) {
+            actor.validateHasPermissionTo("UPDATE_CLAIM");
+        }
+        InsuranceClaim claim = claim(ref);
+        InsuranceClaim other = claim(required(relatedRef, "relatedRef"));
+        String kind = trim(type).toUpperCase(Locale.ROOT);
+        if (!Set.of(ClaimLedgers.Link.SAME_EVENT, ClaimLedgers.Link.SEPARATE_BENEFIT).contains(kind)) {
+            throw new com.nsure.common.exception.InvalidFieldException("type", "type must be SAME_EVENT or SEPARATE_BENEFIT.");
+        }
+        if (claim.getRef().equals(other.getRef()) || claim.getPolicyRef() == null
+                || !claim.getPolicyRef().equals(other.getPolicyRef())) {
+            throw new IllegalArgumentException("Only two different claims on the same policy can be linked.");
+        }
+        String text = trim(note);
+        if (text.length() < 5 || text.length() > 300) {
+            throw new IllegalArgumentException("Say why the claims are linked (5 to 300 characters).");
+        }
+        if (financials.link(claim.getRef(), other.getRef()) != null) {
+            throw new com.nsure.common.exception.ConflictException(ref + " and " + other.getRef() + " are already linked.");
+        }
+        em.persist(new ClaimLedgers.Link(claim.getRef(), other.getRef(), kind, text, actor.getUsername()));
+        String label = ClaimLedgers.Link.SAME_EVENT.equals(kind) ? "the same event as" : "a separate benefit from";
+        history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Linked", claim.getStatus(),
+                claim.getStatus(), "Recorded as " + label + " " + other.getRef() + ": " + text, actor.getUsername());
+        history.record(WorkflowHistory.CLAIM, other.getRef(), other.getCustomerName(), "Linked", other.getStatus(),
+                other.getStatus(), "Recorded as " + label + " " + ref + ": " + text, actor.getUsername());
+        return claim;
+    }
+
     /** Every decision ever made on the claim, oldest first; a superseded one names the decision that set it aside. */
     public List<ClaimDecision> decisions(String claimRef) {
         return em.createQuery("select d from ClaimDecision d where d.claimRef = :ref order by d.sequenceNo",

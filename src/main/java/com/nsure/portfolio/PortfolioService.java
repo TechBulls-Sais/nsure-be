@@ -1376,7 +1376,14 @@ public class PortfolioService {
         return claim(claim);
     }
 
-    /** A claim's reserve movements and the benefit limits it draws on (NS-SH05-003/005). */
+    @Transactional
+    public PortfolioViews.ClaimView linkClaim(String ref, JsonNode body) {
+        AppUser actor = security.authenticatedUser();
+        return claim(claimWorkflow.link(ref, optional(body, "relatedRef"), optional(body, "type"),
+                optional(body, "note"), actor));
+    }
+
+        /** A claim's reserve movements and the benefit limits it draws on (NS-SH05-003/005). */
     @Transactional(readOnly = true)
     public PortfolioViews.ClaimFinancialsView claimFinancials(String ref) {
         security.authenticatedUser().validateHasPermissionTo("READ_CLAIM");

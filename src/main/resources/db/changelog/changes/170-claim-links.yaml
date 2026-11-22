@@ -1,0 +1,21 @@
+databaseChangeLog:
+  # NS-SH05-001: a person links related claims as the same event or as separate benefits; the link is kept (it was
+  # only computed on read before), so a valid separate benefit is never treated as a duplicate.
+  - changeSet:
+      id: 170-claim-links
+      author: nsure
+      changes:
+        - createTable:
+            tableName: clm_link
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_clm_link}}
+              - column: {name: claim_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: related_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: link_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: note, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: linked_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: linked_at, type: datetime, constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: clm_link
+            columnNames: claim_ref, related_ref
+            constraintName: uk_clm_link_pair

@@ -297,10 +297,22 @@ public class ClaimFinancials {
             boolean sameLife = lifeKey(other).equals(lifeKey(claim));
             boolean close = event != null && otherEvent != null
                     && Math.abs(ChronoUnit.DAYS.between(event, otherEvent)) <= DUPLICATE_WINDOW_DAYS;
+            ClaimLedgers.Link link = link(claim.getRef(), other.getRef());
+            // A person's link decides: same event stays flagged, a confirmed separate benefit is not a duplicate.
+            boolean possible = link == null ? sameLife && close : ClaimLedgers.Link.SAME_EVENT.equals(link.getType());
             related.add(new PortfolioViews.RelatedClaim(other.getRef(), other.getStatus(), other.getEventDate(),
-                    nameOf(other), other.getClaimType(), sameLife && close));
+                    nameOf(other), other.getClaimType(), possible, link == null ? null : link.getType(),
+                    link == null ? null : link.getNote(), link == null ? null : link.getLinkedBy()));
         }
         return related;
+    }
+
+    /** The link between two claims, whichever way it was recorded. */
+    ClaimLedgers.Link link(String claimRef, String otherRef) {
+        return em.createQuery("select l from ClaimLink l where (l.claimRef = :a and l.relatedRef = :b)"
+                        + " or (l.claimRef = :b and l.relatedRef = :a) order by l.id desc", ClaimLedgers.Link.class)
+                .setParameter("a", claimRef).setParameter("b", otherRef).setMaxResults(1).getResultStream()
+                .findFirst().orElse(null);
     }
 
     // ── internals ────────────────────────────────────────────────────────────────────────────────
