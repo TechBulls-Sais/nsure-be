@@ -346,7 +346,13 @@ public class CessionEventHandler implements DomainEventHandler {
                     r.claimPaid(claimAmount);
                     if (Recovery.EXPECTED.equals(r.getStatus()) && claimAmount.compareTo(r.getClaimAmount()) != 0) {
                         BigDecimal before = r.getRecoveryAmount();
-                        BigDecimal after = claimAmount.multiply(r.getCededShare()).setScale(2, RoundingMode.HALF_UP);
+                        BigDecimal proportionalShare = existing.stream()
+                                .filter(x -> !Treaty.EXCESS_OF_LOSS.equals(x.getTreaty().getTreatyType()))
+                                .map(Recovery::getCededShare).reduce(BigDecimal.ZERO, BigDecimal::add);
+                        BigDecimal after = Treaty.EXCESS_OF_LOSS.equals(r.getTreaty().getTreatyType())
+                                ? r.getTreaty().xlRecovery(claimAmount.subtract(claimAmount.multiply(proportionalShare)
+                                        .setScale(2, RoundingMode.HALF_UP)))
+                                : claimAmount.multiply(r.getCededShare()).setScale(2, RoundingMode.HALF_UP);
                         r.reexpect(claimAmount, after);
                         publishRecognised(r, after.subtract(before), event);
                     }
@@ -381,10 +387,31 @@ public class CessionEventHandler implements DomainEventHandler {
                     .setParameter("ref", policyRef).setMaxResults(1).getResultStream()
                     .forEach(c -> shares.add(new Object[] {c.getTreaty(), c.getCededShare(), event.eventId()}));
         }
+        // NS-SH07-001: an excess-of-loss cover in force on the event date recovers the part of the claim above its
+        // priority, up to its limit, alongside any proportional share.
+        String product = event.text("product");
+        for (Treaty xl : em.createQuery("select t from Treaty t where t.status = :approved and t.treatyType = :xl"
+                        + " and t.effectiveFrom <= :day and t.effectiveTo >= :day order by t.id", Treaty.class)
+                .setParameter("approved", Treaty.APPROVED).setParameter("xl", Treaty.EXCESS_OF_LOSS)
+                .setParameter("day", eventDate).getResultList()) {
+            String policyProduct = product != null ? product : em.createQuery("select p.product from InsurancePolicy p"
+                    + " where p.ref = :ref", String.class).setParameter("ref", policyRef).getResultStream().findFirst()
+                    .orElse(null);
+            // On the insurer's net retained claim: the gross claim less the proportional shares recovered above.
+            BigDecimal proportional = shares.stream()
+                    .map(x -> claimAmount.multiply((BigDecimal) x[1]).setScale(2, RoundingMode.HALF_UP))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal recovered = xl.xlRecovery(claimAmount.subtract(proportional));
+            if (xl.covers(policyProduct) && recovered.signum() > 0 && claimAmount.signum() > 0) {
+                shares.add(new Object[] {xl, recovered.divide(claimAmount, 6, RoundingMode.HALF_UP),
+                        derived(event.eventId(), "XL-" + xl.getRef()), recovered});
+            }
+        }
         for (Object[] s : shares) {
             Treaty treaty = (Treaty) s[0];
             BigDecimal share = (BigDecimal) s[1];
-            BigDecimal recoveryAmount = claimAmount.multiply(share).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal recoveryAmount = s.length > 3 ? (BigDecimal) s[3]
+                    : claimAmount.multiply(share).setScale(2, RoundingMode.HALF_UP);
             Recovery recovery = new Recovery(treaty, claimRef, policyRef, (String) s[2], claimAmount, share,
                     recoveryAmount).dated(eventDate);
             if (!approval) {
@@ -421,11 +448,11 @@ public class CessionEventHandler implements DomainEventHandler {
 
     /** The automatic treaty covering the product in force on {@code day}, approved first. */
     Optional<Treaty> automaticTreaty(String product, LocalDate day) {
-        return em.createQuery("select t from Treaty t where t.status = :approved and t.treatyType <> :fac"
+        return em.createQuery("select t from Treaty t where t.status = :approved and t.treatyType in :proportional"
                         + " and t.effectiveFrom <= :day and t.effectiveTo >= :day order by t.approvedAt asc, t.id asc",
                         Treaty.class)
                 .setParameter("approved", Treaty.APPROVED)
-                .setParameter("fac", Treaty.FACULTATIVE)
+                .setParameter("proportional", Set.of(Treaty.QUOTA_SHARE, Treaty.SURPLUS))
                 .setParameter("day", day)
                 .getResultList()
                 .stream()

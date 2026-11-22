@@ -114,6 +114,9 @@ nsure:
     payment-hold-statuses: SUSPENDED
     # A portfolio transfer applies only once a second person approves it (AT-SH06-03).
     transfer-approval: true
+  reinsurance:
+    # A recovery still expected this many days after it was recognised shows in the overdue queue (NS-SH07-006).
+    recovery-overdue-days: 60
   finance:
     # A policy cancelled within this many days of cover start (and with no claim) has its premiums refunded.
     cooling-off-days: 30

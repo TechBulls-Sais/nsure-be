@@ -85,6 +85,19 @@ public class Recovery {
     @Column(nullable = false, length = 20)
     private String stage = NONE;
 
+    // NS-SH07-004: the claims bordereau the recovery was reported on.
+    @jakarta.persistence.ManyToOne(fetch = jakarta.persistence.FetchType.LAZY)
+    @jakarta.persistence.JoinColumn(name = "bordereau_id")
+    private Bordereau bordereau;
+
+    void reportedOn(Bordereau bordereau) {
+        this.bordereau = bordereau;
+    }
+
+    public Bordereau getBordereau() {
+        return bordereau;
+    }
+
     @Column(name = "event_date")
     private java.time.LocalDate eventDate;
 

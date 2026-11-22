@@ -36,11 +36,15 @@ public class ReinsuranceService {
     private final EntityManager em;
     private final PlatformSecurityContext security;
     private final Outbox outbox;
+    private final int overdueDays;
 
-    public ReinsuranceService(EntityManager em, PlatformSecurityContext security, Outbox outbox) {
+    public ReinsuranceService(EntityManager em, PlatformSecurityContext security, Outbox outbox,
+            @org.springframework.beans.factory.annotation.Value("${nsure.reinsurance.recovery-overdue-days:60}")
+            int overdueDays) {
         this.em = em;
         this.security = security;
         this.outbox = outbox;
+        this.overdueDays = overdueDays;
     }
 
     // ── treaties ──────────────────────────────────────────────────────────────────────────────────
@@ -53,7 +57,7 @@ public class ReinsuranceService {
                 + " group by c.treaty.id", Object[].class).getResultList()) {
             totals.put((Long) row[0], row);
         }
-        return em.createQuery("select t from Treaty t order by t.id desc", Treaty.class)
+        return em.createQuery("select t from Treaty t left join fetch t.amends order by t.id desc", Treaty.class)
                 .getResultList()
                 .stream()
                 .map(t -> {
@@ -85,6 +89,11 @@ public class ReinsuranceService {
                 throw new IllegalArgumentException("cededPercent can have at most two decimal places.");
             }
             percent = percent.setScale(2);
+        } else if (Treaty.EXCESS_OF_LOSS.equals(type)) {
+            // NS-SH07-001: a distinct non-proportional model: priority and limit per claim, no premium share.
+            if (!body.hasNonNull("xlPriority") || !body.hasNonNull("xlLimit")) {
+                throw new InvalidFieldException("xlPriority", "An excess-of-loss cover needs a priority and a limit per claim.");
+            }
         } else if (Treaty.SURPLUS.equals(type)) {
             retention = number(body, "retention");
             if (retention.signum() <= 0) {
@@ -95,7 +104,7 @@ public class ReinsuranceService {
             }
             retention = retention.setScale(2);
         } else {
-            throw new IllegalArgumentException("Treaty type must be QUOTA_SHARE or SURPLUS.");
+            throw new IllegalArgumentException("Treaty type must be QUOTA_SHARE, SURPLUS or EXCESS_OF_LOSS.");
         }
         LocalDate from = date(body, "effectiveFrom");
         LocalDate to = date(body, "effectiveTo");
@@ -103,7 +112,10 @@ public class ReinsuranceService {
             throw new IllegalArgumentException("The treaty must end after it starts.");
         }
         List<String> products = products(body);
-        Treaty treaty = new Treaty(name, reinsurer, type, products, percent, retention, from, to, user.getUsername());
+        List<Object[]> participants = participants(body, reinsurer);
+        Treaty treaty = new Treaty(name, (String) participants.get(0)[0], type, products, percent, retention, from, to,
+                user.getUsername());
+        applyTerms(treaty, body);
         if (body.hasNonNull("capacity") && !body.get("capacity").asText().isBlank()) {
             BigDecimal capacity = number(body, "capacity");
             if (capacity.signum() <= 0 || capacity.stripTrailingZeros().scale() > 2) {
@@ -114,7 +126,169 @@ public class ReinsuranceService {
         em.persist(treaty);
         em.flush();
         treaty.numbered();
+        saveParticipants(treaty, participants);
         return view(treaty, 0, BigDecimal.ZERO);
+    }
+
+    /**
+     * NS-SH07-001: amends an approved treaty as its next version — {reason, cededPercent?, retention?, capacity?,
+     * commissionPercent?, premiumBasis?, reportingFrequency?, bordereauFormat?, xlPriority?, xlLimit?, participants?,
+     * effectiveFrom, effectiveTo?}. The draft cedes nothing until someone else approves it; then the amended version
+     * stops the day before, keeping every cession already made under it.
+     */
+    @Transactional
+    public ReinsuranceViews.TreatyView amend(String ref, JsonNode body) {
+        AppUser user = user("MANAGE_REINSURANCE");
+        Treaty original = treaty(ref);
+        if (!Treaty.APPROVED.equals(original.getStatus()) || !original.isAutomatic()) {
+            throw new ConflictException("Only an approved automatic treaty can be amended; " + ref + " is "
+                    + original.getStatus().toLowerCase(Locale.ROOT) + ".");
+        }
+        if (!em.createQuery("select t.id from Treaty t where t.amends = :o and t.status = :draft", Long.class)
+                .setParameter("o", original).setParameter("draft", Treaty.DRAFT).setMaxResults(1).getResultList()
+                .isEmpty()) {
+            throw new ConflictException("An amendment of " + ref + " is already waiting for approval.");
+        }
+        String reason = required(body, "reason", 500);
+        LocalDate from = date(body, "effectiveFrom");
+        LocalDate to = body.hasNonNull("effectiveTo") ? date(body, "effectiveTo") : original.getEffectiveTo();
+        if (!from.isAfter(original.getEffectiveFrom()) || !from.isBefore(to)) {
+            throw new IllegalArgumentException("An amendment starts after " + original.getEffectiveFrom()
+                    + " and before it ends.");
+        }
+        BigDecimal percent = original.getCededPercent();
+        BigDecimal retention = original.getRetention();
+        if (Treaty.QUOTA_SHARE.equals(original.getTreatyType()) && body.hasNonNull("cededPercent")) {
+            percent = number(body, "cededPercent");
+            if (percent.signum() <= 0 || percent.compareTo(HUNDRED) > 0 || percent.stripTrailingZeros().scale() > 2) {
+                throw new IllegalArgumentException("A quota share cedes more than 0% and at most 100%.");
+            }
+            percent = percent.setScale(2);
+        }
+        if (Treaty.SURPLUS.equals(original.getTreatyType()) && body.hasNonNull("retention")) {
+            retention = number(body, "retention").setScale(2, java.math.RoundingMode.HALF_UP);
+            if (retention.signum() <= 0) {
+                throw new IllegalArgumentException("A surplus treaty needs a retention above zero.");
+            }
+        }
+        List<Object[]> participants = body.has("participants") ? participants(body, original.getReinsurer())
+                : em.createQuery("select p from TreatyParticipant p where p.treaty = :t order by p.id",
+                        TreatyParticipant.class).setParameter("t", original).getResultStream()
+                .map(p -> new Object[] {p.getReinsurer(), p.getSharePercent(), p.isLead()}).toList();
+        if (participants.isEmpty()) {
+            participants = List.<Object[]>of(new Object[] {original.getReinsurer(), HUNDRED.setScale(2), true});
+        }
+        Treaty amendment = new Treaty(original.getName(), (String) participants.get(0)[0], original.getTreatyType(),
+                original.productList(), percent, retention, from, to, user.getUsername());
+        amendment.amendmentOf(original, reason);
+        amendment.capacity(body.hasNonNull("capacity") ? number(body, "capacity").setScale(2, java.math.RoundingMode.HALF_UP)
+                : original.getCapacity());
+        amendment.terms(original.getCommissionPercent(), original.getPremiumBasis(), original.getReportingFrequency(),
+                original.getBordereauFormat(), original.getXlPriority(), original.getXlLimit());
+        applyTerms(amendment, body);
+        em.persist(amendment);
+        em.flush();
+        amendment.numbered();
+        saveParticipants(amendment, participants);
+        return view(amendment, 0, BigDecimal.ZERO);
+    }
+
+    /** Commission, premium basis, reporting terms and the excess-of-loss priority and limit the body carries. */
+    private void applyTerms(Treaty treaty, JsonNode body) {
+        BigDecimal commission = body.hasNonNull("commissionPercent") && !body.get("commissionPercent").asText().isBlank()
+                ? number(body, "commissionPercent") : treaty.getCommissionPercent();
+        if (commission != null && (commission.signum() < 0 || commission.compareTo(HUNDRED) > 0)) {
+            throw new IllegalArgumentException("commissionPercent must be between 0 and 100.");
+        }
+        String basis = choice(body, "premiumBasis", Set.of("ORIGINAL_TERMS", "RISK_PREMIUM"), treaty.getPremiumBasis());
+        String frequency = choice(body, "reportingFrequency", Set.of("MONTHLY", "QUARTERLY"), treaty.getReportingFrequency());
+        String format = choice(body, "bordereauFormat", Set.of("CSV", "JSON"), treaty.getBordereauFormat());
+        BigDecimal priority = treaty.getXlPriority();
+        BigDecimal limit = treaty.getXlLimit();
+        if (Treaty.EXCESS_OF_LOSS.equals(treaty.getTreatyType())) {
+            if (body.hasNonNull("xlPriority")) {
+                priority = number(body, "xlPriority").setScale(2, java.math.RoundingMode.HALF_UP);
+            }
+            if (body.hasNonNull("xlLimit")) {
+                limit = number(body, "xlLimit").setScale(2, java.math.RoundingMode.HALF_UP);
+            }
+            if (priority == null || limit == null || priority.signum() <= 0 || limit.signum() <= 0) {
+                throw new IllegalArgumentException("An excess-of-loss cover needs a priority and a limit above zero.");
+            }
+        }
+        treaty.terms(commission == null ? null : commission.setScale(2, java.math.RoundingMode.HALF_UP), basis,
+                frequency, format, priority, limit);
+        if (body.hasNonNull("capacity") && !body.get("capacity").asText().isBlank() && treaty.getCapacity() == null) {
+            BigDecimal capacity = number(body, "capacity");
+            if (capacity.signum() <= 0) {
+                throw new IllegalArgumentException("capacity must be above zero.");
+            }
+            treaty.capacity(capacity.setScale(2, java.math.RoundingMode.HALF_UP));
+        }
+    }
+
+    /**
+     * {participants: [{reinsurer, sharePercent, lead?}]}, shares adding up to exactly 100 (NS-SH07-001 blocks
+     * inconsistent percentages); without it, the named reinsurer takes 100%. The lead comes first.
+     */
+    private List<Object[]> participants(JsonNode body, String reinsurer) {
+        JsonNode node = body.get("participants");
+        List<Object[]> out = new ArrayList<>();
+        if (node == null || !node.isArray() || node.isEmpty()) {
+            out.add(new Object[] {reinsurer, HUNDRED.setScale(2), true});
+            return out;
+        }
+        BigDecimal total = BigDecimal.ZERO;
+        Set<String> seen = new java.util.HashSet<>();
+        boolean leadSeen = false;
+        for (JsonNode p : node) {
+            String name = p.path("reinsurer").asText("").trim();
+            if (name.isEmpty() || name.length() > 150 || !seen.add(name.toLowerCase(Locale.ROOT))) {
+                throw new IllegalArgumentException("Each participant needs a distinct reinsurer name (at most 150 characters).");
+            }
+            BigDecimal share;
+            try {
+                share = new BigDecimal(p.path("sharePercent").asText("")).setScale(2, java.math.RoundingMode.UNNECESSARY);
+            } catch (NumberFormatException | ArithmeticException ex) {
+                throw new IllegalArgumentException("Each participant's share is a percentage with at most two decimals.");
+            }
+            if (share.signum() <= 0 || share.compareTo(HUNDRED) > 0) {
+                throw new IllegalArgumentException("Each participant's share is above 0% and at most 100%.");
+            }
+            boolean lead = p.path("lead").asBoolean(false) && !leadSeen;
+            leadSeen |= lead;
+            if (lead) {
+                out.add(0, new Object[] {name, share, true});
+            } else {
+                out.add(new Object[] {name, share, false});
+            }
+            total = total.add(share);
+        }
+        if (total.compareTo(HUNDRED) != 0) {
+            throw new IllegalArgumentException("The participants' shares add up to " + total.toPlainString()
+                    + "%; they must add up to exactly 100%.");
+        }
+        if (!leadSeen) {
+            out.get(0)[2] = true;
+        }
+        return out;
+    }
+
+    private void saveParticipants(Treaty treaty, List<Object[]> participants) {
+        for (Object[] p : participants) {
+            em.persist(new TreatyParticipant(treaty, (String) p[0], (BigDecimal) p[1], (Boolean) p[2]));
+        }
+    }
+
+    private static String choice(JsonNode body, String field, Set<String> allowed, String fallback) {
+        if (body == null || !body.hasNonNull(field) || body.get(field).asText().isBlank()) {
+            return fallback;
+        }
+        String value = body.get(field).asText().trim().toUpperCase(Locale.ROOT);
+        if (!allowed.contains(value)) {
+            throw new IllegalArgumentException(field + " must be one of " + String.join(", ", allowed) + ".");
+        }
+        return value;
     }
 
     /**
@@ -133,6 +307,16 @@ public class ReinsuranceService {
         }
         if (user.getUsername().equalsIgnoreCase(treaty.getCreatedBy())) {
             throw new NoAuthorizationException("You drafted treaty " + ref + "; another user must approve it.");
+        }
+        Treaty amended = treaty.getAmends();
+        if (amended != null) {
+            if (!Treaty.APPROVED.equals(amended.getStatus())) {
+                throw new ConflictException("Treaty " + amended.getRef() + " is no longer approved; this amendment"
+                        + " cannot take over from it.");
+            }
+            // The amended version governs up to the day before; its cessions keep pointing at it.
+            amended.endBefore(treaty.getEffectiveFrom());
+            em.flush();
         }
         for (Treaty other : em.createQuery("select t from Treaty t where t.status = :approved and t.id <> :id",
                         Treaty.class)
@@ -187,14 +371,19 @@ public class ReinsuranceService {
     }
 
     /**
-     * Produces the bordereau for {treatyRef, period yyyy-MM}: every cession of that treaty created in the month and
-     * not yet reported, with its count and control totals. Asking again for the same month returns the same one.
+     * Produces the bordereau for {treatyRef, period yyyy-MM, kind PREMIUM|CLAIMS}: a premium bordereau lists the
+     * treaty's cessions of the month not yet reported, a claims bordereau its recoveries recognised in the month
+     * (NS-SH07-004); each with record count and control totals. Asking again for the same month returns the same one.
      */
     @Transactional
     public ReinsuranceViews.BordereauView bordereau(JsonNode body) {
         AppUser user = user("MANAGE_REINSURANCE");
         Treaty treaty = treaty(required(body, "treatyRef", 20));
         String period = required(body, "period", 7);
+        String kind = body.hasNonNull("kind") ? body.get("kind").asText().trim().toUpperCase(Locale.ROOT) : Bordereau.PREMIUM;
+        if (!Set.of(Bordereau.PREMIUM, Bordereau.CLAIMS).contains(kind)) {
+            throw new InvalidFieldException("kind", "kind must be PREMIUM or CLAIMS.");
+        }
         YearMonth month;
         try {
             month = YearMonth.parse(period);
@@ -202,45 +391,243 @@ public class ReinsuranceService {
             throw new InvalidFieldException("period", "period must be a month (yyyy-MM).");
         }
         List<Bordereau> existing = em.createQuery("select b from Bordereau b join fetch b.treaty"
-                        + " where b.treaty = :treaty and b.period = :period", Bordereau.class)
+                        + " where b.treaty = :treaty and b.period = :period and b.kind = :kind", Bordereau.class)
                 .setParameter("treaty", treaty)
                 .setParameter("period", month.toString())
+                .setParameter("kind", kind)
                 .getResultList();
         if (!existing.isEmpty()) {
             return view(existing.get(0));
         }
         if (!Treaty.APPROVED.equals(treaty.getStatus())) {
-            throw new IllegalArgumentException("Treaty " + treaty.getRef() + " is not approved and has no cessions to report.");
+            throw new IllegalArgumentException("Treaty " + treaty.getRef() + " is not approved and has nothing to report.");
         }
         if (month.isAfter(YearMonth.now())) {
             throw new IllegalArgumentException("A bordereau cannot be produced for a future month.");
         }
-        List<Cession> cessions = em.createQuery("select c from Cession c where c.treaty = :treaty"
+        Bordereau bordereau;
+        if (Bordereau.CLAIMS.equals(kind)) {
+            List<Recovery> recoveries = unreportedRecoveries(treaty, month);
+            BigDecimal claims = recoveries.stream().map(Recovery::getClaimAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal recovered = recoveries.stream().map(Recovery::getRecoveryAmount)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            bordereau = new Bordereau(treaty, month.toString(), recoveries.size(), BigDecimal.ZERO.setScale(2), claims,
+                    user.getUsername()).claims(recovered);
+            em.persist(bordereau);
+            em.flush();
+            bordereau.numbered();
+            Bordereau reported = bordereau;
+            recoveries.forEach(r -> r.reportedOn(reported));
+        } else {
+            List<Cession> cessions = unreportedCessions(treaty, month);
+            BigDecimal premium = cessions.stream().map(Cession::getCededPremium).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal sum = cessions.stream().map(Cession::getCededSum).reduce(BigDecimal.ZERO, BigDecimal::add);
+            bordereau = new Bordereau(treaty, month.toString(), cessions.size(), premium, sum, user.getUsername());
+            em.persist(bordereau);
+            em.flush();
+            bordereau.numbered();
+            Bordereau reported = bordereau;
+            cessions.forEach(c -> c.reportedOn(reported));
+        }
+        publishSubmitted(bordereau, user.getUsername());
+        return view(bordereau);
+    }
+
+    private List<Cession> unreportedCessions(Treaty treaty, YearMonth month) {
+        return em.createQuery("select c from Cession c where c.treaty = :treaty"
                         + " and c.bordereau is null and c.createdAt >= :from and c.createdAt < :to order by c.id asc",
                         Cession.class)
                 .setParameter("treaty", treaty)
                 .setParameter("from", month.atDay(1).atStartOfDay())
                 .setParameter("to", month.plusMonths(1).atDay(1).atStartOfDay())
                 .getResultList();
-        BigDecimal premium = cessions.stream().map(Cession::getCededPremium).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal sum = cessions.stream().map(Cession::getCededSum).reduce(BigDecimal.ZERO, BigDecimal::add);
-        Bordereau bordereau = new Bordereau(treaty, month.toString(), cessions.size(), premium, sum,
-                user.getUsername());
-        em.persist(bordereau);
-        em.flush();
-        bordereau.numbered();
-        cessions.forEach(c -> c.reportedOn(bordereau));
-        // SH07: producing the bordereau submits it to the reinsurer (it is created SUBMITTED).
+    }
+
+    private List<Recovery> unreportedRecoveries(Treaty treaty, YearMonth month) {
+        return em.createQuery("select r from Recovery r where r.treaty = :treaty and r.bordereau is null"
+                        + " and r.createdAt >= :from and r.createdAt < :to order by r.id asc", Recovery.class)
+                .setParameter("treaty", treaty)
+                .setParameter("from", month.atDay(1).atStartOfDay())
+                .setParameter("to", month.plusMonths(1).atDay(1).atStartOfDay())
+                .getResultList();
+    }
+
+    private void publishSubmitted(Bordereau bordereau, String actor) {
+        // SH07: producing (or resubmitting a corrected) bordereau submits it to the reinsurer.
         Map<String, Object> data = new java.util.LinkedHashMap<>();
         data.put("bordereauRef", bordereau.getRef());
-        data.put("treatyRef", treaty.getRef());
-        data.put("reinsurer", treaty.getReinsurer());
-        data.put("period", month.toString());
-        data.put("recordCount", cessions.size());
-        data.put("totalCededPremium", premium.toPlainString());
-        data.put("totalCededSum", sum.toPlainString());
-        outbox.publish(Events.BORDEREAU_SUBMITTED, bordereau.getRef(), data, user.getUsername());
-        return view(bordereau);
+        data.put("treatyRef", bordereau.getTreaty().getRef());
+        data.put("reinsurer", bordereau.getTreaty().getReinsurer());
+        data.put("period", bordereau.getPeriod());
+        data.put("kind", bordereau.getKind());
+        data.put("recordCount", bordereau.getRecordCount());
+        data.put("totalCededPremium", bordereau.getTotalCededPremium().toPlainString());
+        data.put("totalCededSum", bordereau.getTotalCededSum().toPlainString());
+        if (bordereau.getTotalRecovery() != null) {
+            data.put("totalRecovery", bordereau.getTotalRecovery().toPlainString());
+        }
+        data.put("correction", bordereau.getCorrectionCount());
+        outbox.publish(Events.BORDEREAU_SUBMITTED, bordereau.getRef(), data, actor);
+    }
+
+    /** {reference}: the reinsurer acknowledged the bordereau. */
+    @Transactional
+    public ReinsuranceViews.BordereauView acknowledgeBordereau(String ref, JsonNode body) {
+        AppUser user = user("MANAGE_REINSURANCE");
+        Bordereau b = bordereauByRef(ref, Set.of(Bordereau.SUBMITTED, Bordereau.CORRECTED));
+        b.acknowledge(required(body, "reference", 60), user.getUsername());
+        return view(b);
+    }
+
+    /** {note}: the reinsurer asked for a correction. */
+    @Transactional
+    public ReinsuranceViews.BordereauView requestCorrection(String ref, JsonNode body) {
+        user("MANAGE_REINSURANCE");
+        Bordereau b = bordereauByRef(ref, Set.of(Bordereau.SUBMITTED, Bordereau.ACKNOWLEDGED, Bordereau.CORRECTED));
+        b.correctionRequested(required(body, "note", 500));
+        return view(b);
+    }
+
+    /**
+     * Corrects and resubmits: the month's records are gathered again (late cessions or recoveries included), the
+     * control totals recomputed and ReinsuranceBordereauSubmitted raised again with the correction number.
+     */
+    @Transactional
+    public ReinsuranceViews.BordereauView correctBordereau(String ref) {
+        AppUser user = user("MANAGE_REINSURANCE");
+        Bordereau b = bordereauByRef(ref, Set.of(Bordereau.CORRECTION_REQUESTED));
+        YearMonth month = YearMonth.parse(b.getPeriod());
+        if (Bordereau.CLAIMS.equals(b.getKind())) {
+            unreportedRecoveries(b.getTreaty(), month).forEach(r -> r.reportedOn(b));
+            em.flush();
+            List<Recovery> lines = em.createQuery("select r from Recovery r where r.bordereau = :b", Recovery.class)
+                    .setParameter("b", b).getResultList();
+            b.corrected(lines.size(), BigDecimal.ZERO.setScale(2),
+                    lines.stream().map(Recovery::getClaimAmount).reduce(BigDecimal.ZERO, BigDecimal::add),
+                    lines.stream().map(Recovery::getRecoveryAmount).reduce(BigDecimal.ZERO, BigDecimal::add));
+        } else {
+            unreportedCessions(b.getTreaty(), month).forEach(c -> c.reportedOn(b));
+            em.flush();
+            List<Cession> lines = em.createQuery("select c from Cession c where c.bordereau = :b", Cession.class)
+                    .setParameter("b", b).getResultList();
+            b.corrected(lines.size(), lines.stream().map(Cession::getCededPremium).reduce(BigDecimal.ZERO, BigDecimal::add),
+                    lines.stream().map(Cession::getCededSum).reduce(BigDecimal.ZERO, BigDecimal::add), null);
+        }
+        publishSubmitted(b, user.getUsername());
+        return view(b);
+    }
+
+    /** {reference, amount}: the account was settled with the reinsurer. */
+    @Transactional
+    public ReinsuranceViews.BordereauView settleBordereau(String ref, JsonNode body) {
+        AppUser user = user("MANAGE_REINSURANCE");
+        Bordereau b = bordereauByRef(ref, Set.of(Bordereau.ACKNOWLEDGED));
+        BigDecimal amount = number(body, "amount").setScale(2, java.math.RoundingMode.HALF_UP);
+        b.settle(required(body, "reference", 60), amount, user.getUsername());
+        return view(b);
+    }
+
+    /** The bordereau's lines in the agreed layout (the treaty's format: CSV or JSON, rendered by the client). */
+    @Transactional(readOnly = true)
+    public List<ReinsuranceViews.BordereauLine> bordereauLines(String ref) {
+        user("READ_REINSURANCE");
+        Bordereau b = bordereauByRef(ref, null);
+        if (Bordereau.CLAIMS.equals(b.getKind())) {
+            return em.createQuery("select r from Recovery r where r.bordereau = :b order by r.id", Recovery.class)
+                    .setParameter("b", b).getResultStream()
+                    .map(r -> new ReinsuranceViews.BordereauLine(r.getRef(), r.getPolicyRef(), null, null, null, null,
+                            null, r.getClaimRef(), r.getClaimAmount(), r.getRecoveryAmount(), null))
+                    .toList();
+        }
+        return em.createQuery("select c from Cession c where c.bordereau = :b order by c.id", Cession.class)
+                .setParameter("b", b).getResultStream()
+                .map(c -> new ReinsuranceViews.BordereauLine(c.getRef(), c.getPolicyRef(), c.getProduct(),
+                        c.getSumAssured(), c.getCededSum(), c.getPremium(), c.getCededPremium(), null, null, null,
+                        c.getReceiptRef()))
+                .toList();
+    }
+
+    private Bordereau bordereauByRef(String ref, Set<String> allowed) {
+        Bordereau b = em.createQuery("select b from Bordereau b join fetch b.treaty where b.ref = :ref", Bordereau.class)
+                .setParameter("ref", ref).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Bordereau " + ref + " not found"));
+        if (allowed != null && !allowed.contains(b.getStatus())) {
+            throw new ConflictException("Bordereau " + ref + " is " + b.getStatus().toLowerCase(Locale.ROOT)
+                    .replace('_', ' ') + ".");
+        }
+        return b;
+    }
+
+    /**
+     * NS-SH07-006: gross premium received on products a treaty covers, ceded and retained per treaty for a month,
+     * against the ceded premium and recoveries the subledger posted; with the operational queues: policies without
+     * an approved treaty, capacity breaches waiting for facultative placement, and recoveries overdue.
+     */
+    @Transactional(readOnly = true)
+    public ReinsuranceViews.ReconciliationView reconciliation(String period) {
+        user("READ_REINSURANCE");
+        YearMonth month;
+        try {
+            month = period == null || period.isBlank() ? YearMonth.now() : YearMonth.parse(period);
+        } catch (DateTimeParseException ex) {
+            throw new InvalidFieldException("period", "period must be a month (yyyy-MM).");
+        }
+        java.time.LocalDateTime from = month.atDay(1).atStartOfDay();
+        java.time.LocalDateTime to = month.plusMonths(1).atDay(1).atStartOfDay();
+        List<ReinsuranceViews.ReconRow> rows = new ArrayList<>();
+        BigDecimal gross = BigDecimal.ZERO;
+        BigDecimal ceded = BigDecimal.ZERO;
+        for (Object[] r : em.createQuery("select c.treaty.ref, c.treaty.name, count(c), sum(c.premium),"
+                        + " sum(c.cededPremium) from Cession c where c.createdAt >= :from and c.createdAt < :to"
+                        + " group by c.treaty.ref, c.treaty.name order by c.treaty.ref", Object[].class)
+                .setParameter("from", from).setParameter("to", to).getResultList()) {
+            BigDecimal g = (BigDecimal) r[3];
+            BigDecimal c = (BigDecimal) r[4];
+            rows.add(new ReinsuranceViews.ReconRow((String) r[0], (String) r[1], (Long) r[2], g, c, g.subtract(c)));
+            gross = gross.add(g);
+            ceded = ceded.add(c);
+        }
+        BigDecimal ledgerCeded = ledger("5200", month, true);
+        BigDecimal recognised = em.createQuery("select coalesce(sum(r.recoveryAmount), 0) from Recovery r"
+                + " where r.createdAt >= :from and r.createdAt < :to", BigDecimal.class)
+                .setParameter("from", from).setParameter("to", to).getSingleResult();
+        BigDecimal ledgerRecoveries = ledger("4200", month, false);
+        LocalDate today = LocalDate.now();
+        List<ReinsuranceViews.QueueItem> missing = em.createQuery("select e from Exposure e where e.status = :none",
+                        Exposure.class).setParameter("none", Exposure.NO_TREATY).setMaxResults(200).getResultStream()
+                .map(e -> new ReinsuranceViews.QueueItem(e.getRef(), e.getPolicyRef(), e.getProduct()
+                        + ": no approved treaty on " + e.getEffectiveFrom(), e.getSumAssured(),
+                        java.time.temporal.ChronoUnit.DAYS.between(e.getEffectiveFrom(), today)))
+                .toList();
+        List<ReinsuranceViews.QueueItem> breaches = em.createQuery("select f from Facultative f where f.status in"
+                        + " :open", Facultative.class).setParameter("open", Set.of(Facultative.REFERRED, Facultative.OFFERED))
+                .getResultStream()
+                .map(f -> new ReinsuranceViews.QueueItem(f.getRef(), f.getPolicyRef(), f.getStatus().toLowerCase(Locale.ROOT)
+                        + ": " + f.getReferredReason(), f.getExcessSum(),
+                        java.time.temporal.ChronoUnit.DAYS.between(f.getReferredAt().toLocalDate(), today)))
+                .toList();
+        List<ReinsuranceViews.QueueItem> overdue = em.createQuery("select r from Recovery r join fetch r.treaty"
+                        + " where r.status = :expected and r.createdAt < :before order by r.createdAt", Recovery.class)
+                .setParameter("expected", Recovery.EXPECTED)
+                .setParameter("before", today.minusDays(overdueDays).atStartOfDay())
+                .getResultStream()
+                .map(r -> new ReinsuranceViews.QueueItem(r.getRef(), r.getPolicyRef(), r.getTreaty().getReinsurer()
+                        + " on claim " + r.getClaimRef() + (Recovery.NONE.equals(r.getStage()) ? ""
+                        : " (" + r.getStage().toLowerCase(Locale.ROOT).replace('_', ' ') + ")"), r.getRecoveryAmount(),
+                        java.time.temporal.ChronoUnit.DAYS.between(r.getCreatedAt().toLocalDate(), today)))
+                .toList();
+        return new ReinsuranceViews.ReconciliationView(month.toString(), rows, gross, ceded, gross.subtract(ceded),
+                ledgerCeded, ceded.subtract(ledgerCeded), recognised, ledgerRecoveries, missing, breaches, overdue);
+    }
+
+    /** Net movement on a subledger account in the month (debit nature: debits less credits). */
+    private BigDecimal ledger(String account, YearMonth month, boolean debitNature) {
+        Object[] row = em.createQuery("select coalesce(sum(l.debit), 0), coalesce(sum(l.credit), 0) from JournalLine l"
+                        + " where l.accountCode = :a and l.journal.periodCode = :p", Object[].class)
+                .setParameter("a", account).setParameter("p", month.toString()).getSingleResult();
+        BigDecimal d = (BigDecimal) row[0];
+        BigDecimal c = (BigDecimal) row[1];
+        return debitNature ? d.subtract(c) : c.subtract(d);
     }
 
     /**
@@ -543,12 +930,21 @@ public class ReinsuranceService {
         return List.copyOf(products);
     }
 
-    private static ReinsuranceViews.TreatyView view(Treaty t, long cessions, BigDecimal ceded) {
+    private ReinsuranceViews.TreatyView view(Treaty t, long cessions, BigDecimal ceded) {
+        List<ReinsuranceViews.ParticipantView> participants = em.createQuery("select p from TreatyParticipant p"
+                        + " where p.treaty = :t order by p.id", TreatyParticipant.class).setParameter("t", t)
+                .getResultStream().map(p -> new ReinsuranceViews.ParticipantView(p.getReinsurer(), p.getSharePercent(),
+                        p.isLead())).toList();
+        if (participants.isEmpty()) {
+            participants = List.of(new ReinsuranceViews.ParticipantView(t.getReinsurer(), HUNDRED.setScale(2), true));
+        }
         return new ReinsuranceViews.TreatyView(t.getRef(), t.getName(), t.getReinsurer(), t.getTreatyType(),
                 t.productList(), t.getCededPercent(), t.getRetention(), t.getEffectiveFrom(), t.getEffectiveTo(),
                 t.getStatus(), Treaty.APPROVED.equals(t.getStatus()) && t.inForceOn(LocalDate.now()), t.getCreatedBy(),
                 t.getCreatedAt(), t.getApprovedBy(), t.getApprovedAt(), cessions, ceded, t.getCapacity(),
-                t.getPolicyRef());
+                t.getPolicyRef(), t.getVersion(), t.getAmends() == null ? null : t.getAmends().getRef(),
+                t.getAmendmentReason(), participants, t.getCommissionPercent(), t.getPremiumBasis(),
+                t.getReportingFrequency(), t.getBordereauFormat(), t.getXlPriority(), t.getXlLimit());
     }
 
     private static ReinsuranceViews.CessionView view(Cession c) {
@@ -575,7 +971,10 @@ public class ReinsuranceService {
     private static ReinsuranceViews.BordereauView view(Bordereau b) {
         return new ReinsuranceViews.BordereauView(b.getRef(), b.getTreaty().getRef(), b.getTreaty().getName(),
                 b.getTreaty().getReinsurer(), b.getPeriod(), b.getRecordCount(), b.getTotalCededPremium(),
-                b.getTotalCededSum(), b.getStatus(), b.getCreatedBy(), b.getCreatedAt());
+                b.getTotalCededSum(), b.getStatus(), b.getCreatedBy(), b.getCreatedAt(), b.getKind(),
+                b.getCorrectionCount(), b.getAckReference(), b.getCorrectionNote(), b.getSettlementReference(),
+                b.getSettledAmount(), b.getTotalRecovery(),
+                b.getTreaty().getBordereauFormat() == null ? "CSV" : b.getTreaty().getBordereauFormat());
     }
 
     private static String required(JsonNode body, String field, int max) {

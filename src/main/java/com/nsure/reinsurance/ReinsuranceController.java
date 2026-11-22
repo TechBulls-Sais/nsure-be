@@ -31,6 +31,45 @@ public class ReinsuranceController {
         return reinsurance.draft(body);
     }
 
+    /** {reason, effectiveFrom, ...terms}: the next version of an approved treaty, approved by someone else. */
+    @PostMapping("/treaties/{ref}/amend")
+    public ReinsuranceViews.TreatyView amend(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.amend(ref, body);
+    }
+
+    @GetMapping("/reconciliation")
+    public ReinsuranceViews.ReconciliationView reconciliation(@RequestParam(required = false) String period) {
+        return reinsurance.reconciliation(period);
+    }
+
+    @GetMapping("/bordereaux/{ref}/lines")
+    public List<ReinsuranceViews.BordereauLine> bordereauLines(@PathVariable String ref) {
+        return reinsurance.bordereauLines(ref);
+    }
+
+    /** {reference} */
+    @PostMapping("/bordereaux/{ref}/acknowledge")
+    public ReinsuranceViews.BordereauView acknowledgeBordereau(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.acknowledgeBordereau(ref, body);
+    }
+
+    /** {note} */
+    @PostMapping("/bordereaux/{ref}/correction")
+    public ReinsuranceViews.BordereauView requestCorrection(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.requestCorrection(ref, body);
+    }
+
+    @PostMapping("/bordereaux/{ref}/correct")
+    public ReinsuranceViews.BordereauView correctBordereau(@PathVariable String ref) {
+        return reinsurance.correctBordereau(ref);
+    }
+
+    /** {reference, amount} */
+    @PostMapping("/bordereaux/{ref}/settle")
+    public ReinsuranceViews.BordereauView settleBordereau(@PathVariable String ref, @RequestBody JsonNode body) {
+        return reinsurance.settleBordereau(ref, body);
+    }
+
     @PostMapping("/treaties/{ref}/approve")
     public ReinsuranceViews.TreatyView approve(@PathVariable String ref) {
         return reinsurance.approve(ref);

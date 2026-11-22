@@ -320,3 +320,6 @@ databaseChangeLog:
   - include:
       file: changes/184-subledger-controls.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/185-treaty-terms-and-bordereaux.yaml
+      relativeToChangelogFile: true

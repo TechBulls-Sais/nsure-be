@@ -31,8 +31,41 @@ public final class ReinsuranceViews {
             BigDecimal totalCededPremium,
             // NS-SH07-002: most ceded per life (null = no limit); the policy of a facultative arrangement.
             BigDecimal capacity,
-            String policyRef
+            String policyRef,
+            // NS-SH07-001: version, participants and terms; the excess-of-loss model.
+            int version,
+            String amendsRef,
+            String amendmentReason,
+            List<ParticipantView> participants,
+            BigDecimal commissionPercent,
+            String premiumBasis,
+            String reportingFrequency,
+            String bordereauFormat,
+            BigDecimal xlPriority,
+            BigDecimal xlLimit
     ) {
+    }
+
+    public record ParticipantView(String reinsurer, BigDecimal sharePercent, boolean lead) {
+    }
+
+    /** NS-SH07-006: gross, ceded and retained per treaty for a month, against what the subledger posted. */
+    public record ReconciliationView(String period, List<ReconRow> treaties, BigDecimal grossPremium,
+            BigDecimal cededPremium, BigDecimal retainedPremium, BigDecimal ledgerCededPremium, BigDecimal difference,
+            BigDecimal recoveriesRecognised, BigDecimal ledgerRecoveries, List<QueueItem> missingAgreements,
+            List<QueueItem> capacityBreaches, List<QueueItem> overdueRecoveries) {
+    }
+
+    public record ReconRow(String treatyRef, String treatyName, long cessions, BigDecimal grossPremium,
+            BigDecimal cededPremium, BigDecimal retainedPremium) {
+    }
+
+    public record QueueItem(String ref, String policyRef, String detail, BigDecimal amount, long ageDays) {
+    }
+
+    public record BordereauLine(String ref, String policyRef, String product, BigDecimal sumAssured, BigDecimal cededSum,
+            BigDecimal premium, BigDecimal cededPremium, String claimRef, BigDecimal claimAmount,
+            BigDecimal recoveryAmount, String receiptRef) {
     }
 
     /** One version of a policy's ceded exposure (NS-SH07-002/003). */
@@ -120,7 +153,16 @@ public final class ReinsuranceViews {
             BigDecimal totalCededSum,
             String status,
             String createdBy,
-            LocalDateTime createdAt
+            LocalDateTime createdAt,
+            // NS-SH07-004: premium or claims, and the reinsurer's side of the lifecycle.
+            String kind,
+            int correctionCount,
+            String ackReference,
+            String correctionNote,
+            String settlementReference,
+            BigDecimal settledAmount,
+            BigDecimal totalRecovery,
+            String format
     ) {
     }
 }
