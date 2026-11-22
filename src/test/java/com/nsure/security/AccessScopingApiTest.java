@@ -176,6 +176,41 @@ class AccessScopingApiTest {
                 .andExpect(status().isOk());
     }
 
+    @Test
+    void approvalAuthorityIsDelegatedForATimeAndNeverAboveTheDelegatorsOwn() throws Exception {
+        String until = LocalDate.now().plusDays(10).toString();
+        mockMvc.perform(get("/admin/approval-delegations").with(signedIn("assessor", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.myLimit").value("50000.00"));
+        // An assessor limited to 50,000 cannot lend more than that.
+        mockMvc.perform(post("/admin/approval-delegations").with(signedIn("assessor2", "password"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"delegate\":\"assessor\",\"maxAmount\":80000,"
+                                + "\"validTo\":\"" + until + "\",\"reason\":\"Cover my leave\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/admin/approval-delegations").with(signedIn("admin", "password"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"delegate\":\"assessor\",\"maxAmount\":120000,"
+                                + "\"validTo\":\"" + LocalDate.now().plusDays(60) + "\",\"reason\":\"Cover my leave\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(post("/admin/approval-delegations").with(signedIn("admin", "password"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"delegate\":\"support\",\"maxAmount\":120000,"
+                                + "\"validTo\":\"" + until + "\",\"reason\":\"Cover my leave\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        String body = mockMvc.perform(post("/admin/approval-delegations").with(signedIn("admin", "password"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"delegate\":\"assessor\",\"maxAmount\":120000,"
+                                + "\"validTo\":\"" + until + "\",\"reason\":\"Head of claims on leave\"}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        mockMvc.perform(get("/admin/approval-delegations").with(signedIn("assessor", "password")))
+                .andExpect(jsonPath("$.myLimit").value("120000.00"));
+        Integer id = JsonPath.read(body, "$.delegations[0].id");
+        mockMvc.perform(post("/admin/approval-delegations/" + id + "/revoke").with(signedIn("assessor2", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/admin/approval-delegations/" + id + "/revoke").with(signedIn("admin", "password")))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/admin/approval-delegations").with(signedIn("assessor", "password")))
+                .andExpect(jsonPath("$.myLimit").value("50000.00"));
+    }
+
     private com.nsure.security.domain.AppUser user(String username) {
         return (com.nsure.security.domain.AppUser) userDetails.loadUserByUsername(username);
     }

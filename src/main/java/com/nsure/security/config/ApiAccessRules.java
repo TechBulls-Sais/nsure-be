@@ -539,6 +539,10 @@ public final class ApiAccessRules {
             rule(GET, "/permissions/*", anyOf("READ_PERMISSION")),
             rule(PUT, "/permissions/*", anyOf("UPDATE_PERMISSION")),
             // Claim approval limits per role (spec 04 §5.3): part of administering roles.
+            // NS-SH10-003 time-bound delegation of claim approval authority (work package e).
+            rule(GET, "/admin/approval-delegations", anyOf("APPROVE_CLAIM", "READ_ROLE")),
+            rule(POST, "/admin/approval-delegations", anyOf("APPROVE_CLAIM")),
+            rule(POST, "/admin/approval-delegations/*/revoke", anyOf("APPROVE_CLAIM", "UPDATE_ROLE")),
             rule(GET, "/admin/approval-authorities", anyOf("READ_ROLE")),
             rule(PUT, "/admin/approval-authorities/*", anyOf("UPDATE_ROLE")),
             rule(DELETE, "/admin/approval-authorities/*", anyOf("UPDATE_ROLE")));

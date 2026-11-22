@@ -326,3 +326,6 @@ databaseChangeLog:
   - include:
       file: changes/201-document-templates.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/202-approval-delegation.yaml
+      relativeToChangelogFile: true
