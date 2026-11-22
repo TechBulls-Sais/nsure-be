@@ -149,12 +149,19 @@ public class CoverHistory {
         return out;
     }
 
-    /** The rate per mille in force for the category on the day: its dated version, else its current terms. */
+    /**
+     * The rate per mille in force for the category on the day: its dated version, else its current terms. A category
+     * amended after its open version was written (a prospective amendment on the Categories tab) applies its current
+     * rate from the amendment date on.
+     */
     static BigDecimal rateOn(BenefitCategory category, List<CategoryVersion> versions, LocalDate day) {
         if (versions != null) {
             for (CategoryVersion v : versions) {
                 if (v.covers(day)) {
-                    return v.getRatePerMille();
+                    boolean amendedSince = v.getEffectiveTo() == null && category.getUpdatedAt() != null
+                            && category.getUpdatedAt().isAfter(v.getCreatedAt())
+                            && !day.isBefore(category.getUpdatedAt().toLocalDate());
+                    return amendedSince ? category.getRatePerMille() : v.getRatePerMille();
                 }
             }
         }
