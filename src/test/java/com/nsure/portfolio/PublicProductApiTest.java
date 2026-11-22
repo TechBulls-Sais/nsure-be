@@ -51,7 +51,8 @@ class PublicProductApiTest {
         mockMvc.perform(get("/public/products"))
                 .andExpect(jsonPath("$[?(@.name == 'Term Life')].premium").value("from BWP 230"))
                 .andExpect(jsonPath("$[?(@.name == 'Term Life')].cover").value("up to BWP 1,000,000"))
-                .andExpect(jsonPath("$[?(@.name == 'Care Cash')].cover").value("up to BWP 2,000 / day"));
+                // Section 06 Care Cash: the pack's daily benefit tiers run up to 3,000 a day.
+                .andExpect(jsonPath("$[?(@.name == 'Care Cash')].cover").value("up to BWP 3,000 / day"));
     }
 
     @Test

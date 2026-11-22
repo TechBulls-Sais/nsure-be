@@ -329,7 +329,13 @@ public class ClaimFinancials {
      */
     String lifeKey(InsuranceClaim claim) {
         Long life = lifeId(claim);
-        return life == null ? "PRINCIPAL" : "LIFE-" + life;
+        if (life == null) {
+            return "PRINCIPAL";
+        }
+        // NS-IL04-004, AT-IL04-02: a person removed and added again continues their first row's counter, so
+        // re-enrolment never resets what they have already used.
+        PolicyLifeCover row = em.find(PolicyLifeCover.class, life);
+        return "LIFE-" + (row == null ? life : row.getPersonId());
     }
 
     /** The covered-life row a claim is for: the one it names, else the policy's main insured life, if any. */

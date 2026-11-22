@@ -92,14 +92,33 @@ public class CreditController {
 
     @GetMapping("/loans/{ref}/claim-assessment")
     public CreditViews.ClaimAssessment assessClaim(@PathVariable String ref,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate eventDate) {
-        return credit.assessClaim(ref, eventDate);
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate eventDate,
+            @RequestParam(required = false) String cause) {
+        return credit.assessClaim(ref, eventDate, cause);
     }
 
-    /** {eventDate, claimRef?, payeeVerified} */
+    /** {eventDate, claimRef?, cause?, accidental?, lenderAccount, surplusPayeeName?, surplusPayeeRelationship?} */
     @PostMapping("/loans/{ref}/claim")
     public CreditViews.LoanDetail recordClaim(@PathVariable String ref, @RequestBody JsonNode body) {
         return credit.recordClaim(ref, body);
+    }
+
+    /** {note}: a second person verifies the claim's payment details (NS-IL05-005). */
+    @PostMapping("/loans/{ref}/claim/verification")
+    public CreditViews.LoanDetail verifyClaimPayee(@PathVariable String ref, @RequestBody JsonNode body) {
+        return credit.verifyClaimPayee(ref, body);
+    }
+
+    /** {paymentReference}: pays the verified claim. */
+    @PostMapping("/loans/{ref}/claim/payment")
+    public CreditViews.LoanDetail payClaim(@PathVariable String ref, @RequestBody JsonNode body) {
+        return credit.payClaim(ref, body);
+    }
+
+    /** {fileReference, rows: [{lenderLoanId, settlementReference, settlementDate}]}: a lender's settlement file. */
+    @PostMapping("/lenders/{ref}/settlements")
+    public CreditViews.BatchResult settlementFile(@PathVariable String ref, @RequestBody JsonNode body) {
+        return credit.settlementFile(ref, body);
     }
 
     @GetMapping("/loans/{ref}/settlement-preview")

@@ -72,6 +72,32 @@ public final class CreditRecords {
         int staleBalanceDays;
         @Column(name = "refund_deduction_percent", nullable = false, precision = 7, scale = 2)
         BigDecimal refundDeductionPercent;
+        /** Entry is limited separately from the cessation age (NS-IL05-002). */
+        @Column(name = "max_entry_age", nullable = false)
+        int maxEntryAge = 65;
+        /** Waiting period per benefit (NS-IL05-003); death uses waiting_months. */
+        @Column(name = "pd_waiting_months", nullable = false)
+        int pdWaitingMonths = 3;
+        @Column(name = "td_waiting_months", nullable = false)
+        int tdWaitingMonths = 6;
+        @Column(name = "ci_waiting_months", nullable = false)
+        int ciWaitingMonths = 6;
+        /** Premium loadings per mille of principal for the optional benefits (NS-IL05-003). */
+        @Column(name = "td_rate_per_mille", nullable = false, precision = 9, scale = 4)
+        BigDecimal tdRatePerMille;
+        @Column(name = "ci_rate_per_mille", nullable = false, precision = 9, scale = 4)
+        BigDecimal ciRatePerMille;
+        /** Temporary disability pays this many level instalments; critical illness this percent of the balance. */
+        @Column(name = "td_benefit_months", nullable = false)
+        int tdBenefitMonths = 6;
+        @Column(name = "ci_benefit_percent", nullable = false, precision = 7, scale = 2)
+        BigDecimal ciBenefitPercent;
+        /** EVENT_DATE or NOTIFICATION_DATE: the date whose balance a claim pays (NS-IL05-005). */
+        @Column(name = "valuation_basis", nullable = false, length = 20)
+        String valuationBasis = "EVENT_DATE";
+        /** ESTATE or NOMINATED_BENEFICIARY: who receives a surplus over the balance (NS-IL05-005). */
+        @Column(name = "surplus_payee", nullable = false, length = 30)
+        String surplusPayee = "ESTATE";
         @Column(name = "updated_by", length = 100)
         String updatedBy;
         @Column(name = "updated_at")
@@ -159,6 +185,34 @@ public final class CreditRecords {
         BigDecimal estateAmount;
         @Column(name = "refinanced_from", length = 20)
         String refinancedFrom;
+        /** What the loan was sold with (NS-IL05-001): cover basis and benefit waiting periods. */
+        @Column(name = "cover_basis", length = 30)
+        String coverBasis;
+        @Column(name = "pd_waiting_months")
+        Integer pdWaitingMonths;
+        @Column(name = "td_waiting_months")
+        Integer tdWaitingMonths;
+        @Column(name = "ci_waiting_months")
+        Integer ciWaitingMonths;
+        /** PENDING_VERIFICATION, VERIFIED or PAID (NS-IL05-005). */
+        @Column(name = "claim_status", length = 30)
+        String claimStatus;
+        @Column(name = "claim_recorded_by", length = 100)
+        String claimRecordedBy;
+        @Column(name = "valuation_date")
+        LocalDate valuationDate;
+        @Column(name = "lender_account", length = 60)
+        String lenderAccount;
+        @Column(name = "surplus_payee_name", length = 150)
+        String surplusPayeeName;
+        @Column(name = "surplus_payee_relationship", length = 60)
+        String surplusPayeeRelationship;
+        @Column(name = "claim_paid_reference", length = 60)
+        String claimPaidReference;
+        @Column(name = "claim_paid_by", length = 100)
+        String claimPaidBy;
+        @Column(name = "claim_paid_at")
+        LocalDateTime claimPaidAt;
         @Column(name = "created_by", nullable = false, length = 100)
         String createdBy;
         @Column(name = "created_at", nullable = false)

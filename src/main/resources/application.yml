@@ -124,6 +124,12 @@ nsure:
     late-events: NEXT_OPEN_PERIOD
     # A soft-closed period takes system postings only, not manual journals.
     soft-close-blocks-manual: true
+  # Individual new business (Nsure Life NS-IL01-003/005/006). Every policy is issued from an application the
+  # underwriting rules or an underwriter cleared, and a portal purchase answers the product's disclosure questions.
+  # (The code defaults allow direct issue and question-less purchases only for legacy data loads and older tests.)
+  new-business:
+    direct-issue-enabled: ${NSURE_DIRECT_ISSUE_ENABLED:false}
+    portal-disclosures-required: ${NSURE_PORTAL_DISCLOSURES_REQUIRED:true}
 
 management:
   endpoints:

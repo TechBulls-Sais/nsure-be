@@ -177,8 +177,35 @@ class CreditLifeApiTest {
                 .andExpect(jsonPath("$.loan.claimCause").value("DEATH"))
                 .andExpect(jsonPath("$.loan.claimAccidental").value(true))
                 .andExpect(jsonPath("$.loan.claimEventDate").value(LocalDate.now().toString()))
-                .andExpect(jsonPath("$.loan.payeeVerifiedBy").value("credit"))
+                .andExpect(jsonPath("$.loan.valuationDate").value(LocalDate.now().toString()))
+                .andExpect(jsonPath("$.loan.surplusPayeeName").value("Estate of Tshepo Claim"))
+                // NS-IL05-005: the payee is verified by a second person, then the claim is paid.
+                .andExpect(jsonPath("$.loan.claimStatus").value("PENDING_VERIFICATION"))
+                .andExpect(jsonPath("$.loan.payeeVerifiedBy").doesNotExist());
+        mockMvc.perform(json(post("/credit/loans/" + ref + "/claim/payment"), "admin", "{\"paymentReference\":\"EFT-CL-1\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("verified by a second person")));
+        mockMvc.perform(json(post("/credit/loans/" + ref + "/claim/verification"), "credit", "{\"note\":\"Called the lender\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/credit/loans/" + ref + "/claim/verification"), "admin",
+                        "{\"note\":\"Lender's settlement account confirmed on letterhead\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.loan.claimStatus").value("VERIFIED"))
+                .andExpect(jsonPath("$.loan.payeeVerifiedBy").value("admin"))
                 .andExpect(jsonPath("$.loan.payeeVerifiedAt").isNotEmpty());
+        mockMvc.perform(json(post("/credit/loans/" + ref + "/claim/payment"), "credit", "{\"paymentReference\":\"EFT-CL-1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.loan.claimStatus").value("PAID"))
+                .andExpect(jsonPath("$.loan.claimPaidReference").value("EFT-CL-1"));
+        mockMvc.perform(json(post("/credit/loans/" + ref + "/claim/payment"), "credit", "{\"paymentReference\":\"EFT-CL-2\"}"))
+                .andExpect(status().isConflict());
+        assertThat(events("CreditClaimPaid", ref)).isEqualTo(1);
+        // The general claims route cannot pay a credit policy its sum assured.
+        mockMvc.perform(json(post("/portfolio/claims"), "assessor", "{\"policy\":\"" + active[1] + "\",\"claimantName\":"
+                        + "\"Tshepo Claim\",\"claimantMobile\":\"+267 72 000 000\",\"claimantRelationship\":\"Self\","
+                        + "\"eventDate\":\"" + LocalDate.now() + "\",\"description\":\"Passed away.\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("credit life policy")));
         // The claim closes the credit policy, for death, so no further premium is due on it.
         mockMvc.perform(get("/servicing/policies/" + active[1]).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.policy.contractStatus").value("Terminated"))
@@ -189,6 +216,81 @@ class CreditLifeApiTest {
         // The PolicyTerminated it raised finds the loan already closed: no second CreditCoverTerminated.
         dispatcher.dispatch();
         assertThat(events("CreditCoverTerminated", ref)).isEqualTo(1);
+    }
+
+    @Test
+    void optionalBenefitsHaveTheirOwnLoadingWaitingAndAmount() throws Exception {
+        // NS-IL05-003: temporary disability and critical illness load the premium (0.85 + 0.15 + 0.20 per mille).
+        String borrower = customer("Kagiso Benefits", 40);
+        mockMvc.perform(json(post("/credit/loans"), "credit", loan(borrower, "LSH-8001", 120000, 24, "REGULAR",
+                        ",\"temporaryDisability\":true,\"criticalIllness\":true")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.monthlyPremium").value(144.0))
+                .andExpect(jsonPath("$.tdWaitingMonths").value(6))
+                .andExpect(jsonPath("$.ciWaitingMonths").value(6))
+                .andExpect(jsonPath("$.coverBasis").isNotEmpty());
+        // NS-IL05-002: entry stops at 65 even where a secured loan may run to 80.
+        String older = customer("Mma Entry", 66);
+        mockMvc.perform(json(post("/credit/loans"), "credit", loan(older, "LSH-8002", 20000, 12, "REGULAR", ",\"secured\":true")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("entry age")));
+
+        String[] active = activeLoan("Lesego Disabled", "LSH-8003", 120000, 24, "REGULAR", LocalDate.now().minusMonths(8));
+        String ref = active[0];
+        jdbc.update("update crd_loan set temporary_disability = TRUE, td_waiting_months = 6, critical_illness = TRUE,"
+                + " ci_waiting_months = 12 where record_ref = ?", ref);
+        jdbc.update("update ins_policy set cover_start_date = ? where record_ref = ?",
+                java.sql.Date.valueOf(LocalDate.now().minusMonths(8)), active[1]);
+        mockMvc.perform(json(post("/credit/loans/" + ref + "/balances"), "credit", "{\"sourceReference\":\"STMT-TD\","
+                        + "\"effectiveDate\":\"" + LocalDate.now().minusDays(3) + "\",\"balance\":80000}"))
+                .andExpect(status().isOk());
+        // Critical illness is still within its 12-month waiting period, and an accident does not shorten it.
+        mockMvc.perform(get("/credit/loans/" + ref + "/claim-assessment").param("cause", "CRITICAL_ILLNESS")
+                        .with(signedIn("credit", "password")))
+                .andExpect(jsonPath("$.inWaitingPeriod").value(true))
+                .andExpect(jsonPath("$.lenderAmount").value(40000.0));
+        mockMvc.perform(json(post("/credit/loans/" + ref + "/claim"), "credit", "{\"eventDate\":\"" + LocalDate.now()
+                        + "\",\"cause\":\"CRITICAL_ILLNESS\",\"accidental\":true,\"lenderAccount\":\"LSH-ACC-1\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("12-month waiting period")));
+        // Temporary disability is past its 6 months: six level instalments (120,000 / 24 = 5,000) go to the lender.
+        mockMvc.perform(json(post("/credit/loans/" + ref + "/claim"), "credit", "{\"eventDate\":\"" + LocalDate.now()
+                        + "\",\"cause\":\"TEMPORARY_DISABILITY\",\"lenderAccount\":\"LSH-ACC-1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.loan.lenderAmount").value(30000.0))
+                .andExpect(jsonPath("$.loan.estateAmount").value(0.0))
+                .andExpect(jsonPath("$.loan.lenderAccount").value("LSH-ACC-1"));
+    }
+
+    @Test
+    void aStaleBalanceBlocksSettlementAndARepeatedSettlementFileClosesOnce() throws Exception {
+        String[] stale = activeLoan("Thato Stale", "LSH-7001", 60000, 24, "REGULAR", LocalDate.now().minusDays(120));
+        // NS-IL05-004: the only balance is the disbursement 120 days ago: settlement raises an exception instead.
+        mockMvc.perform(json(post("/credit/loans/" + stale[0] + "/settlement"), "credit",
+                        "{\"settlementReference\":\"SET-7001\",\"settlementDate\":\"" + LocalDate.now() + "\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(containsString("no current lender balance")));
+        mockMvc.perform(get("/credit/loans/" + stale[0]).with(signedIn("credit", "password")))
+                .andExpect(jsonPath("$.loan.status").value("COVER_ACTIVE"))
+                .andExpect(jsonPath("$.loan.balanceException").value(containsString("needs a current balance")));
+
+        // AT-IL05-02: a lender settlement file sent twice closes the loan once and raises at most one refund.
+        String[] single = activeLoan("Pako File", "LSH-7002", 60000, 24, "SINGLE", LocalDate.now());
+        String file = "{\"fileReference\":\"SETTLE-2026-11\",\"rows\":[{\"lenderLoanId\":\"LSH-7002\","
+                + "\"settlementReference\":\"SET-7002\",\"settlementDate\":\"" + LocalDate.now() + "\"},"
+                + "{\"lenderLoanId\":\"LSH-0000\",\"settlementReference\":\"SET-0\",\"settlementDate\":\""
+                + LocalDate.now() + "\"}]}";
+        mockMvc.perform(json(post("/credit/lenders/LND-0001/settlements"), "credit", file))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.applied").value(1))
+                .andExpect(jsonPath("$.unknown").value(1));
+        mockMvc.perform(json(post("/credit/lenders/LND-0001/settlements"), "credit", file))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.applied").value(0))
+                .andExpect(jsonPath("$.duplicates").value(1));
+        assertThat(jdbc.queryForObject("select count(*) from crd_refund where loan_ref = ?", Long.class, single[0]))
+                .isEqualTo(1);
+        assertThat(events("LoanSettled", single[0])).isEqualTo(1);
     }
 
     @Test

@@ -42,10 +42,66 @@ public final class UnderwritingRecords {
         boolean referTobacco;
         @Column(name = "refer_treatment", nullable = false)
         boolean referTreatment;
+        /** Disclosure codes whose YES answer refers the case, comma-separated (NS-IL02-001). */
+        @Column(name = "refer_disclosure_codes", length = 300)
+        String referDisclosureCodes;
+        /** Occupation words that refer the case, comma-separated (NS-IL02-001). */
+        @Column(name = "refer_occupations", length = 1000)
+        String referOccupations;
+        /** The largest loading an offer may carry under these rules (NS-IL02-005). */
+        @Column(name = "max_loading_percent", nullable = false, precision = 7, scale = 2)
+        BigDecimal maxLoadingPercent;
+        /** Days an underwriting decision stands before it must be reassessed (NS-IL02-003/006). */
+        @Column(name = "decision_validity_days", nullable = false)
+        int decisionValidityDays;
         @Column(name = "updated_by", length = 100)
         String updatedBy;
         @Column(name = "updated_at")
         LocalDateTime updatedAt;
+    }
+
+    /** A proposed rule set change: applied only when a second person approves it; every proposal is kept. */
+    @Entity(name = "UwRuleChange")
+    @Table(name = "uw_rule_change")
+    public static class RuleChange {
+        @Id
+        @GeneratedValue(strategy = GenerationType.IDENTITY)
+        Long id;
+        @Column(name = "rule_set_id", nullable = false)
+        Long ruleSetId;
+        @Column(name = "version_label", nullable = false, length = 40)
+        String versionLabel;
+        @Column(nullable = false, length = 4000)
+        String proposal;
+        @Column(length = 4000)
+        String previous;
+        @Column(nullable = false, length = 20)
+        String status;
+        @Column(name = "proposed_by", nullable = false, length = 100)
+        String proposedBy;
+        @Column(name = "proposed_at", nullable = false)
+        LocalDateTime proposedAt;
+        @Column(name = "decided_by", length = 100)
+        String decidedBy;
+        @Column(name = "decided_at")
+        LocalDateTime decidedAt;
+        @Column(name = "decision_note", length = 500)
+        String decisionNote;
+    }
+
+    /** One name on a screening list. No real screening provider is connected: the demo lists are simulated. */
+    @Entity(name = "UwWatchEntry")
+    @Table(name = "uw_watchlist")
+    public static class WatchEntry {
+        @Id
+        @GeneratedValue(strategy = GenerationType.IDENTITY)
+        Long id;
+        @Column(name = "full_name", nullable = false, length = 150)
+        String fullName;
+        @Column(name = "list_name", nullable = false, length = 80)
+        String listName;
+        @Column(length = 300)
+        String note;
     }
 
     /** The largest sum assured a role may decide (NS-IL02-004). A role without a row is not limited. */
@@ -59,6 +115,12 @@ public final class UnderwritingRecords {
         Long roleId;
         @Column(name = "max_sum_assured", nullable = false, precision = 19, scale = 2)
         BigDecimal maxSumAssured;
+        /** The largest loading the role may offer; null is not limited. */
+        @Column(name = "max_loading_percent", precision = 7, scale = 2)
+        BigDecimal maxLoadingPercent;
+        /** The decision types the role may make, comma-separated; null is every type. */
+        @Column(name = "decision_types", length = 200)
+        String decisionTypes;
         @Column(name = "updated_by", length = 100)
         String updatedBy;
         @Column(name = "updated_at")
@@ -122,6 +184,20 @@ public final class UnderwritingRecords {
         LocalDateTime offerAcceptedAt;
         @Column(name = "assigned_to", length = 100)
         String assignedTo;
+        @Column(length = 100)
+        String occupation;
+        /** The decision must be reassessed after this date (NS-IL02-003/006). */
+        @Column(name = "decision_valid_until")
+        LocalDate decisionValidUntil;
+        /** NOT_SCREENED, CLEAR, HIT, CLEARED or CONFIRMED (NS-IL01-006, NS-IL02-006). */
+        @Column(name = "screening_status", nullable = false, length = 20)
+        String screeningStatus = "NOT_SCREENED";
+        @Column(name = "screening_detail", length = 500)
+        String screeningDetail;
+        @Column(name = "screening_resolved_by", length = 100)
+        String screeningResolvedBy;
+        @Column(name = "screening_resolved_at")
+        LocalDateTime screeningResolvedAt;
         @Column(name = "created_at", nullable = false)
         LocalDateTime createdAt;
         @Column(name = "updated_at", nullable = false)
@@ -142,6 +218,13 @@ public final class UnderwritingRecords {
         String caseRef;
         @Column(name = "life_name", nullable = false, length = 150)
         String lifeName;
+        /** The application's insured life (policy_life_cover id) the evidence is asked of, when known. */
+        @Column(name = "life_id")
+        Long lifeId;
+        @Column(name = "reminder_count", nullable = false)
+        int reminderCount;
+        @Column(name = "last_reminded_at")
+        LocalDateTime lastRemindedAt;
         @Column(nullable = false, length = 150)
         String requirement;
         @Column(nullable = false)

@@ -63,8 +63,10 @@ public class ServicingService {
     public static final String ADD_LIFE = "ADD_LIFE";
     public static final String REMOVE_LIFE = "REMOVE_LIFE";
     public static final String REPLACE_LIFE = "REPLACE_LIFE";
+    /** NS-IL03-002: the policyholder's contact details (email, mobile) changed as an effective-dated endorsement. */
+    public static final String CONTACT = "CONTACT";
     static final List<String> TYPES = List.of(PAYER, OWNERSHIP, SUM_ASSURED, FREQUENCY, ADD_LIFE, REMOVE_LIFE,
-            REPLACE_LIFE);
+            REPLACE_LIFE, CONTACT);
 
     static final String APPLIED = "APPLIED";
     static final String PENDING_APPROVAL = "PENDING_APPROVAL";
@@ -92,7 +94,6 @@ public class ServicingService {
     /** Causes a reasoned termination may give (IL03 records and workspace). */
     static final List<String> TERMINATION_CAUSES = List.of("DEATH", "CANCELLATION", "EXPIRY", "MATURITY", "OTHER");
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
-    private static final int REVIEW_LEAD_DAYS = 90;
 
     private final EntityManager em;
     private final PlatformSecurityContext security;
@@ -103,10 +104,19 @@ public class ServicingService {
     private final PolicyWorkflow workflow;
     private final RateTableService rates;
     private final ObjectMapper mapper;
+    /** Endorsement premium adjustments are billed on the next instalment (NS-IL04-003). */
+    private final com.nsure.collections.BillingService billing;
+    private final com.nsure.portfolio.LifeConsents consents;
+    private final org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting;
 
     public ServicingService(EntityManager em, PlatformSecurityContext security, Outbox outbox,
             ReferenceNumbers numbers, EvidenceChain audit, WorkflowHistory history, PolicyWorkflow workflow,
-            RateTableService rates, ObjectMapper mapper) {
+            RateTableService rates, ObjectMapper mapper, com.nsure.collections.BillingService billing,
+            com.nsure.portfolio.LifeConsents consents,
+            org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting) {
+        this.underwriting = underwriting;
+        this.billing = billing;
+        this.consents = consents;
         this.em = em;
         this.security = security;
         this.outbox = outbox;
@@ -126,6 +136,9 @@ public class ServicingService {
         InsurancePolicy policy = workflow.policy(policyRef);
         List<BenefitRule> rules = benefitRules(policy.getProduct());
         List<String> offered = rules.stream().map(r -> r.benefitType).sorted().toList();
+        com.nsure.portfolio.InceptionSnapshot inception = em.createQuery("select s from InceptionSnapshot s"
+                + " where s.policyRef = :ref", com.nsure.portfolio.InceptionSnapshot.class)
+                .setParameter("ref", policyRef).getResultStream().findFirst().orElse(null);
         return new ServicingViews.ServicingView(
                 policyView(policy),
                 lives(policy).stream().map(this::lifeView).toList(),
@@ -148,7 +161,80 @@ public class ServicingService {
                         .setParameter("policy", policy).getResultList().stream()
                         .map(b -> new ServicingViews.BeneficiaryEpisode(b.getFullName(), b.getRelationship(),
                                 b.isPrimary(), b.getEffectiveFrom(), b.getRemovedFrom(), b.getRemovedBy()))
-                        .toList());
+                        .toList(),
+                consentViews(policy),
+                inception == null ? null : readTree(inception.getSnapshot()),
+                inception == null ? null : inception.getSha256(),
+                inception == null ? null : inception.getTakenAt());
+    }
+
+    private JsonNode readTree(String json) {
+        try {
+            return mapper.readTree(json);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    // ── cover ending at the selected term (section 06 Term Life) ──────────────────────────────────
+
+    @Transactional
+    public ServicingViews.RunResult endCoverAtTermNow() {
+        AppUser user = user("MANAGE_SERVICING");
+        return endCoverAtTerm(user.getUsername());
+    }
+
+    /**
+     * Every in-force policy whose cover end date (the selected term or the cessation age, whichever is earlier) has
+     * passed is terminated for EXPIRY from the day after; runs daily with {@link ServicingJobs}.
+     */
+    @Transactional
+    public ServicingViews.RunResult endCoverAtTerm(String actor) {
+        LocalDate today = LocalDate.now();
+        List<String> ended = new ArrayList<>();
+        for (InsurancePolicy policy : em.createQuery("select p from InsurancePolicy p where p.coverEndDate is not null"
+                        + " and p.coverEndDate < :today and p.status in :live", InsurancePolicy.class)
+                .setParameter("today", today)
+                .setParameter("live", Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.ACTIVE_NO_COVER,
+                        PolicyWorkflow.REINSTATEMENT_PENDING))
+                .getResultList()) {
+            workflow.terminate(policy.getRef(), "EXPIRY", "Cover ended on " + policy.getCoverEndDate()
+                    + (policy.getTermYears() == null ? "" : ": the " + policy.getTermYears()
+                            + "-year term or the cessation age, whichever came first"),
+                    policy.getCoverEndDate().plusDays(1), actor);
+            ended.add(policy.getRef());
+        }
+        return new ServicingViews.RunResult(ended.size(), ended);
+    }
+
+    // ── relationship-specific consent (NS-IL04-006) ───────────────────────────────────────────────
+
+    /** {status GRANTED|WITHDRAWN, evidence}: the insured life's own decision about sharing their medical evidence. */
+    @Transactional
+    public ServicingViews.ServicingView recordConsent(String policyRef, Long lifeId, JsonNode body) {
+        AppUser user = user("MANAGE_SERVICING");
+        InsurancePolicy policy = workflow.policy(policyRef);
+        PolicyLifeCover life = life(policy, lifeId);
+        String status = required(body, "status", 20).toUpperCase(Locale.ROOT);
+        consents.record(policy, life, status, optional(body, "evidence"), user.getUsername());
+        history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Consent recorded",
+                policy.getStatus(), policy.getStatus(), life.getFullName() + ": medical evidence "
+                        + (com.nsure.portfolio.LifeConsent.GRANTED.equals(status) ? "may" : "may not")
+                        + " be shared with the policyholder", user.getUsername());
+        audit.record(user.getUsername(), "Insured life consent " + status.toLowerCase(Locale.ROOT), "Policy",
+                policy.getRef(), life.getFullName());
+        return view(policyRef);
+    }
+
+    private List<ServicingViews.ConsentView> consentViews(InsurancePolicy policy) {
+        Map<Long, PolicyLifeCover> byId = new LinkedHashMap<>();
+        lives(policy).forEach(l -> byId.put(l.getId(), l));
+        return consents.history(policy.getRef()).stream().map(c -> {
+            PolicyLifeCover l = byId.get(c.getLifeId());
+            return new ServicingViews.ConsentView(c.getId(), c.getLifeId(), l == null ? null : l.getFullName(),
+                    l != null && consents.isAdult(l), c.getScope(), c.getStatus(), c.getEvidence(), c.getRecordedBy(),
+                    c.getRecordedAt());
+        }).toList();
     }
 
     // ── the family roster (IL04 records and workspace) ────────────────────────────────────────────
@@ -174,7 +260,7 @@ public class ServicingService {
 
         ServicingRule rule = servicingRule(policy.getProduct());
         LocalDate today = LocalDate.now();
-        LocalDate horizon = today.plusDays(REVIEW_LEAD_DAYS);
+        LocalDate horizon = today.plusDays(rule.reviewLeadDays);
         List<String> policyWarnings = new ArrayList<>();
         if (policyLimit.subtract(policyUsed).signum() <= 0 && policyUsed.signum() > 0) {
             policyWarnings.add("The policy's aggregate benefit limit is used up.");
@@ -212,7 +298,8 @@ public class ServicingService {
         for (PolicyLifeCover life : all) {
             BigDecimal limit = life.getCoverAmount() != null && life.getCoverAmount().signum() > 0
                     ? life.getCoverAmount() : policy.getAmount();
-            BigDecimal lifeUsed = used.getOrDefault("LIFE-" + life.getId(), BigDecimal.ZERO)
+            // NS-IL04-004: a re-added person's use is counted on their first cover row (one person, one counter).
+            BigDecimal lifeUsed = used.getOrDefault("LIFE-" + life.getPersonId(), BigDecimal.ZERO)
                     .add(life.isMainInsured() ? used.getOrDefault("PRINCIPAL", BigDecimal.ZERO) : BigDecimal.ZERO);
             long claims = em.createQuery("select count(c) from InsuranceClaim c where c.policyRef = :ref and"
                             + (life.isMainInsured() ? " (c.coveredLifeId = :id or c.coveredLifeId is null)"
@@ -395,6 +482,12 @@ public class ServicingService {
         }
         InsurancePolicy policy = workflow.policy(e.policyRef);
         em.lock(policy, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        if (REFERRED_UNDERWRITING.equals(e.status) && body.path("approve").asBoolean(false)) {
+            // NS-IL03-003: a risk increase is approved only within the underwriter's authority (total cover after it).
+            BigDecimal added = e.newSumAssured != null && e.oldSumAssured != null
+                    ? e.newSumAssured.subtract(e.oldSumAssured) : BigDecimal.ZERO;
+            underwriting.getObject().requireAuthority(user, policy.getCustomerRef(), added);
+        }
         e.decidedBy = user.getUsername();
         e.decidedAt = LocalDateTime.now();
         e.decisionNote = note;
@@ -468,6 +561,29 @@ public class ServicingService {
         changes.put("type", type);
         changes.put("effectiveDate", effective.toString());
         switch (type) {
+            case CONTACT -> {
+                CustomerAccount holder = customer(policy.getCustomerRef());
+                String email = optional(body, "email");
+                String phone = optional(body, "phone");
+                if (email == null && phone == null) {
+                    throw new IllegalArgumentException("Give the new email address, mobile number, or both.");
+                }
+                if (email != null && !email.matches("[^@\\s]+@[^@\\s]+\\.[^@\\s]+")) {
+                    throw new IllegalArgumentException(email + " is not an email address.");
+                }
+                if (phone != null && phone.replaceAll("\\D", "").length() < 7) {
+                    throw new IllegalArgumentException("Give a mobile number with at least 7 digits.");
+                }
+                before = "Contact: " + holder.getEmail() + " · " + holder.getPhone();
+                after = "Contact: " + (email == null ? holder.getEmail() : email) + " · "
+                        + (phone == null ? holder.getPhone() : phone);
+                if (email != null) {
+                    changes.put("email", clip(email, 150));
+                }
+                if (phone != null) {
+                    changes.put("phone", clip(phone, 40));
+                }
+            }
             case PAYER -> {
                 String name = required(body, "payerName", 100);
                 String relationship = required(body, "payerRelationship", 60);
@@ -589,6 +705,10 @@ public class ServicingService {
             route = "APPROVAL";
             hold = backdated ? "A backdated change needs a second person's approval."
                     : "A change of ownership needs a second person's approval.";
+        } else if (REMOVE_LIFE.equals(type) && "ALWAYS".equals(rule.removalApproval)) {
+            // NS-IL04-003: the product says every removal of a life is approved by a second person.
+            route = "APPROVAL";
+            hold = "Removing a life from a " + policy.getProduct() + " policy needs a second person's approval.";
         }
 
         BigDecimal premiumChange = newPremium.subtract(oldPremium);
@@ -605,6 +725,15 @@ public class ServicingService {
     private void apply(InsurancePolicy policy, Endorsement e, JsonNode changes, String actor) {
         switch (e.type) {
             case PAYER -> policy.setPayer(changes.path("payerName").asText(), changes.path("payerRelationship").asText());
+            case CONTACT -> {
+                CustomerAccount holder = customer(policy.getCustomerRef());
+                if (changes.hasNonNull("email")) {
+                    holder.setEmail(changes.get("email").asText());
+                }
+                if (changes.hasNonNull("phone")) {
+                    holder.setPhone(changes.get("phone").asText());
+                }
+            }
             case OWNERSHIP -> {
                 CustomerAccount owner = customer(changes.path("newCustomerRef").asText());
                 policy.setCustomerRef(owner.getRef());
@@ -634,6 +763,7 @@ public class ServicingService {
             }
         }
         e.appliedAt = LocalDateTime.now();
+        billAdjustment(policy, e, actor);
         history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Endorsed",
                 policy.getStatus(), policy.getStatus(), e.ref + " · " + e.afterSummary
                         + (e.newPremium.compareTo(e.oldPremium) == 0 ? ""
@@ -654,6 +784,33 @@ public class ServicingService {
         data.put("newSumAssured", e.newSumAssured);
         outbox.publish(Events.POLICY_CHANGED, policy.getRef(), data, actor);
         audit.record(actor, "Endorsement applied", "Policy", policy.getRef(), e.ref + " " + e.type);
+    }
+
+    /**
+     * NS-IL04-003, NS-IL03-003: the previewed pro-rata adjustment for the period already paid is put on the policy's
+     * next instalment (issued now at the new premium if not yet issued) as a signed adjustment: a charge is collected
+     * with the next premium, a credit reduces it (never below nothing; any rest is recorded on the endorsement).
+     */
+    private void billAdjustment(InsurancePolicy policy, Endorsement e, String actor) {
+        if (e.premiumAdjustment == null || e.premiumAdjustment.signum() == 0 || policy.getNextPremiumDue() == null
+                || !PolicyWorkflow.ACTIVE.equals(policy.getStatus())) {
+            return;
+        }
+        PolicyWorkflow.Period period = workflow.nextPeriod(policy);
+        com.nsure.collections.Instalment instalment = billing.instalmentFor(policy, period.start(), period.end(),
+                period.purpose(), actor);
+        BigDecimal amount = e.premiumAdjustment;
+        BigDecimal outstanding = billing.outstandingFor(policy, period.start());
+        if (amount.signum() < 0 && outstanding.add(amount).signum() < 0) {
+            amount = outstanding.negate();
+        }
+        if (amount.signum() == 0) {
+            return;
+        }
+        billing.adjust(instalment.getRef(), amount, clip("Endorsement " + e.ref + " (" + e.type
+                + "): pro-rata premium adjustment for the period already paid", 500), actor);
+        e.decisionNote = clip((e.decisionNote == null ? "" : e.decisionNote + " ") + "Adjustment of "
+                + Money.text(amount) + " billed on " + instalment.getRef() + ".", 500);
     }
 
     // ── insured lives (NS-IL04-001..005) ──────────────────────────────────────────────────────────
@@ -686,16 +843,27 @@ public class ServicingService {
     private void addLife(InsurancePolicy policy, JsonNode changes, PolicyLifeCover replacing, LocalDate effective,
             String actor) {
         RateTableService.PricedLife line = priceNewLife(policy, changes, replacing, effective);
-        // NS-IL04-003, AT-IL04-02: a life that was covered here before keeps its original waiting-period start.
-        LocalDate waitingFrom = lives(policy).stream()
+        // NS-IL04-004, AT-IL04-02: a person covered here before (same name and date of birth) continues their first
+        // cover row: claims and limits already used stay counted, whatever the continuity rule says.
+        List<PolicyLifeCover> earlier = lives(policy).stream()
                 .filter(l -> !l.isActiveLife() && l.getFullName().equalsIgnoreCase(line.fullName())
                         && line.dateOfBirth().equals(l.getDateOfBirth()))
+                .toList();
+        Long person = earlier.stream().map(PolicyLifeCover::getPersonId).min(Long::compareTo).orElse(null);
+        // NS-IL04-003: whether their waiting period continues is the product's continuity rule (KEEP_EARLIEST keeps
+        // the first start; RESTART starts it again on the effective date).
+        ServicingRule rule = servicingRule(policy.getProduct());
+        LocalDate waitingFrom = "RESTART".equals(rule.lifeContinuity) ? effective : earlier.stream()
                 .map(l -> l.getWaitingPeriodStart() != null ? l.getWaitingPeriodStart()
                         : l.getEffectiveFrom() != null ? l.getEffectiveFrom() : policy.getCoverStartDate())
                 .filter(java.util.Objects::nonNull)
                 .min(LocalDate::compareTo).orElse(effective);
         int order = lives(policy).stream().mapToInt(PolicyLifeCover::getDisplayOrder).max().orElse(0) + 1;
         PolicyLifeCover life = new PolicyLifeCover(policy, line, order, effective, waitingFrom);
+        life.setContinuityOf(person);
+        if (changes.hasNonNull("dobEvidence")) {
+            life.setDobEvidence(clip(changes.get("dobEvidence").asText(), 150));
+        }
         em.persist(life);
         em.flush();
         Map<String, Object> data = new LinkedHashMap<>();
@@ -706,6 +874,9 @@ public class ServicingService {
         data.put("effectiveFrom", effective.toString());
         data.put("waitingPeriodStart", waitingFrom.toString());
         data.put("coverAmount", line.coverAmount());
+        if (person != null) {
+            data.put("continuityOf", person);
+        }
         outbox.publish(Events.INSURED_LIFE_ADDED, policy.getRef(), data, actor);
     }
 
@@ -741,6 +912,10 @@ public class ServicingService {
         for (PolicyLifeCover life : lives(policy)) {
             if (!life.isActiveLife() || announced(policyRef, life.getId())) {
                 continue;
+            }
+            // NS-IL04-001: lives captured at application enter cover, and start their waiting periods, with the policy.
+            if (policy.getCoverStartDate() != null) {
+                life.startWithPolicy(policy.getCoverStartDate());
             }
             LocalDate from = life.getEffectiveFrom() != null ? life.getEffectiveFrom() : policy.getCoverStartDate();
             LocalDate waiting = life.getWaitingPeriodStart() != null ? life.getWaitingPeriodStart() : from;
@@ -791,8 +966,34 @@ public class ServicingService {
     @Transactional
     public ServicingViews.RunResult runLifeReviews() {
         AppUser user = user("MANAGE_SERVICING");
-        LocalDate horizon = LocalDate.now().plusDays(REVIEW_LEAD_DAYS);
+        return runLifeReviews(user.getUsername());
+    }
+
+    /**
+     * Raises age reviews and cessation tasks each product's review lead time ahead (NS-IL04-005); runs daily
+     * ({@code nsure.servicing.review-cron}). A dependant whose cover cessation date has passed while the cessation
+     * task is still open is ceased on that date (cover cannot outlive the product's cessation age).
+     */
+    @Transactional
+    public ServicingViews.RunResult runLifeReviews(String actor) {
         List<String> created = new ArrayList<>();
+        LocalDate today = LocalDate.now();
+        for (LifeReview r : em.createQuery("select r from LifeReview r where r.status = 'OPEN'"
+                + " and r.reviewType = 'AGE_CESSATION' and r.dueDate < :today", LifeReview.class)
+                .setParameter("today", today).getResultList()) {
+            PolicyLifeCover life = em.find(PolicyLifeCover.class, r.lifeId);
+            if (life == null || !life.isActiveLife() || life.isMainInsured()) {
+                continue;
+            }
+            InsurancePolicy policy = workflow.policy(r.policyRef);
+            ceaseLife(policy, life, r.dueDate, "Reached the cover cessation age", actor);
+            policy.setPremium(Money.of(policy.getPremium().subtract(life.getMonthlyPremium()).max(BigDecimal.ZERO)));
+            r.status = "CEASED";
+            r.note = clip(r.note + " Ceased automatically on " + r.dueDate + ".", 500);
+            r.closedBy = actor;
+            r.closedAt = LocalDateTime.now();
+            created.add(policy.getRef() + " · " + life.getFullName() + " ceased");
+        }
         for (PolicyLifeCover life : em.createQuery("select l from PolicyLifeCover l where l.policy is not null"
                 + " and l.lifeStatus = 'ACTIVE'", PolicyLifeCover.class).getResultList()) {
             InsurancePolicy policy = life.getPolicy();
@@ -800,14 +1001,15 @@ public class ServicingService {
                 continue;
             }
             ServicingRule rule = servicingRule(policy.getProduct());
+            LocalDate horizon = today.plusDays(rule.reviewLeadDays);
             boolean child = life.getLifeType() != null && life.getLifeType().toLowerCase(Locale.ROOT).contains("child");
             if (child) {
                 raiseReview(policy, life, "CHILD_AGE_LIMIT", life.getDateOfBirth().plusYears(rule.childReviewAge),
                         horizon, "Reaches " + rule.childReviewAge + ": confirm student or dependency status, or cease"
-                                + " cover.", created, user.getUsername());
+                                + " cover.", created, actor);
             }
             raiseReview(policy, life, "AGE_CESSATION", life.getDateOfBirth().plusYears(rule.maxCoverAge), horizon,
-                    "Reaches the cover cessation age of " + rule.maxCoverAge + ".", created, user.getUsername());
+                    "Reaches the cover cessation age of " + rule.maxCoverAge + ".", created, actor);
         }
         return new ServicingViews.RunResult(created.size(), created);
     }
@@ -898,6 +1100,12 @@ public class ServicingService {
     @Transactional
     public ServicingViews.RunResult runBenefits() {
         AppUser user = user("MANAGE_SERVICING");
+        return runBenefits(user.getUsername());
+    }
+
+    /** Raises every benefit that has fallen due by today; also run daily by {@link ServicingJobs} (NS-IL03-005). */
+    @Transactional
+    public ServicingViews.RunResult runBenefits(String actor) {
         LocalDate today = LocalDate.now();
         List<String> created = new ArrayList<>();
         for (InsurancePolicy policy : em.createQuery("select p from InsurancePolicy p where p.status = :s"
@@ -912,7 +1120,7 @@ public class ServicingService {
                 }
                 BenefitEvent b = benefitEvent(policy, due.benefitType(), due.dueDate(), due.amount(), due.basis());
                 created.add(b.ref);
-                publishDue(b, user.getUsername());
+                publishDue(b, actor);
             }
         }
         return new ServicingViews.RunResult(created.size(), created);
@@ -1102,8 +1310,11 @@ public class ServicingService {
                     }
                     out.add(new ServicingViews.ScheduledBenefit(CASHBACK, next, amount, basis));
                 }
-            } else if (Set.of(RETURN_OF_PREMIUM, MATURITY).contains(rule.benefitType) && rule.termYears != null) {
-                LocalDate due = start.plusYears(rule.termYears);
+            } else if (Set.of(RETURN_OF_PREMIUM, MATURITY).contains(rule.benefitType)
+                    && (policy.getTermYears() != null || rule.termYears != null)) {
+                // Section 06 Term Life: a policy with a selected term pays at the end of its own term.
+                int term = policy.getTermYears() != null ? policy.getTermYears() : rule.termYears;
+                LocalDate due = start.plusYears(term);
                 BigDecimal percent = rule.percent == null ? HUNDRED : rule.percent;
                 if (dueOnly) {
                     if (!due.isAfter(asOf)) {
@@ -1111,14 +1322,14 @@ public class ServicingService {
                         out.add(new ServicingViews.ScheduledBenefit(rule.benefitType, due,
                                 paid.multiply(percent).divide(HUNDRED, 2, RoundingMode.HALF_UP),
                                 percent.stripTrailingZeros().toPlainString() + "% of premiums paid " + Money.text(paid)
-                                        + " on survival to the end of the " + rule.termYears + "-year term."));
+                                        + " on survival to the end of the " + term + "-year term."));
                     }
                 } else if (due.isAfter(today)) {
-                    BigDecimal projected = policy.getPremium().multiply(BigDecimal.valueOf(12L * rule.termYears))
+                    BigDecimal projected = policy.getPremium().multiply(BigDecimal.valueOf(12L * term))
                             .multiply(percent).divide(HUNDRED, 2, RoundingMode.HALF_UP);
                     out.add(new ServicingViews.ScheduledBenefit(rule.benefitType, due, projected,
                             percent.stripTrailingZeros().toPlainString() + "% of the premiums paid by then, on survival"
-                                    + " to the end of the " + rule.termYears + "-year term (shown if every premium is"
+                                    + " to the end of the " + term + "-year term (shown if every premium is"
                                     + " paid at today's premium)."));
                 }
             }
@@ -1278,6 +1489,38 @@ public class ServicingService {
             throw new IllegalArgumentException("Backdating is 0–3650 days and ages must satisfy 1 ≤ child review age ≤"
                     + " cover cessation age ≤ 120.");
         }
+        // NS-IL04-003/005, NS-IL03-004: continuity, removal approval, review lead time, lapse and cooling-off.
+        String continuity = optional(body, "lifeContinuity");
+        if (continuity != null) {
+            continuity = continuity.toUpperCase(Locale.ROOT);
+            if (!Set.of("KEEP_EARLIEST", "RESTART").contains(continuity)) {
+                throw new IllegalArgumentException("lifeContinuity must be KEEP_EARLIEST or RESTART.");
+            }
+            r.lifeContinuity = continuity;
+        }
+        String removal = optional(body, "removalApproval");
+        if (removal != null) {
+            removal = removal.toUpperCase(Locale.ROOT);
+            if (!Set.of("BACKDATED", "ALWAYS").contains(removal)) {
+                throw new IllegalArgumentException("removalApproval must be BACKDATED or ALWAYS.");
+            }
+            r.removalApproval = removal;
+        }
+        if (body.has("termOptions")) {
+            String terms = optional(body, "termOptions");
+            if (terms != null && !terms.matches("\\s*\\d{1,2}(\\s*,\\s*\\d{1,2})*\\s*")) {
+                throw new IllegalArgumentException("termOptions is a list of terms in years, e.g. 10,12,15.");
+            }
+            r.termOptions = terms == null ? null : terms.replace(" ", "");
+        }
+        r.reviewLeadDays = body.path("reviewLeadDays").asInt(r.reviewLeadDays);
+        r.noCoverMonths = body.path("noCoverMonths").asInt(r.noCoverMonths);
+        r.coolingOffDays = body.path("coolingOffDays").asInt(r.coolingOffDays);
+        if (r.reviewLeadDays < 0 || r.reviewLeadDays > 365 || r.noCoverMonths < 0 || r.noCoverMonths > 24
+                || r.coolingOffDays < 0 || r.coolingOffDays > 90) {
+            throw new IllegalArgumentException("Review lead time is 0–365 days, the period without cover 0–24 months and"
+                    + " cooling-off 0–90 days.");
+        }
         r.updatedBy = user.getUsername();
         r.updatedAt = LocalDateTime.now();
         audit.record(user.getUsername(), "Servicing rule saved", "Product", r.product, null);
@@ -1380,6 +1623,9 @@ public class ServicingService {
         changes.put("fullName", body.path("fullName").asText().trim());
         changes.put("relationship", body.path("relationship").asText().trim());
         changes.put("dateOfBirth", body.path("dateOfBirth").asText().trim());
+        if (body.hasNonNull("dobEvidence") && !body.get("dobEvidence").asText().isBlank()) {
+            changes.put("dobEvidence", body.get("dobEvidence").asText().trim());
+        }
     }
 
     private CoverTier tier(String product, String tierName) {
@@ -1460,7 +1706,8 @@ public class ServicingService {
                 modal(p.getPremium(), p.getPremiumFrequency()), status, cover, payment, p.getCoverStartDate(),
                 billed ? p.getNextPremiumDue() : null, billed ? p.getGracePeriodEnd() : null,
                 p.getTerminationReason(), p.getTerminatedOn(),
-                p.getPayerName(), p.getPayerRelationship(), p.getUwTerms(), paid[0].longValue(), paid[1]);
+                p.getPayerName(), p.getPayerRelationship(), p.getUwTerms(), paid[0].longValue(), paid[1],
+                p.getTermYears(), p.getCoverEndDate());
     }
 
     private ServicingViews.LifeView lifeView(PolicyLifeCover l) {
@@ -1468,7 +1715,7 @@ public class ServicingService {
                 l.getDateOfBirth(), l.getAgeAtEntry(),
                 l.getDateOfBirth() == null ? null : Period.between(l.getDateOfBirth(), LocalDate.now()).getYears(),
                 l.getCoverAmount(), l.getMonthlyPremium(), l.getLifeStatus(), l.getEffectiveFrom(), l.getEffectiveTo(),
-                l.getWaitingPeriodStart(), l.getCeaseReason());
+                l.getWaitingPeriodStart(), l.getCeaseReason(), l.getContinuityOf(), l.getDobEvidence());
     }
 
     private ServicingViews.EndorsementView endorsementView(Endorsement e, InsurancePolicy policy) {
@@ -1497,7 +1744,8 @@ public class ServicingService {
 
     private ServicingViews.ServicingRuleView servicingRuleView(ServicingRule r) {
         return new ServicingViews.ServicingRuleView(r.id, r.product, r.reinstatementNeedsApproval, r.maxBackdateDays,
-                r.childReviewAge, r.maxCoverAge, r.updatedBy, r.updatedAt);
+                r.childReviewAge, r.maxCoverAge, r.updatedBy, r.updatedAt, r.lifeContinuity, r.removalApproval,
+                r.reviewLeadDays, r.noCoverMonths, r.coolingOffDays, r.termOptions);
     }
 
     private AppUser user(String permission) {

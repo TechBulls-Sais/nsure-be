@@ -1,0 +1,43 @@
+# Section 06 individual product packs (Nsure Life section 06 Term Life and Care Cash). Term Life policies carry the
+# selected term and end at that term or the product's cover cessation age (70), whichever is earlier; the saleable
+# terms are a product rule. Care Cash gets the daily benefit tiers the pack lists (250, 1,500 and 3,000 beside the
+# seeded 500, 1,000 and 2,000). Premiums and terms here are DEMO DEFAULTS pending the approved tariff (D02/D05):
+# plans are maintained in Policy servicing > Rules > Plans, terms in the product's servicing rule.
+databaseChangeLog:
+  - changeSet:
+      id: 125-product-packs-schema
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: prod_servicing_rule
+            columns:
+              # Comma-separated saleable policy terms in years; null when the product has no selected term.
+              - column: {name: term_options, type: varchar(60)}
+        - addColumn:
+            tableName: ins_application
+            columns:
+              - column: {name: term_years, type: int}
+        - addColumn:
+            tableName: ins_policy
+            columns:
+              - column: {name: term_years, type: int}
+              # Cover ends here: the selected term or the cessation age, whichever is earlier (set when cover starts).
+              - column: {name: cover_end_date, type: date}
+  - changeSet:
+      id: 125-product-packs-seed
+      author: nsure
+      comment: Demo defaults - Term Life terms 10/12/15 years; Care Cash tiers 250/1,500/3,000 with demo premiums.
+      changes:
+        - sql:
+            sql: |
+              UPDATE prod_servicing_rule SET term_options = '10,12,15' WHERE product = 'Term Life' AND term_options IS NULL;
+
+              INSERT INTO ins_cover_tier (product_id, name, cover_amount, premium, premium_frequency, popular, benefits, display_order, active)
+              SELECT p.id, t.name, t.cover_amount, t.premium, 'Monthly', FALSE, t.benefits, t.display_order, TRUE
+              FROM ins_product p
+              JOIN (
+                SELECT 'Care Cash' AS product, 'Starter' AS name, 250 AS cover_amount, 80 AS premium, 'Entry daily cash benefit during a hospital stay (demo premium pending the approved tariff)' AS benefits, 0 AS display_order UNION ALL
+                SELECT 'Care Cash', 'Silver Plus', 1500, 370, 'Higher daily cash benefit with accidental death cover (demo premium pending the approved tariff)', 2 UNION ALL
+                SELECT 'Care Cash', 'Platinum', 3000, 700, 'Highest daily cash benefit with accidental death cover (demo premium pending the approved tariff)', 4
+              ) t ON t.product = p.name
+              WHERE NOT EXISTS (SELECT 1 FROM ins_cover_tier x WHERE x.product_id = p.id AND x.name = t.name);

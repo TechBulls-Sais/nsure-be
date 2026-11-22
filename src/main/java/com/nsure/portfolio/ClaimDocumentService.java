@@ -52,10 +52,13 @@ public class ClaimDocumentService {
     private final DocumentFiles files;
     private final DocumentCustody custody;
     private final DocumentQuarantine quarantine;
+    /** NS-IL04-006: an adult insured life's medical evidence is shared with the policyholder only with consent. */
+    private final LifeConsents consents;
 
     public ClaimDocumentService(EntityManager em, ClaimWorkflow claims, WorkflowHistory history,
             PlatformSecurityContext security, PortfolioService portfolio, DocumentFiles files,
-            DocumentCustody custody, DocumentQuarantine quarantine) {
+            DocumentCustody custody, DocumentQuarantine quarantine, LifeConsents consents) {
+        this.consents = consents;
         this.custody = custody;
         this.quarantine = quarantine;
         this.em = em;
@@ -217,7 +220,16 @@ public class ClaimDocumentService {
     @Transactional
     public StoredFile shopDownload(String ref, Long id) {
         CustomerAccount account = portfolio.customerForLogin();
-        return open(ownClaim(account, ref), id, account.getLoginUsername(), DocumentCustody.PORTAL);
+        InsuranceClaim claim = ownClaim(account, ref);
+        ClaimDocument document = em.find(ClaimDocument.class, id);
+        if (document != null && claim.getId().equals(document.getClaimId())) {
+            String withheld = consents.withheldFromPolicyholder(claim, document.getDocumentType(),
+                    document.getUploadedBy(), account);
+            if (withheld != null) {
+                throw new com.nsure.security.exception.NoAuthorizationException(withheld);
+            }
+        }
+        return open(claim, id, account.getLoginUsername(), DocumentCustody.PORTAL);
     }
 
     /**

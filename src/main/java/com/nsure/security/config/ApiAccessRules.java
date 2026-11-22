@@ -74,6 +74,9 @@ public final class ApiAccessRules {
             rule(GET, "/portfolio/shop", customer()),
             rule(POST, "/portfolio/shop", customer()),
             rule(POST, "/portfolio/shop/quote", customer()),
+            rule(GET, "/portfolio/shop/questions", customer()),
+            rule(GET, "/portfolio/shop/terms", customer()),
+            rule(POST, "/portfolio/shop/applications/*/offer", customer()),
             rule(GET, "/portfolio/shop/identity-documents", customer()),
             rule(POST, "/portfolio/shop/identity-documents", customer()),
             rule(POST, "/portfolio/shop/claims", customer()),
@@ -105,6 +108,9 @@ public final class ApiAccessRules {
 
             // ── applications ───────────────────────────────────────────────────────────────────────────
             rule(GET, "/portfolio/applications", anyOf("READ_APPLICATION")),
+            rule(GET, "/portfolio/applications/evidence-queue", anyOf("READ_APPLICATION")),
+            rule(GET, "/portfolio/application-relationships", anyOf("READ_APPLICATION", "CREATE_APPLICATION")),
+            rule(GET, "/portfolio/application-terms", anyOf("READ_APPLICATION", "CREATE_APPLICATION")),
             rule(POST, "/portfolio/applications", anyOf("CREATE_APPLICATION")),
             rule(PUT, "/portfolio/applications/*", anyOf("UPDATE_APPLICATION")),
             rule(GET, "/portfolio/applications/*/checklist", anyOf("READ_APPLICATION")),
@@ -183,6 +189,8 @@ public final class ApiAccessRules {
             // The catalogue is already public on the landing page; staff forms need it to pick a product.
             rule(GET, "/portfolio/products", staff()),
             rule(GET, "/portfolio/products/*/versions", anyOf("READ_PRODUCT")),
+            rule(GET, "/portfolio/products/*/tiers", anyOf("READ_PRODUCT")),
+            rule(PUT, "/portfolio/products/*/tiers/*", anyOf("UPDATE_TIER")),
             rule(POST, "/portfolio/products/*/versions", anyOf("UPDATE_PRODUCT")),
             rule(POST, "/portfolio/products/*/versions/*/approve", anyOf("ACTIVATE_PRODUCT")),
             rule(POST, "/portfolio/products/*/versions/*/reject", anyOf("ACTIVATE_PRODUCT")),
@@ -384,7 +392,10 @@ public final class ApiAccessRules {
             // ── individual underwriting IL02 (Underwriter) ─────────────────────────────────────────────
             rule(GET, "/underwriting/**", anyOf("READ_UNDERWRITING")),
             rule(POST, "/underwriting/cases/*/offer", anyOf("UNDERWRITE_APPLICATION", "UPDATE_APPLICATION")),
+            rule(POST, "/underwriting/cases/*/screening", anyOf("CLEAR_SCREENING")),
             rule(POST, "/underwriting/cases/**", anyOf("UNDERWRITE_APPLICATION")),
+            rule(POST, "/underwriting/review-due", anyOf("UNDERWRITE_APPLICATION")),
+            rule(POST, "/underwriting/rule-changes/*/decision", anyOf("MANAGE_UNDERWRITING")),
             rule(PUT, "/underwriting/rules/*", anyOf("MANAGE_UNDERWRITING")),
             rule(PUT, "/underwriting/authorities/*", anyOf("MANAGE_UNDERWRITING")),
 
@@ -400,7 +411,9 @@ public final class ApiAccessRules {
             rule(POST, "/servicing/benefit-events/run", anyOf("MANAGE_SERVICING")),
             rule(POST, "/servicing/benefit-events/*/decision", anyOf("APPROVE_BENEFIT")),
             rule(POST, "/servicing/benefit-events/*/payment", anyOf("APPROVE_BENEFIT")),
+            rule(POST, "/servicing/policies/*/lives/*/consent", anyOf("MANAGE_SERVICING")),
             rule(POST, "/servicing/life-reviews/run", anyOf("MANAGE_SERVICING")),
+            rule(POST, "/servicing/term-ends/run", anyOf("MANAGE_SERVICING")),
             rule(POST, "/servicing/life-reviews/*/close", anyOf("MANAGE_SERVICING")),
             rule(PUT, "/servicing/benefit-rules", anyOf("MANAGE_BENEFIT_RULE")),
             rule(PUT, "/servicing/rules/*", anyOf("MANAGE_BENEFIT_RULE")),

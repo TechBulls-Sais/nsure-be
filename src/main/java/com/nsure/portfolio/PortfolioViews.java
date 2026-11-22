@@ -53,7 +53,11 @@ public final class PortfolioViews {
             // Claims on the customer's policies, newest first.
             List<ClaimView> claims,
             // When each of those policies, requests and claims last changed, by reference (NS-UX-001).
-            java.util.Map<String, java.time.LocalDateTime> lastUpdated
+            java.util.Map<String, java.time.LocalDateTime> lastUpdated,
+            // Applications being underwritten, offered or declined: not cover (NS-IL01-005).
+            List<CoverView> applications,
+            // Underwriting offers waiting for the customer's answer, by application reference (terms only).
+            java.util.Map<String, java.util.Map<String, Object>> offers
     ) {
     }
 
@@ -125,7 +129,27 @@ public final class PortfolioViews {
             // The payer as captured, so a draft can be reopened in the application form (NS-UX-001).
             String payerName, String payerRelationship,
             // The application's row version, for If-Match on the next change (NS-TXN-001).
-            long version) {
+            long version,
+            String occupation,
+            String proposerName,
+            String proposerRelationship,
+            // The proposer and payer as party records, when linked (NS-IL01-002).
+            String proposerRef,
+            String payerRef,
+            // Section 06: the selected policy term and the terms the product sells (empty when none).
+            Integer termYears,
+            List<Integer> termOptions,
+            // Beneficiaries nominated on the application, added to the policy at issue.
+            List<BeneficiaryView> beneficiaries) {
+    }
+
+    /**
+     * One outstanding evidence item on an open application (IL01 missing-evidence queue): from the application's own
+     * checklist or from its underwriting case. Restricted clinical items are named only as such to non-underwriters.
+     */
+    public record EvidenceQueueItem(String applicationRef, String customerName, String product, String status,
+            String source, String item, String life, java.time.LocalDate dueDate, boolean overdue, String caseRef,
+            int reminders, java.time.LocalDateTime submittedAt) {
     }
 
     /** A stored quote priced again under its own rate version: whether it reproduces the booked amount. */
@@ -378,6 +402,11 @@ public final class PortfolioViews {
             List<TierView> tiers,
             String productType
     ) {
+    }
+
+    /** One plan of a product with its maintenance fields (section 06 product packs). */
+    public record TierRecordView(Long id, String product, String name, int cover, int premium, String frequency,
+            boolean popular, String benefits, int displayOrder, boolean active) {
     }
 
     public record TierView(

@@ -317,6 +317,31 @@ ends credit cover whose loan term has run out. Product configurations go Draft â
 activates); ProductVersionApproved, ProductActivated and ProductWithdrawn are published for product terms, product
 configurations and configuration releases.
 
+### Individual Life demo defaults (round 2)
+
+Values below are demo defaults awaiting the insurer's decisions (D01â€“D07); each is configuration, not code.
+
+- **New business** (`nsure.new-business.*`): every policy is issued from an application underwriting cleared
+  (`direct-issue-enabled: false`; lender loans open their credit policy under the credit rule instead), and a portal
+  purchase is an application with the product's disclosures (`portal-disclosures-required: true`), assessed by the
+  rules; a referred one waits for an underwriter and the customer answers any offer in the portal. Quotes name the
+  approved product terms and benefits; flat plans keep the rule set's entry ages; `nb_distribution_scope` limits
+  channels (Individual Credit: lenders only). Applications capture occupation, proposer/payer as party references,
+  eligible relationships (`extra-payer-relationships`), appointed intermediaries, beneficiaries and the policy term.
+- **Underwriting**: authority by aggregate exposure, loading and decision type (demo Junior Underwriter
+  `underwriter2`, BWP 250,000, no decline); rule changes wait for a second approver; decisions stand 90 days and the
+  daily review (`nsure.underwriting.review-cron`) reopens expired decisions and ended postponements and reminds due
+  evidence; a simulated sanctions/PEP list (`uw_watchlist`, fictional names) blocks acceptance and issue until
+  compliance (`CLEAR_SCREENING`) clears or confirms the match.
+- **Servicing**: product rules hold re-added life continuity, removal approval, review lead time, the period without
+  cover before lapse, cooling-off and the terms sold (Term Life 10/12/15, cover ends at term or 70); a re-added
+  person continues their first row's claim limits; claims run a life's waiting period from its own start; adjustments
+  are billed on the next instalment; applied endorsements reissue the schedule; adult dependants record their own
+  consent before the policyholder may open their medical claim documents (`nsure.privacy.adult-age`, 18).
+- **Credit life**: benefit waiting periods, TD/CI loadings and amounts, valuation date and surplus payee are rule
+  values; a claim's payee is verified by a second person before payment (`CreditClaimPaid`); a stale balance blocks
+  settlement and raises an exception; lender settlement files close each loan once.
+
 ## Uploads, quarantine and the document register (SH09A)
 
 Every uploaded file (claim evidence, from staff or the customer portal) is held in quarantine (`doc_quarantine`). It

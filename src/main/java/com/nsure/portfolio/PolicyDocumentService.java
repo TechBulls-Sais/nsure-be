@@ -235,6 +235,34 @@ public class PolicyDocumentService {
         issue(policy, generatedBy, null);
     }
 
+    /**
+     * IL03 (NS-IL03-003): an applied endorsement reissues the policy schedule from the policy as it now stands; the
+     * schedule it replaces is kept as SUPERSEDED with the endorsement as the reason. A redelivered event finds that
+     * replacement already made and does nothing.
+     */
+    @Transactional
+    public void reissueForEndorsement(String ref, String endorsementRef) {
+        InsurancePolicy policy = policies.policy(ref);
+        if (policy.getCoverStartDate() == null) {
+            return;
+        }
+        em.lock(policy, LockModeType.PESSIMISTIC_WRITE);
+        String why = "Endorsement " + endorsementRef + " applied";
+        List<PolicyDocument> schedules = em.createQuery("select d from PolicyDocument d where d.policyId = :policy"
+                        + " and d.documentType = :type order by d.id", PolicyDocument.class)
+                .setParameter("policy", policy.getId()).setParameter("type", SCHEDULE_TYPE).getResultList();
+        if (schedules.stream().anyMatch(d -> why.equals(d.getSupersededReason()))) {
+            return;
+        }
+        PolicyDocument current = schedules.stream().filter(PolicyDocument::isCurrent).reduce((a, b) -> b).orElse(null);
+        if (current == null) {
+            issue(policy, WorkflowHistory.SYSTEM, null);
+            return;
+        }
+        PolicyDocument replacement = issue(policy, WorkflowHistory.SYSTEM, "replaces " + current.getFileName() + ": " + why);
+        current.supersede(replacement.getId(), why);
+    }
+
     /** Ids of the policies holding a schedule made in an older layout, for {@link DocumentLayoutUpgrade}. */
     @Transactional(readOnly = true)
     public List<Long> policiesWithOldSchedules() {

@@ -77,6 +77,14 @@ public class PolicyLifeCover {
     @Column(name = "cease_reason", length = 300)
     private String ceaseReason;
 
+    /** The person's first cover row on the policy when re-added: limits and claims continue from it (NS-IL04-004). */
+    @Column(name = "continuity_of")
+    private Long continuityOf;
+
+    /** How the date of birth was evidenced, when recorded (NS-IL04-001). */
+    @Column(name = "dob_evidence", length = 150)
+    private String dobEvidence;
+
     protected PolicyLifeCover() {
     }
 
@@ -90,6 +98,42 @@ public class PolicyLifeCover {
 
     public boolean isActiveLife() {
         return "ACTIVE".equals(lifeStatus);
+    }
+
+    public Long getContinuityOf() {
+        return continuityOf;
+    }
+
+    public void setContinuityOf(Long continuityOf) {
+        this.continuityOf = continuityOf;
+    }
+
+    /** The person this row covers, for limits and consumption: the first row of a re-added person, else this one. */
+    public Long getPersonId() {
+        return continuityOf != null ? continuityOf : id;
+    }
+
+    public String getDobEvidence() {
+        return dobEvidence;
+    }
+
+    public void setDobEvidence(String dobEvidence) {
+        this.dobEvidence = dobEvidence;
+    }
+
+    /** Whether this life was covered on {@code day}: started by then (when dated) and not ended before it. */
+    public boolean coveredOn(LocalDate day) {
+        return (effectiveFrom == null || !day.isBefore(effectiveFrom)) && (effectiveTo == null || day.isBefore(effectiveTo));
+    }
+
+    /** Dates a life captured at issue from the policy's cover start, once cover starts (NS-IL04-001). */
+    public void startWithPolicy(LocalDate coverStart) {
+        if (effectiveFrom == null) {
+            effectiveFrom = coverStart;
+        }
+        if (waitingPeriodStart == null) {
+            waitingPeriodStart = coverStart;
+        }
     }
 
     public String getLifeStatus() {

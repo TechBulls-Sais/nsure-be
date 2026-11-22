@@ -201,6 +201,7 @@ public class PolicyWorkflow {
             issued.put("quoteRef", policy.getQuoteRef());
             issued.put("quoteVersion", policy.getQuoteVersion());
             outbox.publish(Events.POLICY_ISSUED, ref, issued, actor);
+            freezeInception(policy);
         }
         Map<String, Object> premium = new LinkedHashMap<>();
         premium.put("policyRef", ref);
@@ -284,8 +285,9 @@ public class PolicyWorkflow {
         if (!Set.of(PENDING_PAYMENT, ACTIVE, ACTIVE_NO_COVER).contains(previous)) {
             throw new IllegalArgumentException("Policy " + ref + " is " + previous + " and can no longer be cancelled.");
         }
+        int coolingOffDays = productRule(policy.getProduct(), "coolingOffDays", COOLING_OFF_DAYS);
         boolean coolingOff = !PENDING_PAYMENT.equals(previous) && policy.getCoverStartDate() != null
-                && !LocalDate.now().isAfter(policy.getCoverStartDate().plusDays(COOLING_OFF_DAYS));
+                && !LocalDate.now().isAfter(policy.getCoverStartDate().plusDays(coolingOffDays));
         policy.setStatus(CANCELLED);
         policy.terminated("CANCELLATION", LocalDate.now().plusDays(1));
         policy.setPaymentDueBy(null);
@@ -293,7 +295,7 @@ public class PolicyWorkflow {
         // Cover runs to the end of the day it is cancelled: the cancellation applies from the next day.
         history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Cancelled", previous,
                 CANCELLED, PENDING_PAYMENT.equals(previous) ? note
-                        : (coolingOff ? "Cooling-off cancellation within " + COOLING_OFF_DAYS
+                        : (coolingOff ? "Cooling-off cancellation within " + coolingOffDays
                                 + " days of the policy start: premiums refundable unless an insured event occurred · "
                                 : "Cancelled on the policyholder's written request · ") + note, actor,
                 LocalDate.now().plusDays(1));
@@ -341,7 +343,7 @@ public class PolicyWorkflow {
             history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Cover Ended", ACTIVE,
                     ACTIVE_NO_COVER, "Grace period ended " + policy.getGracePeriodEnd() + " with the premium due "
                             + policy.getNextPremiumDue() + " unpaid. The policy stays in force without cover for "
-                            + NO_COVER_MONTHS + " months; paying resumes cover with no new waiting period.",
+                            + productRule(policy.getProduct(), "noCoverMonths", NO_COVER_MONTHS) + " months; paying resumes cover with no new waiting period.",
                     WorkflowHistory.SYSTEM, policy.getGracePeriodEnd().plusDays(1));
             Map<String, Object> lapsed = new LinkedHashMap<>();
             lapsed.put("policyRef", policy.getRef());
@@ -357,17 +359,19 @@ public class PolicyWorkflow {
                 .getResultList();
         for (InsurancePolicy policy : noCover) {
             LocalDate coverEnd = policy.getNextPremiumDue() != null ? policy.getNextPremiumDue() : policy.getGracePeriodEnd();
-            if (coverEnd == null || !coverEnd.plusMonths(NO_COVER_MONTHS).isBefore(today)
+            // NS-IL03-004: how long a policy stays without cover before it lapses is the product's rule.
+            int noCoverMonths = productRule(policy.getProduct(), "noCoverMonths", NO_COVER_MONTHS);
+            if (coverEnd == null || !coverEnd.plusMonths(noCoverMonths).isBefore(today)
                     || !billing.unresolvedPayments(policy.getRef()).isEmpty()) {
                 continue;
             }
             policy.setStatus(LAPSED);
             policy.setLapseDate(today);
             policy.terminated("LAPSE", today);
-            publishTerminated(policy, "LAPSE", "No premium within " + NO_COVER_MONTHS + " months of cover ending",
+            publishTerminated(policy, "LAPSE", "No premium within " + noCoverMonths + " months of cover ending",
                     WorkflowHistory.SYSTEM);
             history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Lapsed", ACTIVE_NO_COVER,
-                    LAPSED, "No premium within " + NO_COVER_MONTHS + " months of cover ending on " + coverEnd
+                    LAPSED, "No premium within " + noCoverMonths + " months of cover ending on " + coverEnd
                             + ". Lapse is final: re-enrolling starts a new policy with new waiting periods.",
                     WorkflowHistory.SYSTEM);
             moved.add(policy.getRef());
@@ -424,10 +428,85 @@ public class PolicyWorkflow {
     // ── reinstatement and termination (NS-IL03-004, IL03 events) ──────────────────────────────────
 
     /** Whether the product's servicing rule holds a late premium's reinstatement for approval. */
+    /**
+     * NS-IL03-001: the contract's issue terms frozen once, in the issuing transaction: product terms and wording, rate
+     * and quote versions, accepted underwriting terms, cover, premium, term and the insured lives (no medical detail).
+     */
+    private void freezeInception(InsurancePolicy policy) {
+        if (!em.createQuery("select s.policyRef from InceptionSnapshot s where s.policyRef = :ref", String.class)
+                .setParameter("ref", policy.getRef()).getResultList().isEmpty()) {
+            return;
+        }
+        ProductVersion version = terms(policy);
+        Map<String, Object> snap = new LinkedHashMap<>();
+        snap.put("policyRef", policy.getRef());
+        snap.put("customerRef", policy.getCustomerRef());
+        snap.put("product", policy.getProduct());
+        snap.put("tier", policy.getTier());
+        snap.put("productVersion", version.getLabel());
+        snap.put("productVersionId", version.getId());
+        snap.put("wordingRef", version.getWordingRef());
+        snap.put("waitingPeriodDays", version.getWaitingPeriodDays());
+        snap.put("gracePeriodDays", version.getGracePeriodDays());
+        snap.put("rateTableVersion", policy.getRateTableVersion());
+        snap.put("quoteRef", policy.getQuoteRef());
+        snap.put("quoteVersion", policy.getQuoteVersion());
+        snap.put("applicationRef", policy.getApplicationRef());
+        snap.put("sumAssured", policy.getAmount() == null ? null : policy.getAmount().toPlainString());
+        snap.put("premium", policy.getPremium() == null ? null : policy.getPremium().toPlainString());
+        snap.put("premiumFrequency", policy.getPremiumFrequency());
+        snap.put("underwritingTerms", policy.getUwTerms());
+        snap.put("termYears", policy.getTermYears());
+        snap.put("coverStartDate", String.valueOf(policy.getCoverStartDate()));
+        snap.put("coverEndDate", policy.getCoverEndDate() == null ? null : policy.getCoverEndDate().toString());
+        List<Map<String, Object>> lives = new java.util.ArrayList<>();
+        for (PolicyLifeCover life : em.createQuery("select l from PolicyLifeCover l where l.policy = :p order by l.displayOrder",
+                PolicyLifeCover.class).setParameter("p", policy).getResultList()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("lifeId", life.getId());
+            row.put("relationship", life.getLifeType());
+            row.put("fullName", life.getFullName());
+            row.put("ageAtEntry", life.getAgeAtEntry());
+            row.put("coverAmount", life.getCoverAmount() == null ? null : life.getCoverAmount().toPlainString());
+            row.put("monthlyPremium", life.getMonthlyPremium() == null ? null : life.getMonthlyPremium().toPlainString());
+            lives.add(row);
+        }
+        snap.put("lives", lives);
+        String json;
+        try {
+            json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(snap);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalStateException(ex);
+        }
+        if (json.length() > 4000) {
+            snap.put("lives", lives.size() + " lives (listed on the policy)");
+            try {
+                json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(snap);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+                throw new IllegalStateException(ex);
+            }
+        }
+        String hash;
+        try {
+            hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(json.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
+        }
+        em.persist(new InceptionSnapshot(policy.getRef(), json, hash));
+    }
+
+    /** One of the product's servicing rule numbers (prod_servicing_rule), or the convention when it has no rule. */
+    private int productRule(String product, String field, int fallback) {
+        return em.createQuery("select r." + field + " from ServicingRule r where r.product = :product", Integer.class)
+                .setParameter("product", product).getResultStream().findFirst().orElse(fallback);
+    }
+
     private boolean reinstatementNeedsApproval(String product) {
         return em.createQuery("select r.reinstatementNeedsApproval from ServicingRule r where r.product = :product",
                         Boolean.class)
-                .setParameter("product", product).getResultStream().findFirst().orElse(false);
+                // NS-IL03-004: a late payment restores cover automatically only when the product's rule says so.
+                .setParameter("product", product).getResultStream().findFirst().orElse(true);
     }
 
     /** Approves a held reinstatement: cover resumes today with no new waiting period. */
@@ -503,7 +582,8 @@ public class PolicyWorkflow {
     @Transactional
     public PolicyBeneficiary addBeneficiary(String ref, BeneficiaryInput input, String actor) {
         InsurancePolicy policy = policy(ref);
-        if (Set.of(CANCELLED, EXPIRED, LAPSED).contains(policy.getStatus())) {
+        // NS-IL03-002: an ended contract (cancelled, expired, lapsed, terminated or claimed) keeps its beneficiaries.
+        if (Set.of(CANCELLED, EXPIRED, LAPSED, TERMINATED, CLAIMED).contains(policy.getStatus())) {
             throw new IllegalArgumentException("Policy " + ref + " is " + policy.getStatus()
                     + "; its beneficiaries can no longer be changed.");
         }
@@ -545,6 +625,10 @@ public class PolicyWorkflow {
     @Transactional
     public void removeBeneficiary(String ref, Long beneficiaryId, String actor) {
         InsurancePolicy policy = policy(ref);
+        if (Set.of(CANCELLED, EXPIRED, LAPSED, TERMINATED, CLAIMED).contains(policy.getStatus())) {
+            throw new IllegalArgumentException("Policy " + ref + " is " + policy.getStatus()
+                    + "; its beneficiaries can no longer be changed.");
+        }
         PolicyBeneficiary row = beneficiaries(policy).stream()
                 .filter(item -> item.getId().equals(beneficiaryId))
                 .findFirst()
@@ -658,6 +742,18 @@ public class PolicyWorkflow {
         policy.setNextPremiumDue(next);
         policy.setGracePeriodEnd(next.plusDays(terms(policy).getGracePeriodDays()));
         policy.setLapseDate(null);
+        // Section 06 Term Life: cover ends at the selected term or the cessation age, whichever is earlier.
+        if (policy.getTermYears() != null && policy.getCoverEndDate() == null) {
+            LocalDate end = start.plusYears(policy.getTermYears());
+            List<LocalDate> births = em.createQuery("select c.dateOfBirth from CustomerAccount c where c.ref = :ref",
+                    LocalDate.class).setParameter("ref", policy.getCustomerRef()).getResultList();
+            LocalDate born = births.isEmpty() ? null : births.get(0);
+            if (born != null) {
+                LocalDate ceases = born.plusYears(productRule(policy.getProduct(), "maxCoverAge", 70));
+                end = ceases.isBefore(end) ? ceases : end;
+            }
+            policy.setCoverEndDate(end);
+        }
     }
 
     /**

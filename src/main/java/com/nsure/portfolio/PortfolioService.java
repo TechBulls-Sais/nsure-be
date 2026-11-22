@@ -67,6 +67,18 @@ public class PortfolioService {
     private final ProductRelease productRelease;
     /** NS-SH03-001: explicit effective date, currency and versions of a calculation. */
     private final com.nsure.rating.RatingInputs ratingInputs;
+    /**
+     * NS-IL01-005/006: whether staff may issue a policy without an underwriting-cleared application. Off in every
+     * installation (application.yml); only legacy loads and older tests that predate applications switch it on.
+     */
+    @org.springframework.beans.factory.annotation.Value("${nsure.new-business.direct-issue-enabled:true}")
+    private boolean directIssueEnabled;
+    /** NS-IL01-003: whether a portal purchase must carry the product's mandatory disclosures and the declaration. */
+    @org.springframework.beans.factory.annotation.Value("${nsure.new-business.portal-disclosures-required:false}")
+    private boolean portalDisclosuresRequired;
+    /** Days after submission an application's own evidence is due (demo default; IL01 missing-evidence queue). */
+    @org.springframework.beans.factory.annotation.Value("${nsure.new-business.evidence-due-days:14}")
+    private int evidenceDueDays;
 
     public PortfolioService(
             EntityManager em,
@@ -463,6 +475,10 @@ public class PortfolioService {
         return cover(row);
     }
 
+    private static boolean sameAmount(BigDecimal a, BigDecimal b) {
+        return a == null ? b == null : b != null && a.compareTo(b) == 0;
+    }
+
     private static boolean draftRequested(JsonNode body) {
         return ApplicationCapture.DRAFT.equalsIgnoreCase(blank(optional(body, "status")));
     }
@@ -504,6 +520,74 @@ public class PortfolioService {
         security.authenticatedUser().validateHasPermissionTo("READ_APPLICATION");
         InsuranceApplication app = one(InsuranceApplication.class, ref, "Application");
         return capture.checklist(app, customerOf(app));
+    }
+
+    /**
+     * IL01 missing-evidence queue: every item still outstanding on an open application, from its own checklist (due
+     * {@code nsure.new-business.evidence-due-days} after submission, a demo default) and from its underwriting case
+     * (the underwriter's due date), oldest due first.
+     */
+    @Transactional(readOnly = true)
+    public List<PortfolioViews.EvidenceQueueItem> evidenceQueue() {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("READ_APPLICATION");
+        LocalDate today = LocalDate.now();
+        List<PortfolioViews.EvidenceQueueItem> rows = new ArrayList<>();
+        List<InsuranceApplication> open = em.createQuery("select a from InsuranceApplication a where a.status in :open"
+                        + " order by a.id", InsuranceApplication.class)
+                .setParameter("open", List.of(ApplicationCapture.UNDER_REVIEW, ApplicationCapture.EVIDENCE_NEEDED,
+                        "Offered", "Ready to issue"))
+                .getResultList();
+        Map<String, InsuranceApplication> byRef = new HashMap<>();
+        for (InsuranceApplication app : open) {
+            byRef.put(app.getRef(), app);
+            CustomerAccount customer = customerOf(app);
+            LocalDate due = (app.getSubmittedAt() == null ? today : app.getSubmittedAt().toLocalDate())
+                    .plusDays(evidenceDueDays);
+            for (String item : capture.missingEvidence(app, customer)) {
+                rows.add(new PortfolioViews.EvidenceQueueItem(app.getRef(), app.getCustomerName(), app.getProduct(),
+                        app.getStatus(), "APPLICATION", item, app.getCustomerName(), due, due.isBefore(today), null, 0,
+                        app.getSubmittedAt()));
+            }
+        }
+        boolean clinical = user.hasPermissionTo("UNDERWRITE_APPLICATION");
+        if (user.hasPermissionTo("READ_UNDERWRITING")) {
+            for (Map<String, Object> e : underwriting.getObject().outstandingEvidenceItems()) {
+                InsuranceApplication app = byRef.get((String) e.get("applicationRef"));
+                if (app == null) {
+                    continue;
+                }
+                boolean restricted = Boolean.TRUE.equals(e.get("restricted"));
+                LocalDate due = (LocalDate) e.get("dueDate");
+                rows.add(new PortfolioViews.EvidenceQueueItem(app.getRef(), app.getCustomerName(), app.getProduct(),
+                        app.getStatus(), "UNDERWRITING", restricted && !clinical ? "Restricted medical evidence"
+                        : (String) e.get("requirement"), (String) e.get("lifeName"), due, due.isBefore(today),
+                        (String) e.get("caseRef"), (Integer) e.get("reminders"), app.getSubmittedAt()));
+            }
+        }
+        rows.sort(java.util.Comparator.comparing(PortfolioViews.EvidenceQueueItem::dueDate));
+        return rows;
+    }
+
+    /** The policy terms a product sells (section 06 Term Life); empty when it sells none. */
+    @Transactional(readOnly = true)
+    public List<Integer> applicationTerms(String product) {
+        AppUser user = security.authenticatedUser();
+        if (user.isPortalCustomer()) {
+            customerForLogin();
+        } else if (!user.hasPermissionTo("CREATE_APPLICATION")) {
+            user.validateHasPermissionTo("READ_APPLICATION");
+        }
+        return capture.termOptions(product);
+    }
+
+    @Transactional(readOnly = true)
+    public List<String> applicationRelationships() {
+        AppUser user = security.authenticatedUser();
+        if (!user.hasPermissionTo("CREATE_APPLICATION")) {
+            user.validateHasPermissionTo("READ_APPLICATION");
+        }
+        return capture.relationships();
     }
 
     @Transactional(readOnly = true)
@@ -620,9 +704,17 @@ public class PortfolioService {
         if (quote.getApplicationRef() != null) {
             InsuranceApplication application = one(InsuranceApplication.class, quote.getApplicationRef(), "Application");
             if (!"Issued".equals(application.getStatus())) {
+                BigDecimal premiumBefore = application.getPremium();
+                BigDecimal amountBefore = application.getAmount();
                 takeQuote(application, quote);
                 logApplication(application, "Quote accepted", application.getStatus(),
                         quote.getRef() + " v" + quote.getVersionNo(), actor.getUsername());
+                // NS-IL01-004, NS-IL02-006: underwriting decided on the earlier price; a changed price or cover is
+                // reassessed (never the earlier offer's premium silently applied to the new quote).
+                if (!sameAmount(premiumBefore, application.getPremium()) || !sameAmount(amountBefore, application.getAmount())) {
+                    underwriting.getObject().materialChange(application, customerOf(application), quote.getRef() + " v"
+                            + quote.getVersionNo() + " accepted with a changed price or cover", actor.getUsername());
+                }
             }
         }
         return quotes.view(quote);
@@ -663,6 +755,7 @@ public class PortfolioService {
         CoverTier tier = tier(product, tierName);
         List<RateTableService.LifeToPrice> others = lives(body);
         Optional<RateTableService.PolicyPrice> price = price(tier, customer, others);
+        requireFlatTierAge(tier, customer, price);
         List<RateTableService.LifeToPrice> all = new ArrayList<>();
         all.add(new RateTableService.LifeToPrice(selfRelationship(), customer.getName(), customer.getDateOfBirth()));
         all.addAll(others);
@@ -727,6 +820,24 @@ public class PortfolioService {
      */
     @Transactional
     public PortfolioViews.CoverView createPolicy(JsonNode body, String idempotencyKey) {
+        return issue(body, idempotencyKey, false);
+    }
+
+    /**
+     * IL05: a lender's loan submission opens its credit life policy (an offer until the first premium). It is
+     * assessed by the credit product rule (entry and cessation ages, term, benefits) instead of an application, and
+     * only for a product distributed through lenders.
+     */
+    @Transactional
+    public PortfolioViews.CoverView createLoanPolicy(JsonNode body, String idempotencyKey) {
+        String scope = capture.distributionProblem(text(body, "product"), "LENDER");
+        if (scope != null) {
+            throw new IllegalArgumentException(scope);
+        }
+        return issue(body, idempotencyKey, true);
+    }
+
+    private PortfolioViews.CoverView issue(JsonNode body, String idempotencyKey, boolean lenderLoan) {
         AppUser staff = security.authenticatedUser();
         String key = idempotencyKey == null || idempotencyKey.isBlank() ? null : idempotencyKey.trim();
         if (key != null) {
@@ -747,6 +858,11 @@ public class PortfolioService {
             em.lock(application, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
             // NS-TXN-001: issued from the application as the caller last saw it (If-Match), if they say which.
             com.nsure.common.ExpectedVersion.check("Application " + application.getRef(), application.getRowVersion());
+        }
+        if (application == null && !directIssueEnabled && !lenderLoan) {
+            // NS-IL01-005/006: every policy comes from an application the underwriting rules or an underwriter cleared.
+            throw new IllegalArgumentException("Policies are issued from an application that underwriting has cleared."
+                    + " Create and submit an application for this customer, then issue it when it is Ready to issue.");
         }
         // Issued from an application, the customer is the application's; otherwise the request names them.
         boolean named = !blank(optional(body, "customerRef")).isBlank() || !blank(optional(body, "name")).isBlank();
@@ -770,6 +886,10 @@ public class PortfolioService {
                 throw new IllegalArgumentException(application.getRef() + " is " + application.getStatus()
                         + " and cannot be issued.");
             }
+        }
+        if (application != null && !body.hasNonNull("product") && body instanceof com.fasterxml.jackson.databind.node.ObjectNode node) {
+            // Issued from an application, the product is the application's unless the request repeats it.
+            node.put("product", application.getProduct());
         }
         InsurancePolicy row = new InsurancePolicy();
         fillCover(row, body, account, "POL-", 5, PolicyWorkflow.PENDING_PAYMENT);
@@ -797,6 +917,10 @@ public class PortfolioService {
             }
             row.setUwTerms(underwritten.description());
         }
+        if (application != null) {
+            // Section 06 Term Life: the policy carries the term selected on the application.
+            row.setTermYears(capture.termFor(application));
+        }
         // Staff issue: every required insurer-configured field must be present (guide §15).
         policyAttributes.pinNewPolicy(row, body, true);
         policyWorkflow.openPending(row);
@@ -810,6 +934,10 @@ public class PortfolioService {
         }
         policyWorkflow.logOpened(row, staff.getUsername());
         if (application != null) {
+            // NS-IL01-002: the beneficiaries nominated on the application are the policy's from the start.
+            for (PolicyWorkflow.BeneficiaryInput nominated : capture.beneficiaries(application)) {
+                policyWorkflow.addBeneficiary(row.getRef(), nominated, staff.getUsername());
+            }
             String before = application.getStatus();
             application.setStatus("Issued");
             logApplication(application, "Issued", before, "Policy offer " + row.getRef() + " awaits its first premium",
@@ -882,6 +1010,12 @@ public class PortfolioService {
         return shopFor(customerForLogin());
     }
 
+    /**
+     * A customer's purchase in the portal (NS-IL01-005): it is an application, priced from the product's tier and
+     * assessed by the underwriting rules. Inside every limit the policy opens at once, Pending Payment, linked to the
+     * application; otherwise the application waits for an underwriter and the customer sees it under their
+     * applications. Nothing confers cover before the first premium.
+     */
     @Transactional
     public PortfolioViews.ShopView buy(JsonNode body) {
         CustomerAccount account = customerForLogin();
@@ -897,6 +1031,10 @@ public class PortfolioService {
             throw new NotFoundException("Product " + productName + " not found");
         }
         InsuranceProduct product = products.get(0);
+        String scope = capture.distributionProblem(product.getName(), "PORTAL");
+        if (scope != null) {
+            throw new IllegalArgumentException(scope);
+        }
         InsurancePolicy row = new InsurancePolicy();
         row.setRef(nextRef("POL-", 5, InsurancePolicy.class));
         row.setCustomerName(account.getName());
@@ -905,6 +1043,10 @@ public class PortfolioService {
         row.setAmount(Money.of(digits(product.getCover())));
         row.setPremium(BigDecimal.valueOf(digits(product.getPremium())));
         QuoteService.PricedOffer offer = applyTierOffer(row, body);
+        if (offer == null && hasTiers(product.getName())) {
+            // NS-IL01-001: a product with plans is priced from the chosen plan on the server, never from display text.
+            throw new IllegalArgumentException("Choose a plan for " + product.getName() + ".");
+        }
         List<RateTableService.PricedLife> lives = offer == null ? List.of() : offer.lines();
         // A portal purchase is pinned to the current form; staff complete any required extra fields later.
         policyAttributes.pinNewPolicy(row, body, false);
@@ -925,29 +1067,191 @@ public class PortfolioService {
                 .setParameter("status", PolicyWorkflow.PENDING_PAYMENT)
                 .getResultStream()
                 .findFirst();
-        if (open.isPresent()) {
-            // BR-8: re-entering checkout reuses the unexpired pending policy instead of creating a duplicate.
+        if (open.isPresent() || openPortalApplication(account, row.getProduct(), row.getTier()).isPresent()) {
+            // BR-8: re-entering checkout reuses the unexpired pending policy or open application, never a duplicate.
+            return shopFor(account);
+        }
+        String actor = account.getLoginUsername();
+        // NS-IL01-005: the purchase is an application, underwritten before any policy exists.
+        InsuranceApplication application = new InsuranceApplication();
+        application.setRef(nextRef("APP-", 4, InsuranceApplication.class));
+        application.setCustomerName(account.getName());
+        application.setCustomerRef(account.getRef());
+        application.setProduct(row.getProduct());
+        application.setTier(row.getTier());
+        application.setAmount(row.getAmount());
+        application.setPremium(row.getPremium());
+        application.setRateTableVersion(row.getRateTableVersion());
+        application.setStatus(ApplicationCapture.UNDER_REVIEW);
+        application.setRecordDate(LocalDate.now().format(DISPLAY));
+        application.setDisplayOrder(0);
+        application.setChannel("PORTAL");
+        com.fasterxml.jackson.databind.node.ObjectNode details = mapper.createObjectNode();
+        if (body.has("occupation")) {
+            details.set("occupation", body.get("occupation"));
+        }
+        if (body.has("beneficiaries")) {
+            details.set("beneficiaries", body.get("beneficiaries"));
+        }
+        if (body.has("termYears")) {
+            details.set("termYears", body.get("termYears"));
+        }
+        capture.capture(application, details, actor);
+        boolean answered = body.has("disclosures") && body.get("disclosures").isObject() && !body.get("disclosures").isEmpty();
+        if (answered || portalDisclosuresRequired) {
+            if (body.path("declarationAccepted").asBoolean(false)) {
+                application.setDeclaredBy(actor);
+                application.setDeclaredAt(java.time.LocalDateTime.now());
+            }
+        } else {
+            // The purchase itself is the customer's declaration where the portal asks no questions (legacy clients).
+            application.setDeclaredBy(actor);
+            application.setDeclaredAt(java.time.LocalDateTime.now());
+        }
+        em.persist(application);
+        saveLives(application, lives);
+        capture.answer(application, body, actor);
+        Quote quote = null;
+        if (offer != null) {
+            // The customer accepts the offer by checking out: the quote and its trace are kept with the application.
+            quote = quotes.record(account, row.getProduct(), offer, actor);
+            quotes.accept(quote.getRef(), quote.getVersionNo(), actor, "Accepted by the customer at checkout");
+            application.setQuote(quote.getRef(), quote.getVersionNo());
+            quotes.linkApplication(quote, application.getRef());
+        }
+        capture.submit(application, account, actor, answered || portalDisclosuresRequired);
+        underwriting.getObject().assess(application, account, actor);
+        logApplication(application, "Submitted", null, "Customer portal purchase", actor);
+        if (!"Ready to issue".equals(application.getStatus())) {
+            // Referred, or evidence needed: an underwriter takes it from here; the customer sees it as an application.
             return shopFor(account);
         }
         // Reserved until paid within the payment window; it confers no cover until then (demo server checkout).
         policyWorkflow.openPending(row);
         row.setRecordDate(LocalDate.now().format(DISPLAY));
         row.setDisplayOrder(0);
-        List<PolicyWorkflow.BeneficiaryInput> beneficiaries = beneficiaryInputs(body.get("beneficiaries"));
+        row.setApplicationRef(application.getRef());
+        row.setTermYears(capture.termFor(application));
+        List<PolicyWorkflow.BeneficiaryInput> beneficiaries = new ArrayList<>(capture.beneficiaries(application));
+        if (beneficiaries.isEmpty()) {
+            beneficiaries.addAll(beneficiaryInputs(body.get("beneficiaries")));
+        }
         em.persist(row);
         saveLives(row, lives);
-        if (offer != null) {
-            // The customer accepts the offer by checking out: the quote and its trace are kept with the policy.
-            Quote quote = quotes.record(account, row.getProduct(), offer, account.getLoginUsername());
-            quotes.accept(quote.getRef(), quote.getVersionNo(), account.getLoginUsername(), "Accepted by the customer at checkout");
+        if (quote != null) {
             quotes.linkPolicy(quote, row.getRef());
             row.setQuote(quote.getRef(), quote.getVersionNo());
         }
-        policyWorkflow.logOpened(row, account.getLoginUsername());
+        policyWorkflow.logOpened(row, actor);
         for (PolicyWorkflow.BeneficiaryInput input : beneficiaries) {
-            policyWorkflow.addBeneficiary(row.getRef(), input, account.getLoginUsername());
+            policyWorkflow.addBeneficiary(row.getRef(), input, actor);
         }
+        String before = application.getStatus();
+        application.setStatus("Issued");
+        logApplication(application, "Issued", before, "Policy offer " + row.getRef() + " awaits its first premium", actor);
+        Map<String, Object> requested = new java.util.LinkedHashMap<>();
+        requested.put("applicationRef", application.getRef());
+        requested.put("policyRef", row.getRef());
+        requested.put("customerRef", account.getRef());
+        requested.put("product", row.getProduct());
+        requested.put("quoteRef", quote == null ? "" : quote.getRef());
+        requested.put("quoteVersion", quote == null ? 0 : quote.getVersionNo());
+        outbox.publish(com.nsure.integration.Events.ISSUE_REQUESTED, application.getRef(), requested, actor);
         return shopFor(account);
+    }
+
+    /**
+     * Section 06 product packs: every plan of a product, saleable or withdrawn, for maintenance (UPDATE_TIER).
+     */
+    @Transactional(readOnly = true)
+    public List<PortfolioViews.TierRecordView> productTiers(String product) {
+        security.authenticatedUser().validateHasPermissionTo("READ_PRODUCT");
+        return em.createQuery("select t from CoverTier t where t.product.name = :p order by t.displayOrder, t.coverAmount",
+                        CoverTier.class).setParameter("p", product).getResultList().stream()
+                .map(t -> new PortfolioViews.TierRecordView(t.getId(), product, t.getName(), t.getCoverAmount(),
+                        t.getPremium(), t.getPremiumFrequency(), t.isPopular(), t.getBenefits(), t.getDisplayOrder(),
+                        t.isActive()))
+                .toList();
+    }
+
+    /**
+     * {cover, premium, frequency?, popular?, benefits?, displayOrder?, active?}: adds or changes a saleable plan of
+     * a product (UPDATE_TIER). Issued policies keep their own cover and premium; a withdrawn plan is not sold.
+     */
+    @Transactional
+    public List<PortfolioViews.TierRecordView> saveTier(String productName, String tierName, JsonNode body) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("UPDATE_TIER");
+        InsuranceProduct product = em.createQuery("select p from InsuranceProduct p where p.name = :n", InsuranceProduct.class)
+                .setParameter("n", productName).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Product " + productName + " not found"));
+        String name = blank(tierName).trim();
+        if (name.isEmpty() || name.length() > 60) {
+            throw new IllegalArgumentException("A plan needs a name of at most 60 characters.");
+        }
+        CoverTier tier = em.createQuery("select t from CoverTier t where t.product = :p and t.name = :n", CoverTier.class)
+                .setParameter("p", product).setParameter("n", name).getResultStream().findFirst().orElse(null);
+        int cover = body.path("cover").asInt(tier == null ? 0 : tier.getCoverAmount());
+        int premium = body.path("premium").asInt(tier == null ? 0 : tier.getPremium());
+        if (cover <= 0 || premium <= 0) {
+            throw new IllegalArgumentException("A plan needs a cover amount and a premium above zero.");
+        }
+        String frequency = defaultText(body, "frequency", tier == null ? "Monthly" : tier.getPremiumFrequency());
+        String benefits = body.has("benefits") ? optional(body, "benefits") : tier == null ? null : tier.getBenefits();
+        if (benefits != null && benefits.length() > 500) {
+            throw new IllegalArgumentException("Describe the plan's benefits in at most 500 characters.");
+        }
+        boolean created = tier == null;
+        if (created) {
+            tier = new CoverTier(product, name);
+        }
+        tier.change(cover, premium, frequency, body.path("popular").asBoolean(!created && tier.isPopular()), benefits,
+                body.path("displayOrder").asInt(created ? 9 : tier.getDisplayOrder()),
+                body.path("active").asBoolean(created || tier.isActive()));
+        em.persist(tier);
+        em.flush();
+        history.record("Product", product.getName(), product.getName(), created ? "Plan added" : "Plan changed", null,
+                null, name + ": cover " + cover + ", premium " + premium + " " + frequency.toLowerCase(Locale.ROOT)
+                        + (tier.isActive() ? "" : " (withdrawn)"), user.getUsername());
+        return productTiers(product.getName());
+    }
+
+    /** The disclosure questions the portal asks for a product (NS-IL01-003). */
+    @Transactional(readOnly = true)
+    public List<PortfolioViews.DisclosureItem> shopQuestions(String product) {
+        customerForLogin();
+        return capture.questionsFor(product);
+    }
+
+    /**
+     * {accept, note?}: the customer's own answer to an underwriting offer on their portal application (IL02). Their
+     * acceptance is recorded as theirs, with the time; the application is then ready for staff to issue.
+     */
+    @Transactional
+    public PortfolioViews.ShopView shopAnswerOffer(String applicationRef, JsonNode body) {
+        CustomerAccount account = customerForLogin();
+        InsuranceApplication app = one(InsuranceApplication.class, applicationRef, "Application");
+        if (!account.getRef().equals(app.getCustomerRef())) {
+            throw new NotFoundException("Application " + applicationRef + " not found");
+        }
+        underwriting.getObject().answerOfferAsApplicant(app, body.path("accept").asBoolean(false),
+                "Answered by the customer in the portal", account.getLoginUsername());
+        return shopFor(account);
+    }
+
+    private boolean hasTiers(String product) {
+        return em.createQuery("select count(t) from CoverTier t where t.product.name = :p and t.active = true", Long.class)
+                .setParameter("p", product).getSingleResult() > 0;
+    }
+
+    /** An application the customer started in the portal for this product and plan that is still being decided. */
+    private Optional<String> openPortalApplication(CustomerAccount account, String product, String tier) {
+        return em.createQuery("select a.ref from InsuranceApplication a where a.customerRef = :c and a.product = :p"
+                        + " and coalesce(a.tier, '') = :t and a.channel = 'PORTAL' and a.status in :open", String.class)
+                .setParameter("c", account.getRef()).setParameter("p", product).setParameter("t", blank(tier))
+                .setParameter("open", List.of(ApplicationCapture.UNDER_REVIEW, ApplicationCapture.EVIDENCE_NEEDED,
+                        "Offered", "Ready to issue"))
+                .getResultStream().findFirst();
     }
 
     // ── policy workflow ───────────────────────────────────────────────────────────────────────────
@@ -1271,6 +1575,7 @@ public class PortfolioService {
             throw new IllegalArgumentException("The " + tier.getName() + " plan has a flat premium and covers the "
                     + "main insured only, so lives cannot be added to it.");
         }
+        requireFlatTierAge(tier, customer, price);
         return new PortfolioViews.QuoteView(
                 product, tier.getName(), tier.getCoverAmount(), price.isPresent(),
                 price.map(RateTableService.PolicyPrice::rateTableVersion).orElse(""),
@@ -1584,6 +1889,7 @@ public class PortfolioService {
         // Server-side pricing (R-18): a rate-table-priced plan sums every covered life's rate by age from the
         // current version and stamps that version on the record; any client-supplied premium is ignored.
         Optional<RateTableService.PolicyPrice> price = price(tier, customerOf(row), others);
+        requireFlatTierAge(tier, customerOf(row), price);
         row.setPremium(price.map(RateTableService.PolicyPrice::monthlyTotal).orElse(BigDecimal.valueOf(tier.getPremium())));
         row.setRateTableVersion(price.map(RateTableService.PolicyPrice::rateTableVersion).orElse(null));
         CustomerAccount customer = customerOf(row);
@@ -1591,6 +1897,18 @@ public class PortfolioService {
         all.add(new RateTableService.LifeToPrice(selfRelationship(), customer.getName(), customer.getDateOfBirth()));
         all.addAll(others);
         return new QuoteService.PricedOffer(tier, all, price);
+    }
+
+    /** NS-IL01-001: a flat-priced plan still has entry ages; a rated plan checked each life's age when it priced it. */
+    private void requireFlatTierAge(CoverTier tier, CustomerAccount customer,
+            Optional<RateTableService.PolicyPrice> price) {
+        if (price.isPresent()) {
+            return;
+        }
+        String problem = underwriting.getObject().entryAgeProblem(tier.getProduct().getName(), customer.getDateOfBirth());
+        if (problem != null) {
+            throw new IllegalArgumentException(problem);
+        }
     }
 
     /** The customer is always the main insured, priced from their own date of birth; the body adds the rest. */
@@ -1747,8 +2065,18 @@ public class PortfolioService {
                 updated.put((String) row[0], (java.time.LocalDateTime) row[1]);
             }
         }
+        // NS-IL01-005: applications still with underwriting (or declined) show as applications, not as cover.
+        List<PortfolioViews.CoverView> applications = covers(em.createQuery(
+                        "select a from InsuranceApplication a where a.customerRef = :customer and a.status not in :done"
+                                + " order by a.id desc", InsuranceApplication.class)
+                .setParameter("customer", account.getRef())
+                .setParameter("done", List.of("Issued", ApplicationCapture.DRAFT))
+                .getResultList(), InsuranceApplication.class, false);
+        Map<String, Map<String, Object>> offers = underwriting.getObject()
+                .pendingOffers(applications.stream().map(PortfolioViews.CoverView::id).toList());
         return new PortfolioViews.ShopView(customer(account), products(),
-                policies.stream().filter(p -> !isRequest(p.status())).toList(), requests, claims, updated);
+                policies.stream().filter(p -> !isRequest(p.status())).toList(), requests, claims, updated, applications,
+                offers);
     }
 
     private static boolean isRequest(String status) {

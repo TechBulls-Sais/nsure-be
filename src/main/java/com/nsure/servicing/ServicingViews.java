@@ -34,7 +34,10 @@ public final class ServicingViews {
             String payerRelationship,
             String underwritingTerms,
             long premiumsPaid,
-            BigDecimal premiumsPaidAmount) {
+            BigDecimal premiumsPaidAmount,
+            // Section 06: the selected term and the date cover ends (term or cessation age, whichever is earlier).
+            Integer termYears,
+            LocalDate coverEndDate) {
     }
 
     public record LifeView(
@@ -51,7 +54,10 @@ public final class ServicingViews {
             LocalDate effectiveFrom,
             LocalDate effectiveTo,
             LocalDate waitingPeriodStart,
-            String ceaseReason) {
+            String ceaseReason,
+            // A re-added person's first cover row (limits continue from it) and the date-of-birth evidence.
+            Long continuityOf,
+            String dobEvidence) {
     }
 
     /** What an endorsement would do, before anything is changed (NS-IL03-003). */
@@ -126,7 +132,13 @@ public final class ServicingViews {
             int childReviewAge,
             int maxCoverAge,
             String updatedBy,
-            LocalDateTime updatedAt) {
+            LocalDateTime updatedAt,
+            String lifeContinuity,
+            String removalApproval,
+            int reviewLeadDays,
+            int noCoverMonths,
+            int coolingOffDays,
+            String termOptions) {
     }
 
     /** A benefit the product's rules will make due, shown before it falls due. */
@@ -183,7 +195,18 @@ public final class ServicingViews {
             // IL04 roster: per-life limits and use, claims, underwriting outcome and eligibility warnings.
             Roster roster,
             // IL03: every beneficiary designation, current and removed, with its dates (no contact or bank details).
-            List<BeneficiaryEpisode> beneficiaryHistory) {
+            List<BeneficiaryEpisode> beneficiaryHistory,
+            // NS-IL04-006: each insured life's own consent decisions about sharing their medical evidence.
+            List<ConsentView> consents,
+            // NS-IL03-001: the issue terms frozen when cover started (null before then), and its fingerprint.
+            com.fasterxml.jackson.databind.JsonNode inceptionSnapshot,
+            String inceptionSha256,
+            LocalDateTime inceptionTakenAt) {
+    }
+
+    /** One insured life's consent decision (NS-IL04-006); the newest per life applies. */
+    public record ConsentView(Long id, Long lifeId, String lifeName, boolean adult, String scope, String status,
+            String evidence, String recordedBy, LocalDateTime recordedAt) {
     }
 
     public record BeneficiaryEpisode(

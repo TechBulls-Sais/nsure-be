@@ -125,6 +125,24 @@ public final class ServicingRecords {
         int childReviewAge;
         @Column(name = "max_cover_age", nullable = false)
         int maxCoverAge;
+        /** KEEP_EARLIEST or RESTART: a re-added life's waiting period (NS-IL04-003). */
+        @Column(name = "life_continuity", nullable = false, length = 20)
+        String lifeContinuity = "KEEP_EARLIEST";
+        /** BACKDATED or ALWAYS: when removing a life needs a second person (NS-IL04-003). */
+        @Column(name = "removal_approval", nullable = false, length = 20)
+        String removalApproval = "BACKDATED";
+        /** Days ahead an age review or cessation task is raised (NS-IL04-005). */
+        @Column(name = "review_lead_days", nullable = false)
+        int reviewLeadDays = 90;
+        /** Months a policy stays in force without cover before it lapses (NS-IL03-004). */
+        @Column(name = "no_cover_months", nullable = false)
+        int noCoverMonths = 3;
+        /** Days after cover starts within which a cancellation is a cooling-off cancellation (NS-IL03-004). */
+        @Column(name = "cooling_off_days", nullable = false)
+        int coolingOffDays = 30;
+        /** Comma-separated saleable policy terms in years; null when the product has no selected term (section 06). */
+        @Column(name = "term_options", length = 60)
+        String termOptions;
         @Column(name = "updated_by", length = 100)
         String updatedBy;
         @Column(name = "updated_at")

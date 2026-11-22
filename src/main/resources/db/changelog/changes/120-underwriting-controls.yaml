@@ -1,0 +1,151 @@
+# IL02 underwriting controls (Nsure Life NS-IL02-001..006, AT-IL02-01..03, NS-IL01-005/006).
+#
+# Rule sets take referral disclosure codes, occupations, a loading ceiling and a decision validity; a rule change waits
+# for a second approver and every approved version is kept. Authority limits gain a loading ceiling and the decision
+# types a role may make. Cases keep their screening result, occupation and how long the decision stands. Evidence is
+# linked to an insured life and remembers its reminders. The values seeded here are DEMO DEFAULTS awaiting the
+# insurer's decisions D03/D06; they are edited in Underwriting > Rules and Authority limits.
+databaseChangeLog:
+  - changeSet:
+      id: 120-underwriting-controls-schema
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: uw_rule_set
+            columns:
+              # Disclosure question codes whose YES answer refers the case (besides tobacco and treatment).
+              - column: {name: refer_disclosure_codes, type: varchar(300)}
+              # Comma-separated occupation words that refer a case to an underwriter (NS-IL02-001).
+              - column: {name: refer_occupations, type: varchar(1000)}
+              # The largest loading an offer may carry under these rules (NS-IL02-005).
+              - column: {name: max_loading_percent, type: 'decimal(7,2)', defaultValueNumeric: 300, constraints: {nullable: false}}
+              # How long an underwriting decision stands before it must be reassessed (NS-IL02-003/006).
+              - column: {name: decision_validity_days, type: int, defaultValueNumeric: 90, constraints: {nullable: false}}
+        - addColumn:
+            tableName: uw_authority
+            columns:
+              # The largest loading this role may offer; null is not limited.
+              - column: {name: max_loading_percent, type: 'decimal(7,2)'}
+              # Comma-separated decision types this role may make; null is every type.
+              - column: {name: decision_types, type: varchar(200)}
+        - addColumn:
+            tableName: uw_case
+            columns:
+              - column: {name: occupation, type: varchar(100)}
+              - column: {name: decision_valid_until, type: date}
+              # NOT_SCREENED, CLEAR, HIT (blocks every acceptance and issue), CLEARED or CONFIRMED.
+              - column: {name: screening_status, type: varchar(20), defaultValue: NOT_SCREENED, constraints: {nullable: false}}
+              - column: {name: screening_detail, type: varchar(500)}
+              - column: {name: screening_resolved_by, type: varchar(100)}
+              - column: {name: screening_resolved_at, type: timestamp(6)}
+        - addColumn:
+            tableName: uw_evidence
+            columns:
+              # The insured life (policy_life_cover row of the application) the evidence is asked of.
+              - column: {name: life_id, type: bigint}
+              - column: {name: reminder_count, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: last_reminded_at, type: timestamp(6)}
+        - addColumn:
+            tableName: ins_application
+            columns:
+              - column: {name: occupation, type: varchar(100)}
+        - createTable:
+            tableName: uw_rule_change
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: rule_set_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: version_label, type: varchar(40), constraints: {nullable: false}}
+              # The proposed parameters as JSON; applied only when a second person approves (PENDING, APPROVED, REJECTED).
+              - column: {name: proposal, type: varchar(4000), constraints: {nullable: false}}
+              - column: {name: previous, type: varchar(4000)}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: proposed_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: proposed_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: timestamp(6)}
+              - column: {name: decision_note, type: varchar(500)}
+        - addForeignKeyConstraint:
+            baseTableName: uw_rule_change
+            baseColumnNames: rule_set_id
+            referencedTableName: uw_rule_set
+            referencedColumnNames: id
+            constraintName: fk_uw_rule_change_set
+        - createTable:
+            tableName: uw_watchlist
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: full_name, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: list_name, type: varchar(80), constraints: {nullable: false}}
+              - column: {name: note, type: varchar(300)}
+  - changeSet:
+      id: 120-underwriting-controls-seed
+      author: nsure
+      comment: >-
+        Demo defaults: TOBACCO and TREATMENT keep their switches; a new optional hazardous pursuits question refers
+        too; hazardous occupations refer; loadings up to 300%; decisions stand 90 days. CLEAR_SCREENING lets compliance
+        clear or confirm a screening match.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_disclosure_question (product, code, question, answer_type, mandatory, display_order)
+              SELECT NULL, 'HAZARDOUS_PURSUITS', 'Does the life insured take part in hazardous sports or pursuits (motor racing, diving, flying other than as a passenger)?', 'YES_NO', 0, 4
+              WHERE NOT EXISTS (SELECT 1 FROM app_disclosure_question x WHERE x.code = 'HAZARDOUS_PURSUITS');
+
+              UPDATE uw_rule_set SET refer_disclosure_codes = 'HAZARDOUS_PURSUITS',
+                refer_occupations = 'mining,miner,diver,pilot,security guard,armed,explosives'
+              WHERE refer_occupations IS NULL;
+
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT 'underwriting', 'CLEAR_SCREENING', 'SCREENING', 'CLEAR',
+                     FALSE, 'Clear or confirm a sanctions/PEP screening match on an application'
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = 'CLEAR_SCREENING');
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code = 'CLEAR_SCREENING'
+              WHERE r.name IN ('Super Admin', 'Compliance & Auditor')
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+
+              -- Compliance reads the underwriting case whose screening match it answers (read-only otherwise).
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code = 'READ_UNDERWRITING'
+              WHERE r.name = 'Compliance & Auditor'
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+  - changeSet:
+      id: 120-underwriting-demo-data
+      author: nsure
+      context: demo
+      comment: >-
+        Simulated screening list (fictional names, no real provider is connected) and a junior underwriter with a
+        BWP 250,000 aggregate authority who may not decline (demo login underwriter2, password "password").
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO uw_watchlist (full_name, list_name, note)
+              SELECT 'Viktor Demo Sanctioned', 'Demo sanctions list (simulated)', 'Fictional entry for demonstrations'
+              WHERE NOT EXISTS (SELECT 1 FROM uw_watchlist x WHERE x.full_name = 'Viktor Demo Sanctioned');
+              INSERT INTO uw_watchlist (full_name, list_name, note)
+              SELECT 'Petra Demo Exposed', 'Demo PEP list (simulated)', 'Fictional politically exposed person'
+              WHERE NOT EXISTS (SELECT 1 FROM uw_watchlist x WHERE x.full_name = 'Petra Demo Exposed');
+
+              INSERT INTO app_role (name, description, disabled)
+              SELECT 'Junior Underwriter', 'Decides referred applications up to a lower authority; declines go to a senior underwriter.', FALSE
+              WHERE NOT EXISTS (SELECT 1 FROM app_role WHERE name = 'Junior Underwriter');
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code IN ('READ_DASHBOARD', 'READ_CUSTOMER',
+                  'READ_APPLICATION', 'READ_UNDERWRITING', 'UNDERWRITE_APPLICATION')
+              WHERE r.name = 'Junior Underwriter'
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+
+              INSERT INTO uw_authority (role_id, max_sum_assured, max_loading_percent, decision_types)
+              SELECT r.id, 250000, 100, 'ACCEPT_STANDARD,ACCEPT_WITH_TERMS,POSTPONE' FROM app_role r
+              WHERE r.name = 'Junior Underwriter' AND NOT EXISTS (SELECT 1 FROM uw_authority x WHERE x.role_id = r.id);
+
+              INSERT INTO app_user (username, password, enabled)
+              SELECT 'underwriter2', '$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG', TRUE
+              WHERE NOT EXISTS (SELECT 1 FROM app_user x WHERE x.username = 'underwriter2');
+
+              INSERT INTO app_user_role (user_id, role_id)
+              SELECT u.id, r.id FROM app_user u JOIN app_role r ON r.name = 'Junior Underwriter'
+              WHERE u.username = 'underwriter2'
+                AND NOT EXISTS (SELECT 1 FROM app_user_role x WHERE x.user_id = u.id AND x.role_id = r.id);

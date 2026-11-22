@@ -75,6 +75,24 @@ public class CoverTier {
         this.active = true;
     }
 
+    /** A new saleable plan for a product (section 06 product packs), maintained by UPDATE_TIER holders. */
+    CoverTier(InsuranceProduct product, String name) {
+        this.product = product;
+        this.name = name;
+    }
+
+    /** Changes the plan's saleable terms; policies already issued keep the cover and premium they were sold with. */
+    void change(int coverAmount, int premium, String frequency, boolean popular, String benefits, int displayOrder,
+            boolean active) {
+        this.coverAmount = coverAmount;
+        this.premium = premium;
+        this.premiumFrequency = frequency;
+        this.popular = popular;
+        this.benefits = benefits;
+        this.displayOrder = displayOrder;
+        this.active = active;
+    }
+
     public Long getId() {
         return id;
     }

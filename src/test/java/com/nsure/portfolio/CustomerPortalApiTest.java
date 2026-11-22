@@ -96,6 +96,13 @@ class CustomerPortalApiTest {
                         .with(signedIn("customer", "password"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"product\":\"Care Cash\"}"))
+                // NS-IL01-001: a product with plans is priced from the chosen plan, never from its display text.
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value("Choose a plan for Care Cash."));
+        mockMvc.perform(post("/portfolio/shop")
+                        .with(signedIn("customer", "password"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"product\":\"Care Cash\",\"tier\":\"Silver\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.customer.kycStatus").value("VERIFIED"))
                 .andExpect(jsonPath("$.policies[?(@.product == 'Care Cash')]").isEmpty())

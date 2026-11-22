@@ -306,6 +306,27 @@ databaseChangeLog:
       file: changes/111-mysql-new-booleans.yaml
       relativeToChangelogFile: true
   - include:
+      file: changes/120-underwriting-controls.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/121-new-business-capture.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/122-dependants-and-product-rules.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/123-life-consent.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/124-credit-benefits.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/125-product-packs.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/126-inception-snapshot.yaml
+      relativeToChangelogFile: true
+  - include:
       file: changes/135-group-scheme-setup.yaml
       relativeToChangelogFile: true
   - include:

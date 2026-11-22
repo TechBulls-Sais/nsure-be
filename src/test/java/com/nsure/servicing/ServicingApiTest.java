@@ -247,6 +247,187 @@ class ServicingApiTest {
     }
 
     @Test
+    void aReAddedLifeContinuesItsLimitsAndAClaimWaitsFromTheLifesOwnStart() throws Exception {
+        String policy = activePolicy("Kagiso Continuity", "Family Funeral", "Bronze",
+                ",\"lives\":[{\"relationship\":\"Spouse\",\"fullName\":\"Neo Continuity\",\"dateOfBirth\":\""
+                        + LocalDate.now().minusYears(33) + "\"}]");
+        dates(policy, LocalDate.now().minusDays(200), LocalDate.now().plusDays(1), LocalDate.now().plusDays(31));
+        String base = "/servicing/policies/" + policy;
+        String view = mockMvc.perform(get(base).with(signedIn("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        Integer spouse = ((List<Integer>) JsonPath.read(view, "$.lives[?(@.relationship == 'Spouse')].id")).get(0);
+        // NS-IL04-001: lives captured at application start cover, and their waiting periods, with the policy.
+        dispatcher.dispatch();
+        assertThat(jdbc.queryForObject("select waiting_period_start from ins_policy_life_cover where id = ?",
+                java.sql.Date.class, spouse)).isNotNull();
+        // A paid claim already used part of the spouse's limit.
+        jdbc.update("insert into clm_limit_entry (policy_ref, life_key, claim_ref, entry, amount, created_by, created_at)"
+                + " values (?, ?, 'CLM-TEST', 'CONSUMED', 4000, 'test', CURRENT_TIMESTAMP)", policy, "LIFE-" + spouse);
+        String removal = JsonPath.read(mockMvc.perform(json(post(base + "/endorsements"), "admin",
+                        "{\"type\":\"REMOVE_LIFE\",\"lifeId\":" + spouse + ",\"reason\":\"Moved out of the household\"}"))
+                .andExpect(jsonPath("$.status").value("APPLIED"))
+                .andReturn().getResponse().getContentAsString(), "$.ref");
+        // NS-IL03-003: the applied endorsement reissues the policy schedule; the one it replaces is kept, superseded.
+        dispatcher.dispatch();
+        dispatcher.dispatch();
+        assertThat(jdbc.queryForList("select superseded_reason from ins_policy_document d join ins_policy p on d.policy_id = p.id"
+                + " where p.record_ref = ? and d.status = 'SUPERSEDED'", String.class, policy))
+                .containsExactly("Endorsement " + removal + " applied");
+        dispatcher.dispatch();
+        assertThat(jdbc.queryForObject("select count(*) from ins_policy_document d join ins_policy p on d.policy_id = p.id"
+                + " where p.record_ref = ?", Long.class, policy)).isEqualTo(2);
+        String again = JsonPath.read(mockMvc.perform(json(post(base + "/endorsements"), "admin", "{\"type\":\"ADD_LIFE\","
+                        + "\"fullName\":\"Neo Continuity\",\"relationship\":\"Spouse\",\"dateOfBirth\":\""
+                        + LocalDate.now().minusYears(33) + "\",\"dobEvidence\":\"Omang 123456789\",\"reason\":\"Moved back\"}"))
+                .andReturn().getResponse().getContentAsString(), "$.ref");
+        mockMvc.perform(json(post("/servicing/endorsements/" + again + "/decision"), "underwriter",
+                        "{\"approve\":true,\"note\":\"Previously covered\"}"))
+                .andExpect(status().isOk());
+        String after = mockMvc.perform(get(base).with(signedIn("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        Integer readded = ((List<Integer>) JsonPath.read(after,
+                "$.lives[?(@.fullName == 'Neo Continuity' && @.status == 'ACTIVE')].id")).get(0);
+        // AT-IL04-02: the re-added person continues the first row: the limit already used is not reset.
+        assertThat((List<Integer>) JsonPath.read(after, "$.lives[?(@.id == " + readded + ")].continuityOf"))
+                .containsExactly(spouse);
+        assertThat((List<String>) JsonPath.read(after, "$.lives[?(@.id == " + readded + ")].dobEvidence"))
+                .containsExactly("Omang 123456789");
+        assertThat((List<Number>) JsonPath.read(after, "$.roster.lives[?(@.lifeId == " + readded + ")].used"))
+                .singleElement().satisfies(u -> assertThat(u.doubleValue()).isEqualTo(4000.0));
+
+        // NS-IL04-003: a child added today waits from today, not from the policy's start 200 days ago.
+        String child = JsonPath.read(mockMvc.perform(json(post(base + "/endorsements"), "admin", "{\"type\":\"ADD_LIFE\","
+                        + "\"fullName\":\"Tumi Continuity\",\"relationship\":\"Child\",\"dateOfBirth\":\""
+                        + LocalDate.now().minusYears(3) + "\",\"reason\":\"New child\"}"))
+                .andReturn().getResponse().getContentAsString(), "$.ref");
+        mockMvc.perform(json(post("/servicing/endorsements/" + child + "/decision"), "underwriter",
+                        "{\"approve\":true,\"note\":\"Eligible child\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/claims"), "assessor", "{\"policy\":\"" + policy
+                        + "\",\"claimantName\":\"Kagiso Continuity\",\"claimantMobile\":\"+267 72 000 000\","
+                        + "\"claimantRelationship\":\"Parent\",\"eventDate\":\"" + LocalDate.now()
+                        + "\",\"description\":\"Passed away in hospital.\",\"coveredLife\":\"Tumi Continuity\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.checks[?(@.name == 'Waiting Period')].result").value("Fail"))
+                .andExpect(jsonPath("$.checks[?(@.name == 'Policy Active')].result").value("Pass"));
+        // NS-IL04-004: a ceased life is not covered for an event after its cover ended.
+        Integer removed = ((List<Integer>) JsonPath.read(after,
+                "$.lives[?(@.fullName == 'Neo Continuity' && @.status == 'CEASED')].id")).get(0);
+        jdbc.update("update ins_policy_life_cover set effective_to = ? where id = ?",
+                java.sql.Date.valueOf(LocalDate.now().minusDays(5)), removed);
+        jdbc.update("update ins_policy_life_cover set effective_from = ? where id = ?",
+                java.sql.Date.valueOf(LocalDate.now().minusDays(1)), readded);
+        mockMvc.perform(json(post("/portfolio/claims"), "assessor", "{\"policy\":\"" + policy
+                        + "\",\"claimantName\":\"Kagiso Continuity\",\"claimantMobile\":\"+267 72 000 000\","
+                        + "\"claimantRelationship\":\"Spouse\",\"eventDate\":\"" + LocalDate.now().minusDays(3)
+                        + "\",\"description\":\"Accident at work.\",\"coveredLife\":\"" + removed + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.checks[?(@.name == 'Policy Active')].result").value("Fail"));
+    }
+
+    @Test
+    void aRiskIncreaseIsDecidedWithinUnderwritingAuthorityAndAnEndedPolicyKeepsItsBeneficiaries() throws Exception {
+        String policy = activePolicy("Mpho Increase", "Term Life", "Bronze", "");
+        String base = "/servicing/policies/" + policy;
+        String increase = JsonPath.read(mockMvc.perform(json(post(base + "/endorsements"), "admin",
+                        "{\"type\":\"SUM_ASSURED\",\"tier\":\"Silver\",\"reason\":\"More cover for a new home loan\"}"))
+                .andExpect(jsonPath("$.status").value("REFERRED_UNDERWRITING"))
+                .andReturn().getResponse().getContentAsString(), "$.ref");
+        // NS-IL03-003: the junior underwriter's BWP 250,000 authority does not cover the BWP 500,000 total after it.
+        mockMvc.perform(json(post("/servicing/endorsements/" + increase + "/decision"), "underwriter2",
+                        "{\"approve\":true,\"note\":\"Income evidence seen\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("underwriting authority")));
+        mockMvc.perform(json(post("/servicing/endorsements/" + increase + "/decision"), "underwriter",
+                        "{\"approve\":true,\"note\":\"Income evidence seen\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPLIED"));
+        // NS-IL03-001: the inception snapshot keeps the issue terms; the endorsement changed the policy, not it.
+        mockMvc.perform(get(base).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.policy.sumAssured").value(500000.0))
+                .andExpect(jsonPath("$.inceptionSnapshot.sumAssured").value("250000.00"))
+                .andExpect(jsonPath("$.inceptionSnapshot.tier").value("Bronze"))
+                .andExpect(jsonPath("$.inceptionSnapshot.productVersion").isNotEmpty())
+                .andExpect(jsonPath("$.inceptionSha256").isNotEmpty());
+        // NS-IL03-002: contact details change as an endorsement, previewed and recorded on the policy's history.
+        mockMvc.perform(json(post(base + "/endorsements"), "admin",
+                        "{\"type\":\"CONTACT\",\"email\":\"not-an-email\",\"reason\":\"New email address\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post(base + "/endorsements"), "admin",
+                        "{\"type\":\"CONTACT\",\"email\":\"mpho.new@example.com\",\"phone\":\"+267 71 999 001\","
+                                + "\"reason\":\"Customer phoned with new details\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPLIED"));
+        String customerRef = jdbc.queryForObject("select customer_ref from ins_policy where record_ref = ?", String.class, policy);
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select email from ins_customer where record_ref = ?",
+                String.class, customerRef)).isEqualTo("mpho.new@example.com");
+        // NS-IL03-002: once the contract has ended, its beneficiaries no longer change.
+        mockMvc.perform(json(post(base + "/termination"), "admin", "{\"reason\":\"DEATH\",\"note\":\"Death certificate received\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(json(post("/portfolio/policies/" + policy + "/beneficiaries"), "admin",
+                        "{\"fullName\":\"Late Addition\",\"relationship\":\"Spouse\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("can no longer be changed")));
+    }
+
+    @Test
+    void productRulesSetContinuityRemovalApprovalLapseAndCoolingOff() throws Exception {
+        Integer rule = ((List<Integer>) JsonPath.read(mockMvc.perform(get("/servicing/rules").with(signedIn("admin", "password")))
+                .andReturn().getResponse().getContentAsString(), "$[?(@.product == 'Family Funeral')].id")).get(0);
+        mockMvc.perform(json(put("/servicing/rules/" + rule), "admin", "{\"lifeContinuity\":\"RESTART\","
+                        + "\"removalApproval\":\"ALWAYS\",\"reviewLeadDays\":60,\"noCoverMonths\":2,\"coolingOffDays\":14}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lifeContinuity").value("RESTART"))
+                .andExpect(jsonPath("$.removalApproval").value("ALWAYS"))
+                .andExpect(jsonPath("$.noCoverMonths").value(2));
+        try {
+            String policy = activePolicy("Lesego Rules", "Family Funeral", "Bronze",
+                    ",\"lives\":[{\"relationship\":\"Spouse\",\"fullName\":\"Kago Rules\",\"dateOfBirth\":\""
+                            + LocalDate.now().minusYears(30) + "\"}]");
+            dates(policy, LocalDate.now().minusDays(100), LocalDate.now().plusDays(1), LocalDate.now().plusDays(31));
+            String base = "/servicing/policies/" + policy;
+            Integer spouse = ((List<Integer>) JsonPath.read(mockMvc.perform(get(base).with(signedIn("admin", "password")))
+                    .andReturn().getResponse().getContentAsString(), "$.lives[?(@.relationship == 'Spouse')].id")).get(0);
+            // NS-IL04-003: every removal needs a second person under this product rule.
+            String removal = JsonPath.read(mockMvc.perform(json(post(base + "/endorsements"), "admin",
+                            "{\"type\":\"REMOVE_LIFE\",\"lifeId\":" + spouse + ",\"reason\":\"Moved out\"}"))
+                    .andExpect(jsonPath("$.status").value("PENDING_APPROVAL"))
+                    .andReturn().getResponse().getContentAsString(), "$.ref");
+            mockMvc.perform(json(post("/servicing/endorsements/" + removal + "/decision"), "secadmin",
+                            "{\"approve\":true,\"note\":\"Confirmed with the policyholder\"}"))
+                    .andExpect(status().isOk());
+            // RESTART: the same person added again starts a new waiting period on the effective date.
+            String again = JsonPath.read(mockMvc.perform(json(post(base + "/endorsements"), "admin", "{\"type\":\"ADD_LIFE\","
+                            + "\"fullName\":\"Kago Rules\",\"relationship\":\"Spouse\",\"dateOfBirth\":\""
+                            + LocalDate.now().minusYears(30) + "\",\"reason\":\"Moved back\"}"))
+                    .andReturn().getResponse().getContentAsString(), "$.ref");
+            mockMvc.perform(json(post("/servicing/endorsements/" + again + "/decision"), "underwriter",
+                            "{\"approve\":true,\"note\":\"Previously covered\"}"))
+                    .andExpect(status().isOk());
+            mockMvc.perform(get(base).with(signedIn("admin", "password")))
+                    .andExpect(jsonPath("$.lives[?(@.fullName == 'Kago Rules' && @.status == 'ACTIVE')].waitingPeriodStart")
+                            .value(LocalDate.now().toString()));
+            // NS-IL04-003: the removal's pro-rata credit was put on the next instalment as an adjustment.
+            assertThat(jdbc.queryForObject("select count(*) from bil_adjustment a join bil_instalment i on a.instalment_id = i.id"
+                    + " where i.policy_ref = ? and a.amount < 0", Long.class, policy)).isEqualTo(1);
+            // NS-IL03-004: the product's period without cover (2 months) decides the lapse.
+            LocalDate due = LocalDate.now().minusMonths(2).minusDays(5);
+            tx.executeWithoutResult(s -> em.createQuery("update InsurancePolicy p set p.nextPremiumDue = :due,"
+                            + " p.gracePeriodEnd = :grace where p.ref = :ref")
+                    .setParameter("due", due).setParameter("grace", due.plusDays(20)).setParameter("ref", policy)
+                    .executeUpdate());
+            tx.execute(s -> policies.lapseOverdue());
+            tx.execute(s -> policies.lapseOverdue());
+            mockMvc.perform(get(base).with(signedIn("admin", "password")))
+                    .andExpect(jsonPath("$.policy.contractStatus").value("Lapsed"));
+        } finally {
+            mockMvc.perform(json(put("/servicing/rules/" + rule), "admin", "{\"lifeContinuity\":\"KEEP_EARLIEST\","
+                            + "\"removalApproval\":\"BACKDATED\",\"reviewLeadDays\":90,\"noCoverMonths\":3,\"coolingOffDays\":30}"))
+                    .andExpect(status().isOk());
+        }
+    }
+
+    @Test
     void livesCapturedAtApplicationAreAnnouncedAtIssueAndCeaseWithThePolicy() throws Exception {
         String policy = activePolicy("Goitse Roster", "Family Funeral", "Bronze",
                 ",\"lives\":[{\"relationship\":\"Spouse\",\"fullName\":\"Mpho Roster\",\"dateOfBirth\":\""

@@ -115,6 +115,14 @@ public class InsurancePolicy extends CoverRecord implements TieredCover {
     @Column(name = "cover_start_date")
     private LocalDate coverStartDate;
 
+    /** The selected policy term in years, where the product sells terms (section 06 Term Life). */
+    @Column(name = "term_years")
+    private Integer termYears;
+
+    /** Cover ends here: the selected term or the cessation age, whichever is earlier. */
+    @Column(name = "cover_end_date")
+    private LocalDate coverEndDate;
+
     @Column(name = "next_premium_due")
     private LocalDate nextPremiumDue;
 
@@ -187,6 +195,22 @@ public class InsurancePolicy extends CoverRecord implements TieredCover {
 
     public LocalDate getCoverStartDate() {
         return coverStartDate;
+    }
+
+    public Integer getTermYears() {
+        return termYears;
+    }
+
+    public void setTermYears(Integer termYears) {
+        this.termYears = termYears;
+    }
+
+    public LocalDate getCoverEndDate() {
+        return coverEndDate;
+    }
+
+    public void setCoverEndDate(LocalDate coverEndDate) {
+        this.coverEndDate = coverEndDate;
     }
 
     public void setCoverStartDate(LocalDate coverStartDate) {

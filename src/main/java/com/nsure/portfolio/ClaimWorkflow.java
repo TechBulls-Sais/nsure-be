@@ -176,6 +176,13 @@ public class ClaimWorkflow {
                     + String.join(", ", new java.util.TreeSet<>(SOURCES)) + ".");
         }
         InsurancePolicy policy = policies.policy(required(input.policyRef(), "policy"));
+        // NS-IL05-005: a credit life policy pays on its loan (balance, lender and surplus payee), never its sum assured
+        // through the general claims route.
+        if (!em.createQuery("select l.ref from Loan l where l.policyRef = :ref", String.class)
+                .setParameter("ref", policy.getRef()).getResultList().isEmpty()) {
+            throw new IllegalArgumentException(policy.getRef() + " is a credit life policy: claims are made on its loan"
+                    + " (Credit life > loan > Claim), which pays the outstanding balance to the lender.");
+        }
         String claimant = required(input.claimantName(), "claimantName");
         String mobile = required(input.claimantMobile(), "claimantMobile");
         String relationship = required(input.claimantRelationship(), "claimantRelationship");
@@ -1010,9 +1017,20 @@ public class ClaimWorkflow {
         //    the event date, not on the policy's status today, so a claim reported after a lapse or cancellation is
         //    assessed on the cover that applied when the event happened.
         boolean active = coverInForceOn(policy, event);
-        // 2. Waiting Period: the event is at least the product's waiting period after cover started.
-        boolean waited = start != null
-                && ChronoUnit.DAYS.between(start, event) >= policies.terms(policy).getWaitingPeriodDays();
+        // NS-IL04-003/004: a claim for a named insured life needs that life covered on the event date, and its
+        // waiting period runs from the life's own start (a dependant added mid-term waits from when they joined).
+        PolicyLifeCover life = claim.getCoveredLifeId() == null ? null : em.find(PolicyLifeCover.class, claim.getCoveredLifeId());
+        if (life != null && !life.coveredOn(event)) {
+            active = false;
+        }
+        LocalDate waitingFrom = start;
+        if (life != null && life.getWaitingPeriodStart() != null && start != null
+                && life.getWaitingPeriodStart().isAfter(start)) {
+            waitingFrom = life.getWaitingPeriodStart();
+        }
+        // 2. Waiting Period: the event is at least the product's waiting period after cover (or the life's) started.
+        boolean waited = waitingFrom != null
+                && ChronoUnit.DAYS.between(waitingFrom, event) >= policies.terms(policy).getWaitingPeriodDays();
         // 3. Premiums Paid: the event is on or after the cover start (premiums paid before then bought no cover
         //    for it), and the policy was paid up to it or the event fell within the grace period.
         boolean paid = start != null && !event.isBefore(start)

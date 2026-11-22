@@ -31,17 +31,28 @@ public class ApplicationCapture {
     public static final String EVIDENCE_NEEDED = "Evidence needed";
     /** The workflow-log type of an application's timeline (IL01 workspace). */
     public static final String HISTORY = "Application";
-    static final Set<String> CHANNELS = Set.of("DIRECT", "BRANCH", "AGENT", "BROKER", "CALL_CENTRE");
+    static final Set<String> CHANNELS = Set.of("DIRECT", "BRANCH", "AGENT", "BROKER", "CALL_CENTRE", "PORTAL");
     static final Set<String> MANDATES = Set.of("DEBIT_ORDER", "MOBILE_WALLET", "CARD", "BANK_EFT");
 
     private final EntityManager em;
     private final Outbox outbox;
     private final com.nsure.distribution.SalesAuthority sales;
+    private final ProductTerms terms;
+    private final com.fasterxml.jackson.databind.ObjectMapper mapper;
+    /** Payer/proposer relationships allowed besides the relationship types (demo default; NS-IL01-003). */
+    private final List<String> extraRelationships;
 
-    public ApplicationCapture(EntityManager em, Outbox outbox, com.nsure.distribution.SalesAuthority sales) {
+    public ApplicationCapture(EntityManager em, Outbox outbox, com.nsure.distribution.SalesAuthority sales,
+            ProductTerms terms, com.fasterxml.jackson.databind.ObjectMapper mapper,
+            @org.springframework.beans.factory.annotation.Value("${nsure.new-business.extra-payer-relationships:Employer,Guardian}")
+            String extraRelationships) {
         this.em = em;
         this.outbox = outbox;
         this.sales = sales;
+        this.terms = terms;
+        this.mapper = mapper;
+        this.extraRelationships = java.util.Arrays.stream(extraRelationships.split(",")).map(String::trim)
+                .filter(v -> !v.isEmpty()).toList();
     }
 
     /** Copies whatever the body carries onto the application; answers are stored once it has a reference. */
@@ -50,14 +61,31 @@ public class ApplicationCapture {
         if (body == null) {
             return;
         }
-        if (body.has("proposerName")) {
+        if (body.has("proposerName") || body.has("proposerRef")) {
             app.setProposerName(clip(text(body, "proposerName"), 100));
             app.setProposerRelationship(clip(text(body, "proposerRelationship"), 60));
+            // NS-IL01-002: a proposer who is already a party is linked by reference; the name comes from the record.
+            CustomerAccount party = party(text(body, "proposerRef"), "proposer");
+            app.setProposerRef(party == null ? null : party.getRef());
+            if (party != null) {
+                app.setProposerName(clip(party.getName(), 100));
+            }
         }
-        if (body.has("payerName")) {
+        if (body.has("payerName") || body.has("payerRef")) {
             app.setPayerName(clip(text(body, "payerName"), 100));
             app.setPayerRelationship(clip(text(body, "payerRelationship"), 60));
             app.setPayerIdNumber(clip(text(body, "payerIdNumber"), 40));
+            CustomerAccount party = party(text(body, "payerRef"), "payer");
+            app.setPayerRef(party == null ? null : party.getRef());
+            if (party != null) {
+                app.setPayerName(clip(party.getName(), 100));
+                if (app.getPayerIdNumber() == null) {
+                    app.setPayerIdNumber(clip(party.getPoiNumber(), 40));
+                }
+            }
+        }
+        if (body.has("beneficiaries")) {
+            app.setBeneficiaries(beneficiariesJson(app, body.get("beneficiaries")));
         }
         if (body.has("mandateMethod")) {
             String method = upper(text(body, "mandateMethod"));
@@ -94,6 +122,21 @@ public class ApplicationCapture {
             }
             app.setChannel(channel);
             app.setIntermediaryCode(clip(text(body, "intermediaryCode"), 30));
+        }
+        if (body.has("occupation")) {
+            app.setOccupation(clip(text(body, "occupation"), 100));
+        }
+        if (body.has("termYears")) {
+            // Section 06 Term Life: the selected term must be one the product sells.
+            String term = text(body, "termYears");
+            Integer years = term == null ? null : Integer.valueOf(term);
+            List<Integer> options = termOptions(app.getProduct());
+            if (years != null && !options.contains(years)) {
+                throw new IllegalArgumentException(app.getProduct() + (options.isEmpty() ? " has no selected policy term."
+                        : " is sold for terms of " + options.stream().map(String::valueOf)
+                                .collect(java.util.stream.Collectors.joining(", ")) + " years."));
+            }
+            app.setTermYears(years);
         }
         if (body.path("declarationAccepted").asBoolean(false) && app.getDeclaredAt() == null) {
             app.setDeclaredBy(actor);
@@ -146,6 +189,19 @@ public class ApplicationCapture {
         if (app.getPayerName() != null && blank(app.getPayerRelationship())) {
             problems.add("Say how the payer " + app.getPayerName() + " is related to the policyholder.");
         }
+        // NS-IL01-003: proposer and payer relationships must be eligible relationship types.
+        List<String> allowed = relationships();
+        if (!blank(app.getPayerRelationship()) && !containsIgnoreCase(allowed, app.getPayerRelationship())) {
+            problems.add("The payer's relationship \"" + app.getPayerRelationship() + "\" is not an eligible relationship ("
+                    + String.join(", ", allowed) + ").");
+        }
+        if (app.getProposerName() != null && blank(app.getProposerRelationship())) {
+            problems.add("Say how the proposer " + app.getProposerName() + " is related to the life insured.");
+        }
+        if (!blank(app.getProposerRelationship()) && !containsIgnoreCase(allowed, app.getProposerRelationship())) {
+            problems.add("The proposer's relationship \"" + app.getProposerRelationship()
+                    + "\" is not an eligible relationship (" + String.join(", ", allowed) + ").");
+        }
         if ("DEBIT_ORDER".equals(app.getMandateMethod())
                 && (blank(app.getMandateInstitution()) || blank(app.getMandateAccount()) || app.getMandateDebitDay() == null)) {
             problems.add("A debit order needs the bank, the account number and the debit day.");
@@ -153,12 +209,18 @@ public class ApplicationCapture {
         if (app.getChannel() != null && Set.of("AGENT", "BROKER").contains(app.getChannel()) && blank(app.getIntermediaryCode())) {
             problems.add("An agent or broker application needs the intermediary's code.");
         }
-        // NS-SH06-001 / AT-SH06-02: a suspended, lapsed or expired intermediary sells nothing new (as configured).
-        if (app.getChannel() != null && Set.of("AGENT", "BROKER").contains(app.getChannel())) {
+        // NS-IL01-002 / NS-SH06-001 / AT-SH06-02: the intermediary must be appointed, not suspended, lapsed or
+        // expired (as configured), and hold an agreement covering the product.
+        if (!blank(app.getIntermediaryCode())) {
             String blocked = sales.problem(app.getIntermediaryCode(), app.getProduct());
             if (blocked != null) {
                 problems.add(blocked);
             }
+        }
+        // NS-IL01-001: the product must be distributed through the application's channel.
+        String scope = distributionProblem(app.getProduct(), app.getChannel() == null ? "DIRECT" : app.getChannel());
+        if (scope != null) {
+            problems.add(scope);
         }
         if (app.getDeclaredAt() == null) {
             problems.add("The applicant's declaration has not been accepted.");
@@ -172,7 +234,16 @@ public class ApplicationCapture {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void submit(InsuranceApplication app, CustomerAccount customer, String actor) {
-        List<String> problems = submissionProblems(app);
+        submit(app, customer, actor, true);
+    }
+
+    /**
+     * As {@link #submit(InsuranceApplication, CustomerAccount, String)}; {@code complete} false is a legacy portal
+     * purchase that asked no disclosure questions (portal-disclosures-required off): the rules still assess it.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void submit(InsuranceApplication app, CustomerAccount customer, String actor, boolean complete) {
+        List<String> problems = complete ? submissionProblems(app) : List.of();
         if (!problems.isEmpty()) {
             throw new IllegalArgumentException("The application cannot be submitted yet: " + String.join(" ", problems));
         }
@@ -253,7 +324,12 @@ public class ApplicationCapture {
                 app.getIntermediaryCode(), app.getDeclaredBy(), app.getDeclaredAt(), app.getSubmittedBy(),
                 app.getSubmittedAt(), disclosures, items, draft ? submissionProblems(app) : List.of(),
                 missingEvidence(app, customer), preCapture, app.getPayerName(), app.getPayerRelationship(),
-                app.getRowVersion());
+                app.getRowVersion(), app.getOccupation(), app.getProposerName(), app.getProposerRelationship(),
+                app.getProposerRef(), app.getPayerRef(), app.getTermYears(), termOptions(app.getProduct()),
+                beneficiaries(app).stream()
+                        .map(b -> new PortfolioViews.BeneficiaryView(null, b.fullName(), b.relationship(), b.nationalId(),
+                                b.mobile(), null, null, b.primary()))
+                        .toList());
     }
 
     public List<PortfolioViews.DisclosureItem> questionsFor(String product) {
@@ -300,6 +376,120 @@ public class ApplicationCapture {
         return em.createQuery("select a from ApplicationAnswer a where a.applicationRef = :ref and a.code = :code",
                 ApplicationRecords.Answer.class).setParameter("ref", ref).setParameter("code", code)
                 .getResultStream().findFirst().orElse(null);
+    }
+
+    /**
+     * Why the product may not be sold through the channel (NS-IL01-001), or null. A product with no distribution
+     * scope rows is sold on every channel.
+     */
+    public String distributionProblem(String product, String channel) {
+        List<String> channels = em.createQuery("select d.channel from NbDistributionScope d where d.product = :p",
+                String.class).setParameter("p", product).getResultList();
+        if (channels.isEmpty() || channels.contains(channel)) {
+            return null;
+        }
+        return product + " is not distributed through the " + channel + " channel (sold through: "
+                + String.join(", ", channels) + ").";
+    }
+
+    /** Payer and proposer relationships: the relationship types other than the main insured, plus the extras. */
+    public List<String> relationships() {
+        List<String> names = new ArrayList<>(em.createQuery("select r.relationshipName from RelationshipType r"
+                + " where r.selfRelationship = false order by r.id", String.class).getResultList());
+        for (String extra : extraRelationships) {
+            if (!containsIgnoreCase(names, extra)) {
+                names.add(extra);
+            }
+        }
+        return names;
+    }
+
+    /** The saleable policy terms of a product in years (product servicing rule); empty when it sells none. */
+    public List<Integer> termOptions(String product) {
+        List<String> found = em.createQuery("select r.termOptions from ServicingRule r where r.product = :p", String.class)
+                .setParameter("p", product).getResultList();
+        String raw = found.isEmpty() ? null : found.get(0);
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(raw.split(",")).map(String::trim).filter(v -> !v.isEmpty())
+                .map(Integer::valueOf).toList();
+    }
+
+    /** The term a policy takes: the one selected, or the longest the product sells when none was chosen. */
+    public Integer termFor(InsuranceApplication app) {
+        List<Integer> options = termOptions(app.getProduct());
+        if (options.isEmpty()) {
+            return null;
+        }
+        return app.getTermYears() != null ? app.getTermYears() : options.stream().max(Integer::compareTo).orElse(null);
+    }
+
+    /** The beneficiaries nominated on the application (NS-IL01-002). */
+    public List<PolicyWorkflow.BeneficiaryInput> beneficiaries(InsuranceApplication app) {
+        List<PolicyWorkflow.BeneficiaryInput> list = new ArrayList<>();
+        if (blank(app.getBeneficiaries())) {
+            return list;
+        }
+        try {
+            for (JsonNode b : mapper.readTree(app.getBeneficiaries())) {
+                list.add(new PolicyWorkflow.BeneficiaryInput(text(b, "fullName"), text(b, "relationship"),
+                        text(b, "nationalId"), text(b, "mobile"), null, null, b.path("primary").asBoolean(false)));
+            }
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalStateException(ex);
+        }
+        return list;
+    }
+
+    private String beneficiariesJson(InsuranceApplication app, JsonNode node) {
+        if (node == null || node.isNull() || (node.isArray() && node.isEmpty())) {
+            return null;
+        }
+        if (!node.isArray()) {
+            throw new IllegalArgumentException("beneficiaries must be a list.");
+        }
+        int max;
+        try {
+            max = terms.inForce(app.getProduct(), java.time.LocalDate.now()).getMaxBeneficiaries();
+        } catch (IllegalStateException ex) {
+            max = 5;
+        }
+        if (node.size() > max) {
+            throw new IllegalArgumentException("A " + app.getProduct() + " policy can have at most " + max
+                    + (max == 1 ? " beneficiary." : " beneficiaries."));
+        }
+        com.fasterxml.jackson.databind.node.ArrayNode out = mapper.createArrayNode();
+        boolean primary = false;
+        for (JsonNode b : node) {
+            String name = text(b, "fullName");
+            String relationship = text(b, "relationship");
+            if (name == null || name.length() < 2 || relationship == null) {
+                throw new IllegalArgumentException("Each beneficiary needs a full name and a relationship.");
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode row = out.addObject();
+            row.put("fullName", clip(name, 100));
+            row.put("relationship", clip(relationship, 60));
+            row.put("nationalId", clip(text(b, "nationalId"), 40));
+            row.put("mobile", clip(text(b, "mobile"), 40));
+            boolean isPrimary = b.path("primary").asBoolean(false) && !primary;
+            primary = primary || isPrimary;
+            row.put("primary", isPrimary);
+        }
+        return out.toString();
+    }
+
+    private CustomerAccount party(String ref, String role) {
+        if (ref == null) {
+            return null;
+        }
+        return em.createQuery("select c from CustomerAccount c where c.ref = :ref", CustomerAccount.class)
+                .setParameter("ref", ref.trim()).getResultStream().findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("The " + role + " " + ref + " is not a known party."));
+    }
+
+    private static boolean containsIgnoreCase(List<String> values, String value) {
+        return values.stream().anyMatch(v -> v.equalsIgnoreCase(value.trim()));
     }
 
     private static String mask(String account) {

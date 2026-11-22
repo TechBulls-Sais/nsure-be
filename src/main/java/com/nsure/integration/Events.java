@@ -96,6 +96,8 @@ public final class Events {
     public static final String ISSUE_REQUESTED = "IssueRequested";
     // IL02 underwriting.
     public static final String EVIDENCE_REQUESTED = "EvidenceRequested";
+    /** A reminder for underwriting evidence that is due or overdue (IL02); references only. */
+    public static final String EVIDENCE_REMINDER_SENT = "EvidenceReminderSent";
     public static final String UNDERWRITING_DECIDED = "UnderwritingDecided";
     public static final String OFFER_REVISED = "OfferRevised";
     public static final String OFFER_ANSWERED = "OfferAnswered";
@@ -115,6 +117,8 @@ public final class Events {
     public static final String LOAN_BALANCE_UPDATED = "LoanBalanceUpdated";
     public static final String LOAN_SETTLED = "LoanSettled";
     public static final String CREDIT_COVER_TERMINATED = "CreditCoverTerminated";
+    /** A verified individual credit life claim paid to the lender and any surplus payee (IL05); references only. */
+    public static final String CREDIT_CLAIM_PAID = "CreditClaimPaid";
     // Group lifecycle.
     public static final String SCHEME_QUOTED = "SchemeQuoted";
     public static final String SCHEME_ACTIVATED = "SchemeActivated";

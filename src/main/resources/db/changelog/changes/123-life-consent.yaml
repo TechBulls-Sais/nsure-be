@@ -1,0 +1,28 @@
+# IL04 relationship-specific consent (Nsure Life NS-IL04-006): each insured life's own consent decides whether the
+# policyholder may open that life's restricted medical evidence. Adults' medical documents are withheld from the
+# policyholder without it; the age of majority (18) is a demo default (nsure.privacy.adult-age).
+databaseChangeLog:
+  - changeSet:
+      id: 123-life-consent
+      author: nsure
+      changes:
+        - createTable:
+            tableName: pol_life_consent
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              # The insured life (ins_policy_life_cover id) whose consent this is.
+              - column: {name: life_id, type: bigint, constraints: {nullable: false}}
+              # What the life consents to: MEDICAL_TO_POLICYHOLDER (the policyholder may open their medical evidence).
+              - column: {name: scope, type: varchar(40), constraints: {nullable: false}}
+              # GRANTED or WITHDRAWN; the newest row for a life and scope is the one that applies.
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              # How the consent was given (signed form, recorded call), never medical detail.
+              - column: {name: evidence, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: recorded_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: recorded_at, type: timestamp(6), constraints: {nullable: false}}
+        - createIndex:
+            tableName: pol_life_consent
+            indexName: ix_pol_life_consent_life
+            columns:
+              - column: {name: life_id}

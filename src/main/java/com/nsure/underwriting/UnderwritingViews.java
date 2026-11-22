@@ -41,9 +41,21 @@ public final class UnderwritingViews {
             LocalDateTime updatedAt,
             long version,
             int evidenceOutstanding,
-            // The largest sum assured the signed-in user may decide; null when not limited.
+            // The largest aggregate exposure the signed-in user may decide; null when not limited.
             BigDecimal myAuthority,
-            boolean withinMyAuthority) {
+            boolean withinMyAuthority,
+            String occupation,
+            // The decision stands until this date, then must be reassessed (NS-IL02-003/006).
+            LocalDate decisionValidUntil,
+            boolean decisionExpired,
+            // NOT_SCREENED, CLEAR, HIT (blocks acceptance and issue), CLEARED or CONFIRMED.
+            String screeningStatus,
+            String screeningDetail,
+            String screeningResolvedBy,
+            LocalDateTime screeningResolvedAt,
+            // The signed-in user's loading limit and decision types; null when not limited.
+            BigDecimal myMaxLoadingPercent,
+            List<String> myDecisionTypes) {
     }
 
     public record EvidenceView(
@@ -59,7 +71,10 @@ public final class UnderwritingViews {
             String resolvedBy,
             LocalDateTime resolvedAt,
             // Withheld on restricted (clinical) evidence from anyone who is not an underwriter.
-            String note) {
+            String note,
+            Long lifeId,
+            int reminderCount,
+            LocalDateTime lastRemindedAt) {
     }
 
     public record DecisionView(
@@ -84,7 +99,7 @@ public final class UnderwritingViews {
     public record ExposureLine(String policyRef, String product, BigDecimal sumAssured, String status) {
     }
 
-    public record LifeView(String fullName, String relationship, LocalDate dateOfBirth, int ageAtEntry,
+    public record LifeView(Long id, String fullName, String relationship, LocalDate dateOfBirth, int ageAtEntry,
             BigDecimal coverAmount) {
     }
 
@@ -109,11 +124,24 @@ public final class UnderwritingViews {
             boolean referTobacco,
             boolean referTreatment,
             String updatedBy,
-            LocalDateTime updatedAt) {
+            LocalDateTime updatedAt,
+            List<String> referDisclosureCodes,
+            String referOccupations,
+            BigDecimal maxLoadingPercent,
+            int decisionValidityDays,
+            // A proposed change waiting for a second approver, or null.
+            RuleChangeView pendingChange) {
+    }
+
+    /** A proposed rule set change and its outcome (NS-IL01-005): applied only once a second person approves it. */
+    public record RuleChangeView(Long id, Long ruleSetId, String product, String versionLabel,
+            com.fasterxml.jackson.databind.JsonNode proposal, com.fasterxml.jackson.databind.JsonNode previous,
+            String status, String proposedBy, LocalDateTime proposedAt, String decidedBy, LocalDateTime decidedAt,
+            String decisionNote) {
     }
 
     public record AuthorityView(Long roleId, String role, BigDecimal maxSumAssured, String updatedBy,
-            LocalDateTime updatedAt) {
+            LocalDateTime updatedAt, BigDecimal maxLoadingPercent, List<String> decisionTypes) {
     }
 
     public record Summary(long referred, long evidencePending, long offersPending, long acceptedToday,

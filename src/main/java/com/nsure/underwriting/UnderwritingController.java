@@ -73,6 +73,18 @@ public class UnderwritingController {
         return underwriting.reopen(ref, body);
     }
 
+    /** {outcome CLEARED|CONFIRMED, note}: compliance's answer to a possible screening match. */
+    @PostMapping("/cases/{ref}/screening")
+    public UnderwritingViews.CaseDetail resolveScreening(@PathVariable String ref, @RequestBody JsonNode body) {
+        return underwriting.resolveScreening(ref, body);
+    }
+
+    /** Runs the daily review now: expired decisions and ended postponements reopen, due evidence is reminded. */
+    @PostMapping("/review-due")
+    public java.util.Map<String, List<String>> reviewDue() {
+        return underwriting.reviewDueNow();
+    }
+
     /** {assignee} */
     @PostMapping("/cases/{ref}/assign")
     public UnderwritingViews.CaseDetail assign(@PathVariable String ref, @RequestBody JsonNode body) {
@@ -87,6 +99,17 @@ public class UnderwritingController {
     @PutMapping("/rules/{id}")
     public UnderwritingViews.RuleSetView updateRules(@PathVariable Long id, @RequestBody JsonNode body) {
         return underwriting.updateRules(id, body);
+    }
+
+    @GetMapping("/rule-changes")
+    public List<UnderwritingViews.RuleChangeView> ruleChanges() {
+        return underwriting.ruleChanges();
+    }
+
+    /** {approve, note}: a second person applies or rejects a proposed rule change. */
+    @PostMapping("/rule-changes/{id}/decision")
+    public UnderwritingViews.RuleChangeView decideRuleChange(@PathVariable Long id, @RequestBody JsonNode body) {
+        return underwriting.decideRuleChange(id, body);
     }
 
     @GetMapping("/authorities")
