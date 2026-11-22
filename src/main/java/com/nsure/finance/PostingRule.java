@@ -22,6 +22,15 @@ public class PostingRule {
     /** Whether events of this type post at all under this version. */
     public static final String ACTIVE = "ACTIVE";
     public static final String INACTIVE = "INACTIVE";
+    /**
+     * Deliberately not posted under the recognition basis in force (NS-SH08-002): no journal and no exception. Finance
+     * switches basis by approving a version that posts.
+     */
+    public static final String NOT_POSTED = "NOT_POSTED";
+    /** NS-SH08-003: a posting failure only raises a financial exception; the business action goes ahead. */
+    public static final String CONTINUE = "CONTINUE";
+    /** NS-SH08-003: a business action whose event could not post is refused. */
+    public static final String BLOCK = "BLOCK";
 
     /** Approval of the version itself. */
     public static final String PENDING_APPROVAL = "PENDING_APPROVAL";
@@ -81,7 +90,41 @@ public class PostingRule {
     @Column(name = "rejection_reason", length = 500)
     private String rejectionReason;
 
+    // NS-SH08-001/003: a version for one product (null = every product), the cost centre its journals carry, and
+    // whether a posting failure blocks the originating business action.
+    @Column(length = 100, updatable = false)
+    private String product;
+
+    @Column(name = "cost_centre", length = 20, updatable = false)
+    private String costCentre;
+
+    @Column(name = "failure_mode", nullable = false, length = 20, updatable = false)
+    private String failureMode = CONTINUE;
+
     protected PostingRule() {
+    }
+
+    PostingRule scoped(String product, String costCentre, String failureMode) {
+        this.product = product;
+        this.costCentre = costCentre;
+        this.failureMode = failureMode == null ? CONTINUE : failureMode;
+        return this;
+    }
+
+    public String getProduct() {
+        return product;
+    }
+
+    public String getCostCentre() {
+        return costCentre;
+    }
+
+    public String getFailureMode() {
+        return failureMode;
+    }
+
+    boolean isNotPosted() {
+        return NOT_POSTED.equals(status);
     }
 
     PostingRule(String eventType, int version, String debitAccount, String creditAccount, String amountField,
@@ -129,7 +172,9 @@ public class PostingRule {
 
     /** "Dr 1000 / Cr 4000 on amount, ACTIVE": what a version does, for evidence and comparison. */
     String summary() {
-        return "Dr " + debitAccount + " / Cr " + creditAccount + " on " + amountField + ", " + domain + ", " + status;
+        return "Dr " + debitAccount + " / Cr " + creditAccount + " on " + amountField + ", " + domain + ", " + status
+                + (product == null ? "" : ", product " + product) + (costCentre == null ? "" : ", " + costCentre)
+                + (BLOCK.equals(failureMode) ? ", blocks on failure" : "");
     }
 
     public Long getId() {

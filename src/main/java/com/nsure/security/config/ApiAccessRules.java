@@ -275,6 +275,9 @@ public final class ApiAccessRules {
             // are proposed with MANAGE_FINANCE and approved by someone else with APPROVE_JOURNAL.
             rule(POST, "/finance/gl-batches/*/submit", anyOf("EXPORT_GL")),
             rule(POST, "/finance/gl-batches/*/reconcile", anyOf("EXPORT_GL")),
+            rule(POST, "/finance/gl-batches/*/status-check", anyOf("EXPORT_GL")),
+            rule(POST, "/finance/periods/*/reopen/approve", anyOf("APPROVE_JOURNAL")),
+            rule(POST, "/finance/periods/*/reopen/reject", anyOf("APPROVE_JOURNAL")),
             rule(GET, "/finance/manual-journals", anyOf("READ_FINANCE")),
             rule(POST, "/finance/manual-journals", anyOf("MANAGE_FINANCE")),
             rule(POST, "/finance/manual-journals/*/approve", anyOf("APPROVE_JOURNAL")),

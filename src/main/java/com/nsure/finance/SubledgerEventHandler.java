@@ -19,7 +19,9 @@ public class SubledgerEventHandler implements DomainEventHandler {
             // NS-SH04-005: a premium refund paid through the refund controls (ledgerAmount; zero when posted elsewhere).
             Events.REFUND_SETTLED,
             // NS-SH08-002 / NS-SH07-005: cash from the reinsurer, and an approved write-off of a recovery.
-            Events.RECOVERY_RECEIVED, Events.RECOVERY_WRITTEN_OFF);
+            Events.RECOVERY_RECEIVED, Events.RECOVERY_WRITTEN_OFF,
+            // NS-SH08-002: billed-basis receivables and liability-basis claims; seeded NOT_POSTED (cash basis).
+            Events.INVOICE_ISSUED, Events.RECEIPT_ALLOCATED, Events.CLAIM_APPROVED);
 
     private final Subledger subledger;
 
@@ -40,5 +42,11 @@ public class SubledgerEventHandler implements DomainEventHandler {
     @Override
     public void handle(DomainEvent event) {
         subledger.post(event, Subledger.SYSTEM);
+    }
+
+    /** NS-SH08-003: an event type Finance set to BLOCK refuses the business action when it could not post. */
+    @Override
+    public void beforePublish(String eventType, String aggregateRef, java.util.Map<String, ?> data) {
+        subledger.preflight(eventType, data);
     }
 }

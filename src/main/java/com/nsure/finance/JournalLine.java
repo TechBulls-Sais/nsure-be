@@ -11,6 +11,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 
+/** A journal line: never updated once posted (NS-SH08-004); a correction is a reversal journal. */
 @Entity
 @Table(name = "fin_journal_line")
 public class JournalLine {
@@ -20,19 +21,19 @@ public class JournalLine {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "journal_id", nullable = false)
+    @JoinColumn(name = "journal_id", nullable = false, updatable = false)
     private Journal journal;
 
-    @Column(name = "line_no", nullable = false)
+    @Column(name = "line_no", nullable = false, updatable = false)
     private int lineNo;
 
-    @Column(name = "account_code", nullable = false, length = 20)
+    @Column(name = "account_code", nullable = false, length = 20, updatable = false)
     private String accountCode;
 
-    @Column(nullable = false, precision = 15, scale = 2)
+    @Column(nullable = false, precision = 15, scale = 2, updatable = false)
     private BigDecimal debit;
 
-    @Column(nullable = false, precision = 15, scale = 2)
+    @Column(nullable = false, precision = 15, scale = 2, updatable = false)
     private BigDecimal credit;
 
     protected JournalLine() {

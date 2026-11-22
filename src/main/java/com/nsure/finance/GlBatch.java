@@ -82,7 +82,36 @@ public class GlBatch {
     @Column(name = "reconciled_at")
     private LocalDateTime reconciledAt;
 
+    // NS-SH08-006: the periods whose journals the batch carries, and what happened on the last delivery to the GL.
+    @Column(name = "period_codes", length = 200)
+    private String periodCodes;
+
+    @Column(name = "delivery_note", length = 500)
+    private String deliveryNote;
+
     protected GlBatch() {
+    }
+
+    void periods(String codes) {
+        this.periodCodes = codes == null || codes.length() <= 200 ? codes : codes.substring(0, 200);
+    }
+
+    void delivery(String note) {
+        this.deliveryNote = note == null || note.length() <= 500 ? note : note.substring(0, 500);
+    }
+
+    /** The GL never received it (checked by batch id): it may be sent again. */
+    void backToPrepared(String note) {
+        this.status = PREPARED;
+        delivery(note);
+    }
+
+    public String getPeriodCodes() {
+        return periodCodes;
+    }
+
+    public String getDeliveryNote() {
+        return deliveryNote;
     }
 
     GlBatch(String ref, int journalCount, int lineCount, BigDecimal debitTotal, BigDecimal creditTotal,

@@ -54,10 +54,14 @@ public class FinanceControls {
     private final ObjectMapper mapper;
     private final com.nsure.collections.BillingService billing;
     private final RefundControls refunds;
+    private final boolean softCloseBlocksManual;
 
     public FinanceControls(EntityManager em, PlatformSecurityContext security, Subledger subledger,
             PolicyWorkflow policies, Outbox outbox, ObjectMapper mapper, com.nsure.collections.BillingService billing,
-            RefundControls refunds) {
+            RefundControls refunds,
+            @org.springframework.beans.factory.annotation.Value("${nsure.finance.soft-close-blocks-manual:true}")
+            boolean softCloseBlocksManual) {
+        this.softCloseBlocksManual = softCloseBlocksManual;
         this.refunds = refunds;
         this.billing = billing;
         this.em = em;
@@ -89,6 +93,14 @@ public class FinanceControls {
                     : LocalDate.now();
         } catch (DateTimeParseException ex) {
             throw new IllegalArgumentException("accountingDate must be yyyy-MM-dd.");
+        }
+        // NS-SH08-005: a soft-closed period takes system postings only; a manual adjustment waits for an open period.
+        String month = java.time.YearMonth.from(date).toString();
+        String periodStatus = em.createQuery("select p.status from AccountingPeriod p where p.code = :code", String.class)
+                .setParameter("code", month).getResultStream().findFirst().orElse(AccountingPeriod.OPEN);
+        if (softCloseBlocksManual && AccountingPeriod.SOFT_CLOSED.equals(periodStatus)) {
+            throw new IllegalArgumentException("Period " + month + " is soft-closed: it accepts system postings only."
+                    + " Date the manual journal in an open period, or have the period reopened.");
         }
         List<FinanceViews.ManualLineView> lines = new ArrayList<>();
         BigDecimal debit = BigDecimal.ZERO;

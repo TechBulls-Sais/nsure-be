@@ -367,8 +367,16 @@ class SubledgerAndIntegrationApiTest {
 
         mockMvc.perform(json(post("/finance/periods/" + period + "/reopen"), "finance", "{}"))
                 .andExpect(status().isUnprocessableEntity());
+        // NS-SH08-005: reopening is asked for by one person and authorised by another holding Finance authority.
         mockMvc.perform(json(post("/finance/periods/" + period + "/reopen"), "finance", "{\"reason\":\"Audit fix\"}"))
-                .andExpect(jsonPath("$.status").value("OPEN"));
+                .andExpect(jsonPath("$.status").value("CLOSED"))
+                .andExpect(jsonPath("$.reopenRequestedBy").value("finance"));
+        mockMvc.perform(post("/finance/periods/" + period + "/reopen/approve").with(signedIn("finance", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/finance/periods/" + period + "/reopen/approve").with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("OPEN"))
+                .andExpect(jsonPath("$.reopenRequestedBy").doesNotExist());
         mockMvc.perform(json(post("/finance/periods/" + period + "/close"), "grpadmin", "{}"))
                 .andExpect(status().isForbidden());
     }

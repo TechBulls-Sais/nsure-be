@@ -36,37 +36,37 @@ public class Journal {
     @Column(name = "row_version", nullable = false)
     private long rowVersion;
 
-    @Column(name = "record_ref", nullable = false, unique = true, length = 20)
+    @Column(name = "record_ref", nullable = false, unique = true, length = 20, updatable = false)
     private String ref;
 
-    @Column(name = "event_key", nullable = false, unique = true, length = 80)
+    @Column(name = "event_key", nullable = false, unique = true, length = 80, updatable = false)
     private String eventKey;
 
-    @Column(name = "event_type", nullable = false, length = 60)
+    @Column(name = "event_type", nullable = false, length = 60, updatable = false)
     private String eventType;
 
-    @Column(name = "source_ref", nullable = false, length = 60)
+    @Column(name = "source_ref", nullable = false, length = 60, updatable = false)
     private String sourceRef;
 
-    @Column(name = "business_domain", nullable = false, length = 20)
+    @Column(name = "business_domain", nullable = false, length = 20, updatable = false)
     private String domain;
 
-    @Column(name = "event_date", nullable = false)
+    @Column(name = "event_date", nullable = false, updatable = false)
     private LocalDate eventDate;
 
-    @Column(name = "accounting_date", nullable = false)
+    @Column(name = "accounting_date", nullable = false, updatable = false)
     private LocalDate accountingDate;
 
-    @Column(name = "period_code", nullable = false, length = 7)
+    @Column(name = "period_code", nullable = false, length = 7, updatable = false)
     private String periodCode;
 
-    @Column(nullable = false, length = 3)
+    @Column(nullable = false, length = 3, updatable = false)
     private String currency;
 
-    @Column(nullable = false, precision = 15, scale = 2)
+    @Column(nullable = false, precision = 15, scale = 2, updatable = false)
     private BigDecimal amount;
 
-    @Column(nullable = false, length = 300)
+    @Column(nullable = false, length = 300, updatable = false)
     private String description;
 
     @Column(name = "rule_version", updatable = false)
@@ -88,11 +88,30 @@ public class Journal {
     @Column(name = "gl_batch_ref", length = 20)
     private String glBatchRef;
 
-    @Column(name = "created_by", nullable = false, length = 100)
+    @Column(name = "created_by", nullable = false, length = 100, updatable = false)
     private String createdBy;
 
-    @Column(name = "created_at", nullable = false)
+    @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
+
+    // NS-SH08-001: the dimensions a journal carries (from the business event and its rule).
+    @Column(name = "policy_ref", length = 40, updatable = false)
+    private String policyRef;
+
+    @Column(length = 100, updatable = false)
+    private String product;
+
+    @Column(name = "intermediary_ref", length = 20, updatable = false)
+    private String intermediaryRef;
+
+    @Column(name = "treaty_ref", length = 20, updatable = false)
+    private String treatyRef;
+
+    @Column(name = "scheme_ref", length = 20, updatable = false)
+    private String schemeRef;
+
+    @Column(name = "cost_centre", length = 20, updatable = false)
+    private String costCentre;
 
     @OneToMany(mappedBy = "journal", cascade = CascadeType.PERSIST)
     @OrderBy("lineNo asc")
@@ -120,6 +139,45 @@ public class Journal {
         this.status = POSTED;
         this.createdBy = createdBy;
         this.createdAt = LocalDateTime.now();
+    }
+
+    Journal dimensions(String policyRef, String product, String intermediaryRef, String treatyRef, String schemeRef,
+            String costCentre) {
+        this.policyRef = clip(policyRef, 40);
+        this.product = clip(product, 100);
+        this.intermediaryRef = clip(intermediaryRef, 20);
+        this.treatyRef = clip(treatyRef, 20);
+        this.schemeRef = clip(schemeRef, 20);
+        this.costCentre = clip(costCentre, 20);
+        return this;
+    }
+
+    private static String clip(String value, int max) {
+        return value == null || value.isBlank() ? null : value.length() <= max ? value : value.substring(0, max);
+    }
+
+    public String getPolicyRef() {
+        return policyRef;
+    }
+
+    public String getProduct() {
+        return product;
+    }
+
+    public String getIntermediaryRef() {
+        return intermediaryRef;
+    }
+
+    public String getTreatyRef() {
+        return treatyRef;
+    }
+
+    public String getSchemeRef() {
+        return schemeRef;
+    }
+
+    public String getCostCentre() {
+        return costCentre;
     }
 
     void addLine(String accountCode, BigDecimal debit, BigDecimal credit) {

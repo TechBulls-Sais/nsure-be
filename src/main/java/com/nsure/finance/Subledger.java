@@ -23,12 +23,21 @@ public class Subledger {
 
     static final String SYSTEM = "system";
 
+    /** NS-SH08-005: an event dated in a closed period posts to the next open one (keeping its date). */
+    static final String LATE_NEXT_OPEN = "NEXT_OPEN_PERIOD";
+    /** NS-SH08-005: an event dated in a closed period waits as a financial exception until Finance reopens it. */
+    static final String LATE_EXCEPTION = "EXCEPTION";
+
     private final EntityManager em;
     private final Outbox outbox;
+    private final String lateEvents;
 
-    public Subledger(EntityManager em, Outbox outbox) {
+    public Subledger(EntityManager em, Outbox outbox,
+            @org.springframework.beans.factory.annotation.Value("${nsure.finance.late-events:NEXT_OPEN_PERIOD}")
+            String lateEvents) {
         this.em = em;
         this.outbox = outbox;
+        this.lateEvents = lateEvents == null ? LATE_NEXT_OPEN : lateEvents.trim().toUpperCase(java.util.Locale.ROOT);
     }
 
     /** SH08 JournalPosted: every journal written, including reversals and manual journals. */
@@ -52,8 +61,13 @@ public class Subledger {
             return existing;
         }
         LocalDate eventDate = event.occurredAt().toLocalDate();
-        // The version in force on the day the business event happened, not today's (NS-SH08-001, NS-DAT-002).
-        PostingRule rule = ruleInForce(event.eventType(), eventDate).orElse(null);
+        // The version in force on the day the business event happened, not today's (NS-SH08-001, NS-DAT-002), for
+        // the event's product when a product-specific version exists.
+        PostingRule rule = ruleInForce(event.eventType(), event.text("product"), eventDate).orElse(null);
+        if (rule != null && rule.isNotPosted()) {
+            // NS-SH08-002: not posted under the recognition basis in force; neither a journal nor an exception.
+            return Optional.empty();
+        }
         String problem = null;
         BigDecimal amount = BigDecimal.ZERO;
         if (rule == null || !rule.isActive()) {
@@ -81,6 +95,11 @@ public class Subledger {
             amount = amount.negate();
         }
         AccountingPeriod period = postingPeriod(eventDate, actor);
+        if (LATE_EXCEPTION.equals(lateEvents) && !period.getCode().equals(YearMonth.from(eventDate).toString())) {
+            raise(event, amount, "Dated " + eventDate + " in closed period " + YearMonth.from(eventDate)
+                    + ": waiting until Finance reopens it (late-event treatment EXCEPTION)");
+            return Optional.empty();
+        }
         LocalDate accountingDate = period.getCode().equals(YearMonth.from(eventDate).toString())
                 ? eventDate
                 : YearMonth.parse(period.getCode()).atDay(1);
@@ -89,7 +108,10 @@ public class Subledger {
                         + period.getCode());
         Journal journal = new Journal(nextRef("JNL-", Journal.class), event.eventId(), event.eventType(),
                 event.aggregateRef(), rule.getDomain(), eventDate, accountingDate, period.getCode(), amount,
-                description, rule.getVersion(), rule.getId(), actor);
+                description, rule.getVersion(), rule.getId(), actor)
+                // NS-SH08-001: policy, product, intermediary, treaty, scheme and cost centre dimensions.
+                .dimensions(event.text("policyRef"), event.text("product"), event.text("intermediaryRef"),
+                        event.text("treatyRef"), event.text("schemeRef"), rule.getCostCentre());
         journal.addLine(debit, amount, BigDecimal.ZERO);
         journal.addLine(credit, BigDecimal.ZERO, amount);
         if (!journal.isBalanced()) {
@@ -116,7 +138,9 @@ public class Subledger {
                 original.getEventType(), original.getSourceRef(), original.getDomain(), original.getEventDate(),
                 period.getCode().equals(YearMonth.from(today).toString()) ? today : YearMonth.parse(period.getCode()).atDay(1),
                 period.getCode(), original.getAmount(), "Reversal of " + original.getRef() + " · " + reason,
-                original.getRuleVersion(), original.getPostingRuleId(), actor);
+                original.getRuleVersion(), original.getPostingRuleId(), actor)
+                .dimensions(original.getPolicyRef(), original.getProduct(), original.getIntermediaryRef(),
+                        original.getTreatyRef(), original.getSchemeRef(), original.getCostCentre());
         for (JournalLine line : original.getLines()) {
             reversal.addLine(line.getAccountCode(), line.getCredit(), line.getDebit());
         }
@@ -185,7 +209,24 @@ public class Subledger {
      * because each one ends where the next approved one starts; on a shared start date the higher version wins.
      */
     Optional<PostingRule> ruleInForce(String eventType, LocalDate date) {
-        return em.createQuery("select r from PostingRule r where r.eventType = :type and r.approvalStatus = :approved"
+        return ruleInForce(eventType, null, date);
+    }
+
+    /** NS-SH08-001: a version for the event's product when one is in force, otherwise the general version. */
+    Optional<PostingRule> ruleInForce(String eventType, String product, LocalDate date) {
+        if (product != null && !product.isBlank()) {
+            Optional<PostingRule> specific = em.createQuery("select r from PostingRule r where r.eventType = :type"
+                            + " and r.product = :product and r.approvalStatus = :approved and r.effectiveFrom <= :date"
+                            + " order by r.effectiveFrom desc, r.version desc", PostingRule.class)
+                    .setParameter("type", eventType).setParameter("product", product)
+                    .setParameter("approved", PostingRule.APPROVED).setParameter("date", date)
+                    .setMaxResults(1).getResultStream().findFirst();
+            if (specific.isPresent()) {
+                return specific;
+            }
+        }
+        return em.createQuery("select r from PostingRule r where r.eventType = :type and r.product is null"
+                        + " and r.approvalStatus = :approved"
                         + " and r.effectiveFrom <= :date order by r.effectiveFrom desc, r.version desc",
                         PostingRule.class)
                 .setParameter("type", eventType)
@@ -194,6 +235,39 @@ public class Subledger {
                 .setMaxResults(1)
                 .getResultStream()
                 .findFirst();
+    }
+
+    /**
+     * NS-SH08-003: called while the business action is still open. When the rule for this event type is set to
+     * BLOCK and the event could not post (inactive rule, or no amount), the action is refused instead of leaving a
+     * financial exception behind.
+     */
+    void preflight(String eventType, java.util.Map<String, ?> data) {
+        Object product = data == null ? null : data.get("product");
+        PostingRule rule = ruleInForce(eventType, product == null ? null : product.toString(), LocalDate.now())
+                .orElse(null);
+        if (rule == null || !PostingRule.BLOCK.equals(rule.getFailureMode()) || rule.isNotPosted()) {
+            return;
+        }
+        String problem = null;
+        if (!rule.isActive()) {
+            problem = "its posting rule v" + rule.getVersion() + " is inactive";
+        } else if (!accountExists(rule.getDebitAccount()) || !accountExists(rule.getCreditAccount())) {
+            problem = "its posting rule names an unknown account";
+        } else {
+            Object amount = data == null ? null : data.get(rule.getAmountField());
+            try {
+                new BigDecimal(String.valueOf(amount));
+            } catch (NumberFormatException ex) {
+                problem = "it carries no " + rule.getAmountField();
+            }
+        }
+        if (problem != null) {
+            // Not an IllegalArgumentException: callers keep work done before one of those; this must undo everything.
+            throw new com.nsure.common.exception.CommandFailedException(422, null, eventType + " cannot be posted ("
+                    + problem + ") and Finance set this event type to block the business action until it can."
+                    + " Nothing was saved.");
+        }
     }
 
     /** Every version of every rule, newest first within each event type. */

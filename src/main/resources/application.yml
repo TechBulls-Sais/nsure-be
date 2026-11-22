@@ -117,6 +117,10 @@ nsure:
   finance:
     # A policy cancelled within this many days of cover start (and with no claim) has its premiums refunded.
     cooling-off-days: 30
+    # An event dated in a closed period: NEXT_OPEN_PERIOD (posted there, keeping its date) or EXCEPTION (waits).
+    late-events: NEXT_OPEN_PERIOD
+    # A soft-closed period takes system postings only, not manual journals.
+    soft-close-blocks-manual: true
 
 management:
   endpoints:

@@ -36,7 +36,41 @@ public class AccountingPeriod {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    // NS-SH08-005: reopening a period is asked for by one person and authorised by another.
+    @Column(name = "reopen_requested_by", length = 100)
+    private String reopenRequestedBy;
+
+    @Column(name = "reopen_requested_at")
+    private LocalDateTime reopenRequestedAt;
+
+    @Column(name = "reopen_reason", length = 500)
+    private String reopenReason;
+
     protected AccountingPeriod() {
+    }
+
+    void requestReopen(String reason, String actor) {
+        this.reopenReason = reason;
+        this.reopenRequestedBy = actor;
+        this.reopenRequestedAt = LocalDateTime.now();
+    }
+
+    void clearReopen() {
+        this.reopenReason = null;
+        this.reopenRequestedBy = null;
+        this.reopenRequestedAt = null;
+    }
+
+    public String getReopenRequestedBy() {
+        return reopenRequestedBy;
+    }
+
+    public LocalDateTime getReopenRequestedAt() {
+        return reopenRequestedAt;
+    }
+
+    public String getReopenReason() {
+        return reopenReason;
     }
 
     AccountingPeriod(String code, String actor) {
