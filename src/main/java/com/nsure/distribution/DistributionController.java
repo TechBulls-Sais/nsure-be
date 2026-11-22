@@ -17,8 +17,85 @@ public class DistributionController {
 
     private final DistributionService distribution;
 
-    public DistributionController(DistributionService distribution) {
+    private final DistributionControls controls;
+
+    public DistributionController(DistributionService distribution, DistributionControls controls) {
         this.distribution = distribution;
+        this.controls = controls;
+    }
+
+    @PostMapping("/assignments/{id}/approve")
+    public DistributionViews.AssignmentView approveTransfer(@PathVariable Long id) {
+        return distribution.decideTransfer(id, true);
+    }
+
+    @PostMapping("/assignments/{id}/reject")
+    public DistributionViews.AssignmentView rejectTransfer(@PathVariable Long id) {
+        return distribution.decideTransfer(id, false);
+    }
+
+    @PostMapping("/statements/{ref}/approve")
+    public DistributionViews.StatementView approveStatement(@PathVariable String ref) {
+        return distribution.approveStatement(ref);
+    }
+
+    @GetMapping("/exceptions")
+    public List<DistributionViews.ExceptionView> exceptions() {
+        return controls.exceptions();
+    }
+
+    @PostMapping("/exceptions/{ref}/retry")
+    public DistributionViews.ExceptionView retryException(@PathVariable String ref) {
+        return controls.retry(ref);
+    }
+
+    /** {resolution} */
+    @PostMapping("/exceptions/{ref}/resolve")
+    public DistributionViews.ExceptionView resolveException(@PathVariable String ref, @RequestBody JsonNode body) {
+        return controls.resolve(ref, body);
+    }
+
+    /** {reason} */
+    @PostMapping("/commissions/{ref}/dispute")
+    public DistributionViews.CommissionView dispute(@PathVariable String ref, @RequestBody JsonNode body) {
+        return controls.dispute(ref, body);
+    }
+
+    /** {note} */
+    @PostMapping("/commissions/{ref}/resolve-dispute")
+    public DistributionViews.CommissionView resolveDispute(@PathVariable String ref, @RequestBody JsonNode body) {
+        return controls.resolveDispute(ref, body);
+    }
+
+    @GetMapping("/payment-batches")
+    public List<DistributionViews.PaymentBatchView> batches() {
+        return controls.batches();
+    }
+
+    @PostMapping("/payment-batches")
+    public DistributionViews.PaymentBatchView prepareBatch() {
+        return controls.prepareBatch();
+    }
+
+    @PostMapping("/payment-batches/{ref}/release")
+    public DistributionViews.PaymentBatchView releaseBatch(@PathVariable String ref) {
+        return controls.releaseBatch(ref);
+    }
+
+    @GetMapping("/agreements")
+    public List<DistributionViews.AgreementView> agreements() {
+        return controls.agreements();
+    }
+
+    /** {intermediaryRef, products?, channels?, clawbackMonths, bankName?, bankAccount?, bankBranch?, effectiveFrom?, note?} */
+    @PostMapping("/agreements")
+    public DistributionViews.AgreementView draftAgreement(@RequestBody JsonNode body) {
+        return controls.draftAgreement(body);
+    }
+
+    @PostMapping("/agreements/{ref}/activate")
+    public DistributionViews.AgreementView activateAgreement(@PathVariable String ref) {
+        return controls.activateAgreement(ref);
     }
 
     @GetMapping("/intermediaries")

@@ -37,11 +37,32 @@ public class DistributionService {
     private final EntityManager em;
     private final PlatformSecurityContext security;
     private final Outbox outbox;
+    private final boolean transferApproval;
+    private final Set<String> paymentHold;
 
-    public DistributionService(EntityManager em, PlatformSecurityContext security, Outbox outbox) {
+    public DistributionService(EntityManager em, PlatformSecurityContext security, Outbox outbox,
+            @org.springframework.beans.factory.annotation.Value("${nsure.distribution.transfer-approval:true}")
+            boolean transferApproval,
+            @org.springframework.beans.factory.annotation.Value("${nsure.distribution.payment-hold-statuses:SUSPENDED}")
+            String paymentHold) {
         this.em = em;
         this.security = security;
         this.outbox = outbox;
+        this.transferApproval = transferApproval;
+        this.paymentHold = statuses(paymentHold);
+    }
+
+    static Set<String> statuses(String csv) {
+        return java.util.Arrays.stream(csv == null ? new String[0] : csv.split(",")).map(String::trim)
+                .filter(x -> !x.isEmpty()).map(x -> x.toUpperCase(Locale.ROOT)).collect(Collectors.toSet());
+    }
+
+    /** Payment rights per approved controls (NS-SH06-001): an intermediary in a held status is not paid. */
+    void requirePaymentAllowed(Intermediary intermediary) {
+        if (paymentHold.contains(intermediary.getStatus())) {
+            throw new IllegalArgumentException(intermediary.getName() + "'s appointment is "
+                    + intermediary.getStatus().toLowerCase(Locale.ROOT) + "; commission payments are held.");
+        }
     }
 
     // ── intermediaries ────────────────────────────────────────────────────────────────────────────
@@ -245,12 +266,60 @@ public class DistributionService {
                 throw new IllegalArgumentException("A transfer cannot start before the current assignment ("
                         + old.getEffectiveFrom() + ").");
             }
+            if (transferApproval) {
+                // AT-SH06-03: a portfolio transfer applies only once a second person approves it, from its date.
+                if (!em.createQuery("select a.id from PolicyAssignment a where a.policyRef = :ref and a.status = :pending",
+                                Long.class)
+                        .setParameter("ref", policyRef).setParameter("pending", PolicyAssignment.PENDING)
+                        .setMaxResults(1).getResultList().isEmpty()) {
+                    throw new ConflictException("A transfer of " + policyRef + " is already waiting for approval.");
+                }
+                PolicyAssignment pending = PolicyAssignment.pendingTransfer(policyRef, intermediary, from,
+                        optional(body, "reason", 500), user.getUsername());
+                em.persist(pending);
+                return view(pending, policy);
+            }
             old.end(from);
             em.flush();
         }
         PolicyAssignment row = new PolicyAssignment(policyRef, intermediary, from, user.getUsername());
         em.persist(row);
         return view(row, policy);
+    }
+
+    /** A second person approves a pending transfer: the current assignment ends on its date and this one starts. */
+    @Transactional
+    public DistributionViews.AssignmentView decideTransfer(Long id, boolean approve) {
+        AppUser user = user("MANAGE_DISTRIBUTION");
+        PolicyAssignment pending = em.find(PolicyAssignment.class, id);
+        if (pending == null || !PolicyAssignment.PENDING.equals(pending.getStatus())) {
+            throw new ConflictException("Assignment " + id + " is not a transfer waiting for approval.");
+        }
+        if (user.getUsername().equalsIgnoreCase(pending.getAssignedBy())) {
+            throw new com.nsure.security.exception.NoAuthorizationException("You asked for this transfer; someone else"
+                    + " must decide it.");
+        }
+        InsurancePolicy policy = policies(Set.of(pending.getPolicyRef())).get(pending.getPolicyRef());
+        if (!approve) {
+            pending.reject(user.getUsername());
+            return view(pending, policy);
+        }
+        Intermediary to = pending.getIntermediary();
+        if (!to.canTakeBusiness(pending.getEffectiveFrom())) {
+            throw new IllegalArgumentException(to.getName() + "'s appointment cannot take new business on "
+                    + pending.getEffectiveFrom() + "; reject the transfer.");
+        }
+        em.createQuery("select a from PolicyAssignment a where a.openPolicyRef = :ref", PolicyAssignment.class)
+                .setParameter("ref", pending.getPolicyRef()).getResultStream().forEach(old -> {
+                    if (pending.getEffectiveFrom().isBefore(old.getEffectiveFrom())) {
+                        throw new IllegalArgumentException("A transfer cannot start before the current assignment ("
+                                + old.getEffectiveFrom() + ").");
+                    }
+                    old.end(pending.getEffectiveFrom());
+                });
+        em.flush();
+        pending.approve(user.getUsername());
+        return view(pending, policy);
     }
 
     // ── commission ledger and statements ──────────────────────────────────────────────────────────
@@ -306,6 +375,15 @@ public class DistributionService {
         em.persist(statement);
         em.flush();
         statement.numbered();
+        // NS-SH06-005: a negative statement nobody paid is carried onto this one; it is never edited or deleted.
+        for (CommissionStatement negative : em.createQuery("select s from CommissionStatement s where s.intermediary"
+                        + " = :i and s.status = :issued and s.netAmount < 0 and s.id <> :id order by s.id",
+                        CommissionStatement.class)
+                .setParameter("i", intermediary).setParameter("issued", CommissionStatement.ISSUED)
+                .setParameter("id", statement.getId()).getResultList()) {
+            statement.carriedFrom(negative.getRef(), negative.getNetAmount());
+            negative.carriedForward();
+        }
         lines.forEach(line -> {
             line.statemented(statement);
             // SH06: the accrued line is released for payment on this statement.
@@ -322,16 +400,53 @@ public class DistributionService {
         return view(statement, lines.stream().map(DistributionService::view).toList());
     }
 
+    /**
+     * A second person approves an issued statement for payment (NS-SH06-006). A negative statement is not approved:
+     * it is carried forward onto the intermediary's next statement.
+     */
+    @Transactional
+    public DistributionViews.StatementView approveStatement(String ref) {
+        AppUser user = user("PAY_COMMISSION");
+        CommissionStatement statement = statementByRef(ref);
+        if (!CommissionStatement.ISSUED.equals(statement.getStatus())) {
+            throw new ConflictException("Statement " + ref + " is " + statement.getStatus().toLowerCase(Locale.ROOT)
+                    .replace('_', ' ') + "; only an issued statement can be approved.");
+        }
+        if (user.getUsername().equalsIgnoreCase(statement.getIssuedBy())) {
+            throw new com.nsure.security.exception.NoAuthorizationException("You issued statement " + ref
+                    + "; someone else must approve it.");
+        }
+        if (statement.getNetAmount().signum() < 0) {
+            throw new IllegalArgumentException("Statement " + ref + " nets to " + statement.getNetAmount().toPlainString()
+                    + ": the intermediary owes this back. It is carried forward onto their next statement.");
+        }
+        statement.approve(user.getUsername());
+        return view(statement, lines(statement));
+    }
+
+    CommissionStatement statementByRef(String ref) {
+        return em.createQuery("select s from CommissionStatement s join fetch s.intermediary where s.ref = :ref",
+                        CommissionStatement.class)
+                .setParameter("ref", ref).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Statement " + ref + " not found"));
+    }
+
+    List<DistributionViews.CommissionView> lines(CommissionStatement statement) {
+        return em.createQuery("select c from Commission c join fetch c.intermediary left join fetch c.reverses"
+                        + " where c.statement = :statement order by c.id asc", Commission.class)
+                .setParameter("statement", statement).getResultStream().map(DistributionService::view).toList();
+    }
+
     /** Pays an issued statement once; a paid statement is never changed and a negative net is recovered, not paid. */
     @Transactional
     public DistributionViews.StatementView payStatement(String ref) {
         AppUser user = user("PAY_COMMISSION");
-        CommissionStatement statement = em.createQuery("select s from CommissionStatement s join fetch s.intermediary"
-                        + " where s.ref = :ref", CommissionStatement.class)
-                .setParameter("ref", ref)
-                .getResultStream()
-                .findFirst()
-                .orElseThrow(() -> new NotFoundException("Statement " + ref + " not found"));
+        return payStatement(statementByRef(ref), user.getUsername());
+    }
+
+    /** Pays one approved statement (single payment or a released payment batch); publishes CommissionPaid. */
+    DistributionViews.StatementView payStatement(CommissionStatement statement, String actor) {
+        String ref = statement.getRef();
         if (CommissionStatement.PAID.equals(statement.getStatus())) {
             throw new ConflictException("Statement " + ref + " is already paid and cannot be changed.");
         }
@@ -339,17 +454,22 @@ public class DistributionService {
             throw new IllegalArgumentException("Statement " + ref + " nets to " + statement.getNetAmount().toPlainString()
                     + ": the intermediary owes this back, so it cannot be paid.");
         }
+        if (!CommissionStatement.APPROVED.equals(statement.getStatus())) {
+            throw new ConflictException("Statement " + ref + " is " + statement.getStatus().toLowerCase(Locale.ROOT)
+                    .replace('_', ' ') + "; a second person must approve it before it is paid.");
+        }
+        requirePaymentAllowed(statement.getIntermediary());
         List<Commission> lines = em.createQuery("select c from Commission c where c.statement = :statement"
                         + " order by c.id asc", Commission.class)
                 .setParameter("statement", statement)
                 .getResultList();
         lines.forEach(Commission::paid);
-        statement.paid(user.getUsername());
+        statement.paid(actor);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("statementRef", statement.getRef());
         data.put("intermediaryRef", statement.getIntermediary().getRef());
         data.put("amount", statement.getNetAmount().toPlainString());
-        outbox.publish(Events.COMMISSION_PAID, statement.getRef(), data, user.getUsername());
+        outbox.publish(Events.COMMISSION_PAID, statement.getRef(), data, actor);
         return view(statement, lines.stream().map(DistributionService::view).toList());
     }
 
@@ -420,7 +540,12 @@ public class DistributionService {
         return new DistributionViews.AssignmentView(a.getId(), a.getPolicyRef(),
                 policy == null ? null : policy.getCustomerName(), policy == null ? null : policy.getProduct(),
                 i.getRef(), i.getName(), i.getType(), a.getEffectiveFrom(), a.getEndedOn(), a.isOpen(),
-                a.getAssignedBy(), a.getAssignedAt());
+                a.getAssignedBy(), a.getAssignedAt(), a.getStatus(), a.getApprovedBy(), a.getTransferReason());
+    }
+
+    static DistributionViews.StatementView statementView(CommissionStatement s,
+            List<DistributionViews.CommissionView> lines) {
+        return view(s, lines);
     }
 
     static DistributionViews.CommissionView view(Commission c) {
@@ -428,14 +553,17 @@ public class DistributionService {
                 c.getIntermediary().getName(), c.getPolicyRef(), c.getProduct(), c.getKind(), c.getBasisAmount(),
                 c.getRatePercent(), c.getAmount(), c.getStatus(),
                 c.getReverses() == null ? null : c.getReverses().getRef(),
-                c.getStatement() == null ? null : c.getStatement().getRef(), c.getSourceEventId(), c.getCreatedAt());
+                c.getStatement() == null ? null : c.getStatement().getRef(), c.getSourceEventId(), c.getCreatedAt(),
+                c.getReceiptRef(), c.getBasis(), c.getCalcTrace(), c.getPremiumDate(), c.getAgreementRef(),
+                c.getDisputeReason());
     }
 
     private static DistributionViews.StatementView view(CommissionStatement s,
             List<DistributionViews.CommissionView> lines) {
         return new DistributionViews.StatementView(s.getRef(), s.getIntermediary().getRef(),
                 s.getIntermediary().getName(), s.getNetAmount(), s.getLineCount(), s.getStatus(), s.getIssuedBy(),
-                s.getIssuedAt(), s.getPaidBy(), s.getPaidAt(), lines);
+                s.getIssuedAt(), s.getPaidBy(), s.getPaidAt(), lines, s.getApprovedBy(), s.getApprovedAt(),
+                s.getCarriedFromRef(), s.getCarriedAmount(), s.getBatchRef());
     }
 
     private static String required(JsonNode body, String field, int max) {

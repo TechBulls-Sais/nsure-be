@@ -36,10 +36,12 @@ public class ApplicationCapture {
 
     private final EntityManager em;
     private final Outbox outbox;
+    private final com.nsure.distribution.SalesAuthority sales;
 
-    public ApplicationCapture(EntityManager em, Outbox outbox) {
+    public ApplicationCapture(EntityManager em, Outbox outbox, com.nsure.distribution.SalesAuthority sales) {
         this.em = em;
         this.outbox = outbox;
+        this.sales = sales;
     }
 
     /** Copies whatever the body carries onto the application; answers are stored once it has a reference. */
@@ -150,6 +152,13 @@ public class ApplicationCapture {
         }
         if (app.getChannel() != null && Set.of("AGENT", "BROKER").contains(app.getChannel()) && blank(app.getIntermediaryCode())) {
             problems.add("An agent or broker application needs the intermediary's code.");
+        }
+        // NS-SH06-001 / AT-SH06-02: a suspended, lapsed or expired intermediary sells nothing new (as configured).
+        if (app.getChannel() != null && Set.of("AGENT", "BROKER").contains(app.getChannel())) {
+            String blocked = sales.problem(app.getIntermediaryCode(), app.getProduct());
+            if (blocked != null) {
+                problems.add(blocked);
+            }
         }
         if (app.getDeclaredAt() == null) {
             problems.add("The applicant's declaration has not been accepted.");

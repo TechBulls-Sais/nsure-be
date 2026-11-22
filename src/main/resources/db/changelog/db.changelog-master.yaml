@@ -314,3 +314,6 @@ databaseChangeLog:
   - include:
       file: changes/182-reinsurance-exposure-and-recovery-ledger.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/183-commission-workflow.yaml
+      relativeToChangelogFile: true

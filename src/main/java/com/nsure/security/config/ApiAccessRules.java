@@ -299,6 +299,17 @@ public final class ApiAccessRules {
             rule(POST, "/distribution/assignments", anyOf("MANAGE_DISTRIBUTION")),
             rule(POST, "/distribution/statements", anyOf("PAY_COMMISSION")),
             rule(POST, "/distribution/statements/*/pay", anyOf("PAY_COMMISSION")),
+            rule(POST, "/distribution/statements/*/approve", anyOf("PAY_COMMISSION")),
+            rule(POST, "/distribution/assignments/*/approve", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/assignments/*/reject", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/exceptions/*/retry", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/exceptions/*/resolve", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/commissions/*/dispute", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/commissions/*/resolve-dispute", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/payment-batches", anyOf("PAY_COMMISSION")),
+            rule(POST, "/distribution/payment-batches/*/release", anyOf("PAY_COMMISSION")),
+            rule(POST, "/distribution/agreements", anyOf("MANAGE_DISTRIBUTION")),
+            rule(POST, "/distribution/agreements/*/activate", anyOf("MANAGE_DISTRIBUTION")),
 
             // ── individual underwriting IL02 (Underwriter) ─────────────────────────────────────────────
             rule(GET, "/underwriting/**", anyOf("READ_UNDERWRITING")),
