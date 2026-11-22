@@ -311,3 +311,6 @@ databaseChangeLog:
   - include:
       file: changes/151-group-supplementary-billing.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/152-group-renewal.yaml
+      relativeToChangelogFile: true

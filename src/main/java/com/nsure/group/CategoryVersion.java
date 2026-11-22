@@ -57,6 +57,18 @@ public class CategoryVersion {
     @Column(name = "source_ref", nullable = false, length = 40)
     private String sourceRef;
 
+    /** The contractual cessation age for the year (members reaching it leave cover); null uses the demo default. */
+    @Column(name = "cessation_age")
+    private Integer cessationAge;
+
+    void cessationAge(Integer age) {
+        this.cessationAge = age;
+    }
+
+    public Integer getCessationAge() {
+        return cessationAge;
+    }
+
     @Column(name = "created_by", nullable = false, length = 100)
     private String createdBy;
 

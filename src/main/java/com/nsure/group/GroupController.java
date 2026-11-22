@@ -31,6 +31,45 @@ public class GroupController {
         this.account = account;
     }
 
+    // ── renewal (GL05, NS-GL05-005/006, AT-GL05-03) ───────────────────────────────────────────────
+
+    private SchemeRenewalService renewals;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void renewalService(SchemeRenewalService renewals) {
+        this.renewals = renewals;
+    }
+
+    @GetMapping("/schemes/{ref}/renewals")
+    public List<java.util.Map<String, Object>> renewals(@PathVariable String ref) {
+        return renewals.renewals(ref);
+    }
+
+    /** {note?}: prepares the renewal (review of census and claims experience) with quotation version 1. */
+    @PostMapping("/schemes/{ref}/renewals")
+    public java.util.Map<String, Object> prepareRenewal(@PathVariable String ref,
+            @RequestBody(required = false) JsonNode body) {
+        return renewals.prepare(ref, body);
+    }
+
+    /** {rateChangePercent?, terms?[{category, ratePerMille?, freeCoverLimit?, cessationAge?}], note} */
+    @PostMapping("/renewals/{ref}/versions")
+    public java.util.Map<String, Object> negotiateRenewal(@PathVariable String ref, @RequestBody JsonNode body) {
+        return renewals.negotiate(ref, body);
+    }
+
+    /** {version?, sponsorReference, note, nextStartDate?, gapReason?} */
+    @PostMapping("/renewals/{ref}/acceptance")
+    public java.util.Map<String, Object> acceptRenewal(@PathVariable String ref, @RequestBody JsonNode body) {
+        return renewals.accept(ref, body);
+    }
+
+    /** {note}: a second person approves and the scheme renews. */
+    @PostMapping("/renewals/{ref}/approval")
+    public java.util.Map<String, Object> approveRenewal(@PathVariable String ref, @RequestBody JsonNode body) {
+        return renewals.approve(ref, body);
+    }
+
     // ── sponsor account (GL05, NS-GL05-003/004, AT-GL05-02) ────────────────────────────────────────
 
     @GetMapping("/schemes/{ref}/sponsor-account")

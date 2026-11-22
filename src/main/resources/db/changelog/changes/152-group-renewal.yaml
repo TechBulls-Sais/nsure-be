@@ -1,0 +1,91 @@
+databaseChangeLog:
+  # GL05 renewal (NS-GL05-005/006, AT-GL05-03): a renewal is prepared from the expiring terms, updated census and
+  # claims experience, negotiated through quotation versions with per-category terms, accepted by the sponsor and
+  # approved by a second person, which opens the next scheme year and next-year category versions. Category versions
+  # carry the contractual cessation age the renewal checks use.
+  - changeSet:
+      id: 152-group-renewal
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: grp_category_version
+            columns:
+              - column: {name: cessation_age, type: int}
+        - createTable:
+            tableName: grp_renewal
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_renewal}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_grp_renewal_ref}}
+              - column: {name: scheme_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: renewal_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: expiring_year, type: int, constraints: {nullable: false}}
+              - column: {name: expiring_start, type: date, constraints: {nullable: false}}
+              - column: {name: expiring_end, type: date, constraints: {nullable: false}}
+              - column: {name: next_start, type: date, constraints: {nullable: false}}
+              - column: {name: next_end, type: date, constraints: {nullable: false}}
+              - column: {name: experience, type: varchar(4000)}
+              - column: {name: checks, type: varchar(4000)}
+              - column: {name: recommended_change, type: 'decimal(7,2)', constraints: {nullable: false}}
+              - column: {name: current_version, type: int, constraints: {nullable: false}}
+              - column: {name: accepted_version, type: int}
+              - column: {name: sponsor_reference, type: varchar(80)}
+              - column: {name: acceptance_note, type: varchar(300)}
+              - column: {name: gap_note, type: varchar(300)}
+              - column: {name: accepted_by, type: varchar(100)}
+              - column: {name: accepted_at, type: datetime}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+              - column: {name: approval_note, type: varchar(300)}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_renewal
+            baseColumnNames: scheme_id
+            referencedTableName: ins_scheme
+            referencedColumnNames: id
+            constraintName: fk_grp_renewal_scheme
+        - createTable:
+            tableName: grp_renewal_version
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_renewal_version}}
+              - column: {name: renewal_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: version_no, type: int, constraints: {nullable: false}}
+              - column: {name: rate_change_percent, type: 'decimal(7,2)', constraints: {nullable: false}}
+              - column: {name: expiring_premium, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: annual_premium, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: version_status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: note, type: varchar(500)}
+              - column: {name: created_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: created_at, type: datetime, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_renewal_version
+            baseColumnNames: renewal_id
+            referencedTableName: grp_renewal
+            referencedColumnNames: id
+            constraintName: fk_grp_renewal_version_renewal
+        - addUniqueConstraint:
+            tableName: grp_renewal_version
+            columnNames: renewal_id, version_no
+            constraintName: uk_grp_renewal_version
+        - createTable:
+            tableName: grp_renewal_term
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_grp_renewal_term}}
+              - column: {name: version_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: category_id, type: bigint, constraints: {nullable: false}}
+              - column: {name: category_code, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: members, type: int, constraints: {nullable: false}}
+              - column: {name: cover, type: 'decimal(17,2)', constraints: {nullable: false}}
+              - column: {name: expiring_rate, type: 'decimal(9,4)', constraints: {nullable: false}}
+              - column: {name: proposed_rate, type: 'decimal(9,4)', constraints: {nullable: false}}
+              - column: {name: expiring_free_cover, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: proposed_free_cover, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: cessation_age, type: int, constraints: {nullable: false}}
+              - column: {name: expiring_annual, type: 'decimal(15,2)', constraints: {nullable: false}}
+              - column: {name: proposed_annual, type: 'decimal(15,2)', constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: grp_renewal_term
+            baseColumnNames: version_id
+            referencedTableName: grp_renewal_version
+            referencedColumnNames: id
+            constraintName: fk_grp_renewal_term_version

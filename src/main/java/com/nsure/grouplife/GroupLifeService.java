@@ -84,6 +84,14 @@ public class GroupLifeService {
         this.mapper = mapper;
     }
 
+    /** Renewal application (WP g, NS-GL05-005): category versions and scheme-year records. */
+    private com.nsure.group.SchemeRenewalService renewals;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void renewalService(com.nsure.group.SchemeRenewalService renewals) {
+        this.renewals = renewals;
+    }
+
     // ── quotations (NS-GL01-001..004) ─────────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
@@ -604,8 +612,9 @@ public class GroupLifeService {
         String actor = user.getUsername();
         switch (e.eventType) {
             case "RENEWAL" -> {
-                LocalDate next = s.getRenewalDate().plusYears(1);
-                s.renewTo(next, next.format(DISPLAY));
+                // NS-GL05-005: the rate change applies to every category from the renewal date (dated versions).
+                renewals.renewByRateChange(s, e.rateChangePercent, ref, actor);
+                LocalDate next = s.getRenewalDate();
                 Map<String, Object> data = new LinkedHashMap<>();
                 data.put("schemeRef", s.getRef());
                 data.put("policyYear", s.getPolicyYear());
