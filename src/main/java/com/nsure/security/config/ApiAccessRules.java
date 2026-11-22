@@ -195,6 +195,13 @@ public final class ApiAccessRules {
             // The upload quarantine (AT-SH09A-02): the queue for claim staff, decisions for the document reviewer.
             rule(GET, "/portfolio/document-quarantine", anyOf("READ_CLAIM", "READ_CUSTOMER", "READ_SERVICE_CASE")),
             // NS-SH09A-006 short-lived links: anyone signed in asks; the service checks the owning record's access.
+            // NS-SH09A-002 document generation templates: drafted (UPDATE_PRODUCT), published by another
+            // (ACTIVATE_PRODUCT), generated on a policy (UPDATE_POLICY or CREATE_POLICY).
+            rule(GET, "/portfolio/document-templates", anyOf("READ_PRODUCT")),
+            rule(POST, "/portfolio/document-templates", anyOf("UPDATE_PRODUCT")),
+            rule(POST, "/portfolio/document-templates/preview", anyOf("UPDATE_PRODUCT", "ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/document-templates/*/versions/*/approve", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/policies/*/documents/generate", anyOf("UPDATE_POLICY", "CREATE_POLICY")),
             rule(POST, "/portfolio/document-links", authenticated()),
             rule(GET, "/portfolio/document-links/*", authenticated()),
             rule(GET, "/portfolio/document-quarantine/*/file", anyOf("RELEASE_DOCUMENT")),
