@@ -53,6 +53,8 @@ public final class ApiAccessRules {
             // Email/WhatsApp provider callbacks (Blueprint §5): authenticated by their HMAC signature, not a login.
             rule(POST, "/integration/messaging/status", publicAccess()),
             rule(POST, "/integration/messaging/inbound", publicAccess()),
+            // Signed payment settlement callbacks (spec §10, AT-SH12-01): HMAC signature and replay window, no login.
+            rule(POST, "/integration/callbacks/payments", publicAccess()),
             rule(GET, "/payment/simulator/*", publicAccess()),
             rule(POST, "/payment/simulator/*", publicAccess()),
 
@@ -437,6 +439,8 @@ public final class ApiAccessRules {
             rule(PUT, "/integration/interfaces/*/availability", anyOf("MANAGE_INTEGRATION")),
             rule(POST, "/integration/payment-notifications", anyOf("MANAGE_INTEGRATION")),
             rule(POST, "/integration/simulator/provider-receipts", anyOf("MANAGE_INTEGRATION")),
+            rule(POST, "/integration/simulator/payment-callbacks", anyOf("MANAGE_INTEGRATION")),
+            rule(POST, "/integration/inbound/*/status-query", anyOf("MANAGE_INTEGRATION")),
 
             // ── management reporting SH13 ──────────────────────────────────────────────────────────────
             rule(GET, "/reports/**", anyOf("READ_REPORT")),

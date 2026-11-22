@@ -29,7 +29,7 @@ public final class IntegrationViews {
 
     public record InboundView(Long id, String provider, String providerRef, String messageType, String businessRef,
             BigDecimal amount, String status, String resultRef, String detail, String receivedBy,
-            LocalDateTime receivedAt) {
+            LocalDateTime receivedAt, String channel, int statusQueries, LocalDateTime statusQueriedAt) {
     }
 
     public record ProviderReceiptView(Long id, String provider, String providerRef, BigDecimal amount,

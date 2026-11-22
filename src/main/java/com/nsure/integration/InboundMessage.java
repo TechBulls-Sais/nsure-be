@@ -21,6 +21,10 @@ public class InboundMessage {
     public static final String SUSPENSE = "SUSPENSE";
     public static final String REJECTED = "REJECTED";
     public static final String REFUNDED = "REFUNDED";
+    /** NS-SH12-004: the provider could not be asked (timeout/outage); re-queried, never re-submitted or guessed. */
+    public static final String UNKNOWN = "UNKNOWN";
+    public static final String STAFF = "STAFF";
+    public static final String SIGNED_CALLBACK = "SIGNED_CALLBACK";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -89,6 +93,22 @@ public class InboundMessage {
     @Column(name = "clearance_allocations", length = 2000)
     private String clearanceAllocations;
 
+    /** STAFF (recorded by integration staff) or SIGNED_CALLBACK (verified provider callback). */
+    @Column(length = 30)
+    private String channel;
+
+    @Column(length = 3)
+    private String currency;
+
+    @Column(name = "payment_method", length = 40)
+    private String paymentMethod;
+
+    @Column(name = "status_queried_at")
+    private LocalDateTime statusQueriedAt;
+
+    @Column(name = "status_queries", nullable = false)
+    private int statusQueries;
+
     protected InboundMessage() {
     }
 
@@ -102,6 +122,37 @@ public class InboundMessage {
         this.amount = amount;
         this.receivedBy = receivedBy;
         this.receivedAt = LocalDateTime.now();
+    }
+
+    void arrived(String channel, String currency, String paymentMethod) {
+        this.channel = channel;
+        this.currency = currency;
+        this.paymentMethod = paymentMethod;
+    }
+
+    void statusQueried() {
+        statusQueries++;
+        statusQueriedAt = LocalDateTime.now();
+    }
+
+    public String getChannel() {
+        return channel;
+    }
+
+    public String getCurrency() {
+        return currency;
+    }
+
+    public String getPaymentMethod() {
+        return paymentMethod;
+    }
+
+    public LocalDateTime getStatusQueriedAt() {
+        return statusQueriedAt;
+    }
+
+    public int getStatusQueries() {
+        return statusQueries;
     }
 
     void outcome(String status, String resultRef, String detail) {

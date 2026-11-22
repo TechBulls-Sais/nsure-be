@@ -1,0 +1,16 @@
+databaseChangeLog:
+  # AT-SH12-01 and NS-SH12-004: a payment confirmation records how it arrived (a staff entry or a signed provider
+  # callback), its currency and method so an UNKNOWN outcome (provider status query timed out) can be re-queried later
+  # without the provider re-sending anything, and when the provider was last asked.
+  - changeSet:
+      id: 211-signed-payment-callbacks
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: int_inbound_message
+            columns:
+              - column: {name: channel, type: varchar(30)}
+              - column: {name: currency, type: varchar(3)}
+              - column: {name: payment_method, type: varchar(40)}
+              - column: {name: status_queried_at, type: datetime}
+              - column: {name: status_queries, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}

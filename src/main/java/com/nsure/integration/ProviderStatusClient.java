@@ -29,18 +29,28 @@ public class ProviderStatusClient {
     private final EntityManager em;
     private final PlatformSecurityContext security;
     private final boolean simulator;
+    private final InterfaceRegistry interfaces;
 
     public ProviderStatusClient(EntityManager em, PlatformSecurityContext security,
-            @Value("${nsure.integration.provider-simulator:true}") boolean simulator) {
+            @Value("${nsure.integration.provider-simulator:true}") boolean simulator, InterfaceRegistry interfaces) {
         this.em = em;
         this.security = security;
         this.simulator = simulator;
+        this.interfaces = interfaces;
     }
 
-    /** Empty when the provider offers no status query, so the receipt must be matched to a statement instead. */
+    /**
+     * Empty when the provider offers no status query, so the receipt must be matched to a statement instead. Throws
+     * {@link InterfaceUnavailableException} when the provider does not answer (a timeout): the outcome is then
+     * unknown, and the caller must ask again later rather than assume either answer (NS-SH12-004).
+     */
     public Optional<ProviderStatus> status(String provider, String providerRef) {
         if (!simulator) {
             return Optional.empty();
+        }
+        if (!interfaces.available("BANK_PAYMENTS")) {
+            throw new InterfaceUnavailableException("The status query to " + provider + " timed out (simulated outage"
+                    + " of bank and wallet payments): the outcome of " + providerRef + " is unknown");
         }
         return Optional.of(find(provider, providerRef)
                 .map(r -> new ProviderStatus(true, r.getAmount(), r.getCurrency()))

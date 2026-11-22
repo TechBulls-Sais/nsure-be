@@ -225,6 +225,7 @@ public class IntegrationService {
     static IntegrationViews.InboundView inbound(InboundMessage m) {
         return new IntegrationViews.InboundView(m.getId(), m.getProvider(), m.getProviderRef(), m.getMessageType(),
                 m.getBusinessRef(), m.getAmount(), m.getStatus(), m.getResultRef(), m.getDetail(), m.getReceivedBy(),
-                m.getReceivedAt());
+                m.getReceivedAt(), m.getChannel() == null ? InboundMessage.STAFF : m.getChannel(), m.getStatusQueries(),
+                m.getStatusQueriedAt());
     }
 }

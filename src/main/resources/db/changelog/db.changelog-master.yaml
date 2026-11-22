@@ -308,3 +308,6 @@ databaseChangeLog:
   - include:
       file: changes/210-interface-catalogue.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/211-signed-payment-callbacks.yaml
+      relativeToChangelogFile: true

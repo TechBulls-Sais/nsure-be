@@ -2,6 +2,7 @@ package com.nsure.integration;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.nsure.common.exception.ConflictException;
+import com.nsure.common.exception.NotFoundException;
 import com.nsure.portfolio.InsurancePolicy;
 import com.nsure.portfolio.PolicyWorkflow;
 import com.nsure.security.domain.AppUser;
@@ -13,6 +14,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -26,6 +28,12 @@ import org.springframework.transaction.annotation.Transactional;
  * amount or currency, a policy that can no longer be paid — goes to suspense and stays visible for reconciliation.
  * Cash is never treated as premium just because a notification arrived (NS-SH04-004): the provider is asked
  * through {@link ProviderStatusClient} first, and a receipt it does not confirm goes to suspense too.
+ *
+ * <p>NS-SH12-004: when the provider does not answer the status query (a timeout), the outcome is <b>unknown</b>: the
+ * confirmation is kept as UNKNOWN with no financial effect and is re-queried later (on demand, by the sweep, or when
+ * the interface is restored). Nothing is ever re-submitted to the provider, so a payment that may have settled is
+ * never taken twice. Confirmations arrive from integration staff or as signed provider callbacks
+ * ({@link PaymentCallbacks}).
  */
 @Service
 public class PaymentNotifications {
@@ -47,10 +55,21 @@ public class PaymentNotifications {
         this.providerStatus = providerStatus;
     }
 
+    /** A confirmation recorded by integration staff. */
     @Transactional
     public IntegrationViews.InboundView receive(JsonNode body) {
         AppUser user = security.authenticatedUser();
         user.validateHasPermissionTo("MANAGE_INTEGRATION");
+        return process(body, user.getUsername(), InboundMessage.STAFF);
+    }
+
+    /** A provider callback whose signature and replay window {@link PaymentCallbacks} has already verified. */
+    @Transactional
+    public IntegrationViews.InboundView receiveVerified(JsonNode body) {
+        return process(body, "provider:" + required(body, "provider"), InboundMessage.SIGNED_CALLBACK);
+    }
+
+    private IntegrationViews.InboundView process(JsonNode body, String actor, String channel) {
         String provider = required(body, "provider");
         String providerRef = required(body, "providerReference");
         String policyRef = required(body, "policyRef");
@@ -77,14 +96,72 @@ public class PaymentNotifications {
                 throw new ConflictException("Provider reference " + providerRef
                         + " was already received with different details.");
             }
+            // AT-SH12-01: acknowledged again with the first result; no second business effect.
             return IntegrationService.inbound(earlier.get());
         }
 
-        InboundMessage message = new InboundMessage(provider, providerRef, TYPE, hash, policyRef, amount,
-                user.getUsername());
+        InboundMessage message = new InboundMessage(provider, providerRef, TYPE, hash, policyRef, amount, actor);
+        message.arrived(channel, currency, method);
+        decide(message, actor);
+        em.persist(message);
+        return IntegrationService.inbound(message);
+    }
+
+    /**
+     * NS-SH12-004: asks the provider again about a confirmation whose outcome is unknown. Only the status query is
+     * repeated; the payment itself is never re-submitted. Integration staff only.
+     */
+    @Transactional
+    public IntegrationViews.InboundView requery(Long id) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("MANAGE_INTEGRATION");
+        InboundMessage message = em.find(InboundMessage.class, id);
+        if (message == null) {
+            throw new NotFoundException("Inbound message " + id + " not found");
+        }
+        if (!InboundMessage.UNKNOWN.equals(message.getStatus())) {
+            throw new ConflictException("Only a confirmation with an unknown outcome is re-queried; this one is "
+                    + message.getStatus() + ".");
+        }
+        decide(message, user.getUsername());
+        return IntegrationService.inbound(message);
+    }
+
+    /** Ids of confirmations whose outcome is still unknown, oldest first, for the re-query sweep. */
+    @Transactional(readOnly = true)
+    public List<Long> unknownIds() {
+        return em.createQuery("select m.id from InboundMessage m where m.status = :unknown order by m.id", Long.class)
+                .setParameter("unknown", InboundMessage.UNKNOWN).getResultList();
+    }
+
+    /** The sweep's re-query of one unknown confirmation, in its own transaction; returns the resulting status. */
+    @Transactional
+    public String requerySystem(Long id) {
+        InboundMessage message = em.find(InboundMessage.class, id);
+        if (message == null || !InboundMessage.UNKNOWN.equals(message.getStatus())) {
+            return message == null ? null : message.getStatus();
+        }
+        decide(message, "system");
+        return message.getStatus();
+    }
+
+    /** Applies, suspends or (when the provider cannot be asked) leaves the confirmation UNKNOWN. */
+    private void decide(InboundMessage message, String actor) {
+        String provider = message.getProvider();
+        String providerRef = message.getProviderRef();
+        String policyRef = message.getBusinessRef();
+        BigDecimal amount = message.getAmount();
+        String currency = message.getCurrency() == null ? "BWP" : message.getCurrency();
+        String method = message.getPaymentMethod() == null ? "Bank EFT" : message.getPaymentMethod();
         String problem = problem(policyRef, amount, currency);
         if (problem == null) {
-            problem = unconfirmed(provider, providerRef, amount, currency);
+            try {
+                problem = unconfirmed(message, provider, providerRef, amount, currency);
+            } catch (InterfaceUnavailableException ex) {
+                message.outcome(InboundMessage.UNKNOWN, null, ex.getMessage()
+                        + ". Nothing is applied or re-sent; the status is asked again until the provider answers.");
+                return;
+            }
         }
         if (problem == null) {
             // SH04: the provider confirmed it holds this money under this reference.
@@ -96,12 +173,14 @@ public class PaymentNotifications {
             confirmed.put("amount", amount.toPlainString());
             confirmed.put("currency", currency);
             confirmed.put("method", method);
-            confirmed.put("source", "NOTIFICATION");
-            outbox.publish(Events.RECEIPT_CONFIRMED, providerRef, confirmed, user.getUsername());
+            confirmed.put("source", InboundMessage.SIGNED_CALLBACK.equals(message.getChannel()) ? "SIGNED_CALLBACK"
+                    : "NOTIFICATION");
+            outbox.publish(Events.RECEIPT_CONFIRMED, providerRef, confirmed, actor);
             try {
                 policies.pay(policyRef, method, "integration:" + provider);
                 message.outcome(InboundMessage.APPLIED, policyRef, "Premium collected by " + method
-                        + "; confirmed by " + provider);
+                        + "; confirmed by " + provider
+                        + (InboundMessage.SIGNED_CALLBACK.equals(message.getChannel()) ? " (signed callback)" : ""));
             } catch (IllegalArgumentException ex) {
                 problem = ex.getMessage();
             }
@@ -114,14 +193,14 @@ public class PaymentNotifications {
             data.put("policyRef", policyRef);
             data.put("amount", amount.toPlainString());
             data.put("reason", problem.length() <= 300 ? problem : problem.substring(0, 300));
-            outbox.publish(Events.UNMATCHED_RECEIPT, providerRef, data, user.getUsername());
+            outbox.publish(Events.UNMATCHED_RECEIPT, providerRef, data, actor);
         }
-        em.persist(message);
-        return IntegrationService.inbound(message);
     }
 
     /** Null when the provider itself confirms it holds this amount under this reference; otherwise why not. */
-    private String unconfirmed(String provider, String providerRef, BigDecimal amount, String currency) {
+    private String unconfirmed(InboundMessage message, String provider, String providerRef, BigDecimal amount,
+            String currency) {
+        message.statusQueried();
         Optional<ProviderStatusClient.ProviderStatus> status = providerStatus.status(provider, providerRef);
         if (status.isEmpty()) {
             return provider + " offers no status query: match " + providerRef

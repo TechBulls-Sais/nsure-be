@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -20,9 +21,11 @@ public class IntegrationController {
     private final PaymentNotifications payments;
     private final ProviderStatusClient providerStatus;
     private final InterfaceCatalogue catalogue;
+    private final PaymentCallbacks callbacks;
 
     public IntegrationController(IntegrationService integration, PaymentNotifications payments,
-            ProviderStatusClient providerStatus, InterfaceCatalogue catalogue) {
+            ProviderStatusClient providerStatus, InterfaceCatalogue catalogue, PaymentCallbacks callbacks) {
+        this.callbacks = callbacks;
         this.integration = integration;
         this.payments = payments;
         this.providerStatus = providerStatus;
@@ -97,6 +100,29 @@ public class IntegrationController {
     @PostMapping("/payment-notifications")
     public IntegrationViews.InboundView paymentNotification(@RequestBody JsonNode body) {
         return payments.receive(body);
+    }
+
+    /**
+     * A provider's signed settlement callback. No login: authenticated by X-Nsure-Signature over
+     * "X-Nsure-Timestamp.body" and the replay window, checked before anything is read or changed.
+     */
+    @PostMapping("/callbacks/payments")
+    public IntegrationViews.InboundView paymentCallback(@RequestBody(required = false) String body,
+            @RequestHeader(value = "X-Nsure-Signature", required = false) String signature,
+            @RequestHeader(value = "X-Nsure-Timestamp", required = false) String timestamp) {
+        return callbacks.callback(body, signature, timestamp);
+    }
+
+    /** Simulator only: the provider signs and sends a settlement callback (optionally repeated or tampered). */
+    @PostMapping("/simulator/payment-callbacks")
+    public Map<String, Object> simulateCallback(@RequestBody JsonNode body) {
+        return callbacks.simulate(body);
+    }
+
+    /** NS-SH12-004: asks the provider again about a confirmation whose outcome is unknown. */
+    @PostMapping("/inbound/{id}/status-query")
+    public IntegrationViews.InboundView statusQuery(@PathVariable Long id) {
+        return payments.requery(id);
     }
 
     /** Simulator only: the provider's side receives money, {provider, providerReference, amount, currency?}. */

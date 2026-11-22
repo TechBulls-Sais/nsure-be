@@ -37,10 +37,12 @@ public class InterfaceCatalogue {
     private final OperatorActionLog actions;
     private final StaffAlertService alerts;
     private final boolean simulator;
+    private final PaymentCallbacks payments;
 
     public InterfaceCatalogue(JdbcTemplate jdbc, PlatformSecurityContext security, InterfaceRegistry registry,
             OutboxDispatcher dispatcher, OperatorActionLog actions, StaffAlertService alerts,
-            @Value("${nsure.integration.provider-simulator:true}") boolean simulator) {
+            @Value("${nsure.integration.provider-simulator:true}") boolean simulator, PaymentCallbacks payments) {
+        this.payments = payments;
         this.jdbc = jdbc;
         this.security = security;
         this.registry = registry;
@@ -199,6 +201,10 @@ public class InterfaceCatalogue {
                     : new OutboxDispatcher.DispatchResult(0, 0);
             outcome = "Restored; " + resumed + " delivery(ies) resumed, " + run.delivered() + " delivered, "
                     + run.failed() + " failed";
+            if ("BANK_PAYMENTS".equals(code)) {
+                // NS-SH12-004: the provider answers again, so unknown payment outcomes are asked about now.
+                outcome += "; " + payments.requeryUnknown() + " unknown payment outcome(s) resolved by status query";
+            }
             actions.record("INTERFACE_RESTORED", code, null, reason, outcome, user.getUsername());
         } else {
             outcome = "Marked unavailable (simulated outage)";
