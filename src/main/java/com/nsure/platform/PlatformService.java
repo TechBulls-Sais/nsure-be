@@ -52,6 +52,10 @@ public class PlatformService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.nsure.portfolio.PartyRegister parties;
 
+    /** The governed metric dictionary (NS-SH13-003), owned by reporting. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.nsure.reporting.MetricDictionary dictionary;
+
     public PlatformService(EntityManager em, JdbcTemplate jdbc, PlatformSecurityContext security, EvidenceChain audit) {
         this.em = em;
         this.jdbc = jdbc;
@@ -244,38 +248,17 @@ public class PlatformService {
 
     // ── extracts and the metric dictionary (NS-SH08-007, NS-SH13-003/006) ─────────────────────────
 
-    public List<Map<String, String>> metrics() {
-        user("READ_REPORT");
-        return List.of(
-                metric("Active policies", "Individual contracts with status Active at the cut-off.", "Count of policies",
-                        "Policy status; event date", "Operations"),
-                metric("Active lives", "Distinct insured lives with cover in force, individual and group counted"
-                        + " separately.", "Count of lives", "Cover start/cease dates", "Operations"),
-                metric("Premium collected", "Premium receipts allocated and not reversed in the period.", "BWP",
-                        "Receipt date (cash basis)", "Finance"),
-                metric("Collection rate", "Premium collected ÷ premium due in the period.", "Percent",
-                        "Due date for the denominator, receipt date for the numerator", "Finance"),
-                metric("Claims ratio", "Claims paid ÷ premium collected for the same period.", "Percent",
-                        "Payment date and receipt date", "Actuarial"),
-                metric("Claims turnaround", "Days from registration to settlement, for claims settled in the period.",
-                        "Days (median)", "Settlement date", "Claims"),
-                metric("Persistency (13-month)", "Policies issued 13 months before the cut-off that are still in force ÷"
-                        + " policies issued in that month.", "Percent", "Issue date cohort", "Actuarial"),
-                metric("Straight-through rate", "Applications accepted by the underwriting rules ÷ applications"
-                        + " submitted.", "Percent", "Submission date", "New Business"),
-                metric("Ceded premium", "Premium ceded to reinsurers under approved treaties, net of adjustments.", "BWP",
-                        "Cession date", "Reinsurance"));
+    /** Every metric definition version, from the governed dictionary (NS-SH13-003). */
+    public List<Map<String, Object>> metrics() {
+        return dictionary.list();
     }
 
-    private static Map<String, String> metric(String name, String definition, String unit, String timeBasis,
-            String owner) {
-        Map<String, String> m = new LinkedHashMap<>();
-        m.put("name", name);
-        m.put("definition", definition);
-        m.put("unit", unit);
-        m.put("timeBasis", timeBasis);
-        m.put("owner", owner);
-        return m;
+    public Map<String, Object> proposeMetric(String key, JsonNode body) {
+        return dictionary.propose(key, body);
+    }
+
+    public Map<String, Object> approveMetric(String key, int version) {
+        return dictionary.approve(key, version);
     }
 
     @Transactional(readOnly = true)
@@ -303,6 +286,10 @@ public class PlatformService {
     public Map<String, Object> extract(JsonNode body) {
         AppUser user = user("READ_REPORT");
         String type = required(body, "extractType").toUpperCase(Locale.ROOT);
+        // NS-SH13-005: an extract holds the rows themselves, so it needs the permission to read those records too,
+        // and customer references are masked for anyone who may not read customers.
+        user.validateHasPermissionTo("CLAIMS".equals(type) ? "READ_CLAIM" : "READ_POLICY");
+        boolean mask = !user.hasPermissionTo("READ_CUSTOMER");
         List<Map<String, Object>> rows = new ArrayList<>();
         BigDecimal total = BigDecimal.ZERO;
         switch (type) {
@@ -311,7 +298,7 @@ public class PlatformService {
                         InsurancePolicy.class).getResultList()) {
                     Map<String, Object> r = new LinkedHashMap<>();
                     r.put("policyRef", p.getRef());
-                    r.put("customerRef", p.getCustomerRef());
+                    r.put("customerRef", mask ? "masked" : p.getCustomerRef());
                     r.put("product", p.getProduct());
                     r.put("plan", p.getTier());
                     r.put("status", p.getStatus());
@@ -368,7 +355,7 @@ public class PlatformService {
                 + " run_by, run_at) values (?, ?, ?, ?, ?, ?, ?, ?)", ref, type, LocalDate.now(), rows.size(), total,
                 checksum, user.getUsername(), LocalDateTime.now());
         audit.record(user.getUsername(), "Data extract produced", "Extract", ref, type + ": " + rows.size()
-                + " records, control total " + total);
+                + " records, control total " + total + (mask ? "; customer references masked" : ""));
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ref", ref);
         out.put("extractType", type);
@@ -376,6 +363,7 @@ public class PlatformService {
         out.put("recordCount", rows.size());
         out.put("controlTotal", total);
         out.put("checksum", checksum);
+        out.put("masked", mask);
         out.put("rows", rows);
         return out;
     }

@@ -1,0 +1,89 @@
+databaseChangeLog:
+  # SH13: the metric dictionary as a governed, versioned record (NS-SH13-003) and the log of report exports
+  # (NS-SH13-005, AT-SH13-03). Persistency and the claims (loss) ratio need actuarial approval before their figures
+  # count as approved: they are seeded awaiting approval.
+  - changeSet:
+      id: 212-reporting-governance
+      author: nsure
+      changes:
+        - createTable:
+            tableName: rpt_metric_definition
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_rpt_metric_definition}}
+              - column: {name: metric_key, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: version_no, type: int, constraints: {nullable: false}}
+              - column: {name: name, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: definition, type: varchar(600), constraints: {nullable: false}}
+              - column: {name: numerator, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: denominator, type: varchar(300)}
+              - column: {name: unit, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: currency, type: varchar(3)}
+              - column: {name: date_basis, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: time_basis, type: varchar(200), constraints: {nullable: false}}
+              - column: {name: time_window, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: exclusions, type: varchar(400)}
+              - column: {name: owner, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: requires_approval, type: boolean, constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: change_note, type: varchar(400)}
+              - column: {name: proposed_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: proposed_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+        - addUniqueConstraint:
+            tableName: rpt_metric_definition
+            columnNames: metric_key, version_no
+            constraintName: uk_rpt_metric_version
+        - createTable:
+            tableName: rpt_export_log
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_rpt_export_log}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_rpt_export_ref}}
+              - column: {name: export_kind, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: subject, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: scope, type: varchar(200), constraints: {nullable: false}}
+              - column: {name: filters, type: varchar(400)}
+              - column: {name: record_count, type: int, constraints: {nullable: false}}
+              - column: {name: masked, type: boolean, constraints: {nullable: false}}
+              - column: {name: sensitive, type: boolean, constraints: {nullable: false}}
+              - column: {name: large, type: boolean, constraints: {nullable: false}}
+              - column: {name: exported_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: exported_at, type: datetime, constraints: {nullable: false}}
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT seed.g, seed.c, seed.e, seed.a, FALSE, seed.f FROM (
+                SELECT 'reporting' g, 'MANAGE_METRIC' c, 'METRIC' e, 'MANAGE' a, 'Propose a new version of a metric definition' f UNION ALL
+                SELECT 'reporting', 'APPROVE_METRIC', 'METRIC', 'APPROVE', 'Approve a metric definition someone else proposed'
+              ) seed WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = seed.c);
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code IN ('MANAGE_METRIC', 'APPROVE_METRIC')
+              WHERE r.name = 'Super Admin'
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+
+              INSERT INTO rpt_metric_definition (metric_key, version_no, name, definition, numerator, denominator, unit, currency, date_basis, time_basis, time_window, exclusions, owner, requires_approval, status, change_note, proposed_by, proposed_at, approved_by, approved_at)
+              SELECT seed.k, 1, seed.n, seed.d, seed.num, seed.den, seed.u, seed.ccy, seed.db, seed.tb, seed.tw, seed.ex, seed.o, seed.ra, seed.st, 'First governed version (from the earlier fixed dictionary)', 'system', CURRENT_TIMESTAMP, CASE WHEN seed.st = 'APPROVED' THEN 'system' END, CASE WHEN seed.st = 'APPROVED' THEN CURRENT_TIMESTAMP END FROM (
+                SELECT 'collection_rate' k, 'Collection rate' n, 'Premium collected ÷ premium due in the period.' d, 'Billed amount of instalments paid or waived' num, 'Billed amount of instalments due' den, 'PERCENT' u, 'BWP' ccy, 'EVENT' db, 'Due date for the denominator, receipt date for the numerator' tb, 'Selected period' tw, 'Cancelled instalments' ex, 'Finance' o, FALSE ra, 'APPROVED' st UNION ALL
+                SELECT 'active_lives', 'Active lives', 'Distinct insured persons with cover in force. A person on several policies or schemes counts once (normalised full name and date of birth); individual and group are also counted separately.', 'Distinct insured persons with active cover', NULL, 'COUNT', NULL, 'EVENT', 'Cover start/cease dates', 'Point in time', 'Cover pending underwriting; ceased lives', 'Operations', FALSE, 'APPROVED' UNION ALL
+                SELECT 'benefit_exposure', 'Benefit exposure', 'Sum assured in force (individual) and accepted cover (group), reported separately from lives.', 'Sum assured or accepted cover in force', NULL, 'BWP', 'BWP', 'EVENT', 'Cover in force at the time shown', 'Point in time', 'Cover pending underwriting', 'Actuarial', FALSE, 'APPROVED' UNION ALL
+                SELECT 'premium_in_force', 'Monthly premium in force', 'Monthly premium of individual policies with status Active.', 'Premium of Active policies', NULL, 'BWP', 'BWP', 'EVENT', 'Policy status', 'Point in time', 'Policies not Active', 'Finance', FALSE, 'APPROVED' UNION ALL
+                SELECT 'new_business', 'New business issued', 'Individual policies whose cover started in the period.', 'Policies with a cover start date in the period', NULL, 'COUNT', NULL, 'EVENT', 'Cover start date', 'Selected period', 'Policies not yet incepted', 'New Business', FALSE, 'APPROVED' UNION ALL
+                SELECT 'lapsed_policies', 'Lapsed or without cover', 'Individual policies Lapsed or Active - No Cover.', 'Policies Lapsed or Active - No Cover', NULL, 'COUNT', NULL, 'EVENT', 'Policy status', 'Point in time', NULL, 'Operations', FALSE, 'APPROVED' UNION ALL
+                SELECT 'open_claims', 'Open claims', 'Individual claims not yet paid, rejected or closed.', 'Claims Initiated to Payout Failed', NULL, 'COUNT', NULL, 'EVENT', 'Claim status', 'Point in time', 'Paid, rejected and closed claims', 'Claims', FALSE, 'APPROVED' UNION ALL
+                SELECT 'claims_paid', 'Claims paid', 'Payout amounts of claims paid in the period (operational, payment date). The finance section shows the posted (accounting date) figure.', 'Payout amount of Paid claims', NULL, 'BWP', 'BWP', 'EVENT', 'Payment date', 'Selected period', 'Claims not paid; reversed payouts', 'Claims', FALSE, 'APPROVED' UNION ALL
+                SELECT 'premium_collected', 'Premium collected', 'Premium receipts allocated and not reversed in the period.', 'Successful premium receipts', NULL, 'BWP', 'BWP', 'EVENT', 'Receipt date (cash basis)', 'Selected period', 'Reversed and returned receipts', 'Finance', FALSE, 'APPROVED' UNION ALL
+                SELECT 'premium_due', 'Premium due', 'Instalments billed with a due date in the period.', 'Billed amount of instalments', NULL, 'BWP', 'BWP', 'EVENT', 'Due date', 'Selected period', 'Cancelled instalments', 'Finance', FALSE, 'APPROVED' UNION ALL
+                SELECT 'active_policies', 'Active policies', 'Individual contracts with status Active at the time shown.', 'Policies with status Active', NULL, 'COUNT', NULL, 'EVENT', 'Policy status; event date', 'Point in time', 'Pending payment, Active - No Cover, cancelled, lapsed, terminated', 'Operations', FALSE, 'APPROVED' UNION ALL
+                SELECT 'arrears', 'Arrears', 'Billed instalments due before today and not paid.', 'Billed amount of overdue DUE and PART_PAID instalments', NULL, 'BWP', 'BWP', 'EVENT', 'Due date', 'Point in time', 'Paid, waived and cancelled instalments', 'Finance', FALSE, 'APPROVED' UNION ALL
+                SELECT 'quotes', 'Quotes', 'Distinct quotes created in the period (all versions of a quote count once).', 'Distinct quote references', NULL, 'COUNT', NULL, 'EVENT', 'Quote date', 'Selected period', NULL, 'New Business', FALSE, 'APPROVED' UNION ALL
+                SELECT 'applications_submitted', 'Applications submitted', 'Applications submitted in the period.', 'Applications with a submission date', NULL, 'COUNT', NULL, 'EVENT', 'Submission date', 'Selected period', 'Drafts', 'New Business', FALSE, 'APPROVED' UNION ALL
+                SELECT 'conversion_rate', 'Submitted-to-issued conversion', 'Applications issued ÷ applications submitted, same cohort.', 'Applications of the cohort issued as policies', 'Applications of the cohort submitted', 'PERCENT', NULL, 'EVENT', 'Submission date', 'Selected period', 'Drafts', 'New Business', FALSE, 'APPROVED' UNION ALL
+                SELECT 'uw_queue', 'Open underwriting cases', 'Underwriting cases not yet accepted, declined, postponed or withdrawn.', 'Open underwriting cases', NULL, 'COUNT', NULL, 'EVENT', 'Case status', 'Point in time', NULL, 'Underwriting', FALSE, 'APPROVED' UNION ALL
+                SELECT 'evidence_outstanding', 'Evidence outstanding', 'Underwriting evidence requested and not yet received.', 'Evidence requests REQUESTED', NULL, 'COUNT', NULL, 'EVENT', 'Request status; due date for overdue', 'Point in time', NULL, 'Underwriting', FALSE, 'APPROVED' UNION ALL
+                SELECT 'ceded_premium', 'Ceded premium', 'Premium ceded to reinsurers under approved treaties, net of adjustments.', 'Ceded premium of cessions', NULL, 'BWP', 'BWP', 'EVENT', 'Cession date', 'Selected period', NULL, 'Reinsurance', FALSE, 'APPROVED' UNION ALL
+                SELECT 'claims_ratio', 'Claims ratio', 'Claims paid ÷ premium collected for the same period (demo default formula awaiting actuarial approval).', 'Claims paid in the period', 'Premium collected in the period', 'PERCENT', 'BWP', 'EVENT', 'Payment date and receipt date', 'Selected period', 'Reversed receipts and payouts', 'Actuarial', TRUE, 'PENDING_APPROVAL' UNION ALL
+                SELECT 'persistency_13m', 'Persistency (13-month)', 'Policies issued 13 months before the cut-off that are still in force ÷ policies issued in that month (demo default formula awaiting actuarial approval).', 'Policies of the cohort still Active', 'Policies with cover start in the month 13 months before the cut-off', 'PERCENT', NULL, 'EVENT', 'Issue date cohort', 'One monthly cohort', 'Policies never incepted', 'Actuarial', TRUE, 'PENDING_APPROVAL' UNION ALL
+                SELECT 'straight_through_rate', 'Straight-through rate', 'Applications accepted by the underwriting rules ÷ applications submitted.', 'Applications auto-accepted by rules', 'Applications submitted', 'PERCENT', NULL, 'EVENT', 'Submission date', 'Selected period', NULL, 'New Business', FALSE, 'APPROVED' UNION ALL
+                SELECT 'claims_turnaround', 'Claims turnaround', 'Days from registration to settlement, for claims settled in the period.', 'Median days from lodgement to payment', NULL, 'DAYS', NULL, 'EVENT', 'Settlement date', 'Selected period', 'Unsettled claims', 'Claims', FALSE, 'APPROVED'
+              ) seed WHERE NOT EXISTS (SELECT 1 FROM rpt_metric_definition x WHERE x.metric_key = seed.k);

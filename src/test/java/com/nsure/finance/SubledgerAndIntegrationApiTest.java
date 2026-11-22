@@ -508,7 +508,7 @@ class SubledgerAndIntegrationApiTest {
                 .andExpect(jsonPath("$.sections[?(@.key == 'individual')].metrics").exists())
                 .andExpect(jsonPath("$.sections[?(@.key == 'finance')]").exists())
                 // Every module reports, and none of them failed to load.
-                .andExpect(jsonPath("$.sections.length()").value(8))
+                .andExpect(jsonPath("$.sections.length()").value(13))
                 .andExpect(jsonPath("$.sections[?(@.error != null)]").isEmpty());
         mockMvc.perform(get("/reports/management").with(signedIn("service", "password")))
                 .andExpect(status().isForbidden());

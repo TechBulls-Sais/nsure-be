@@ -134,6 +134,9 @@ public enum PermissionCatalog {
     READ_INTEGRATION(null),
     MANAGE_INTEGRATION(null),
     READ_REPORT(null),
+    // Metric dictionary (SH13 NS-SH13-003): proposing a definition and approving someone else's.
+    MANAGE_METRIC(null),
+    APPROVE_METRIC(null),
 
     // ── insurer configuration releases (docs/INSURER_DEPLOYMENT_PLAN.md) ────────────────────────────────
     READ_CONFIG(null),

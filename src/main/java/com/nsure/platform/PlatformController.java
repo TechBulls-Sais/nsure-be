@@ -53,8 +53,19 @@ public class PlatformController {
     }
 
     @GetMapping("/metrics")
-    public List<Map<String, String>> metrics() {
+    public List<Map<String, Object>> metrics() {
         return platform.metrics();
+    }
+
+    /** {changeNote, fields to change}: proposes the next version of a metric definition. */
+    @PostMapping("/metrics/{key}/versions")
+    public Map<String, Object> proposeMetric(@PathVariable String key, @RequestBody JsonNode body) {
+        return platform.proposeMetric(key, body);
+    }
+
+    @PostMapping("/metrics/{key}/versions/{version}/approval")
+    public Map<String, Object> approveMetric(@PathVariable String key, @PathVariable int version) {
+        return platform.approveMetric(key, version);
     }
 
     @GetMapping("/extracts")

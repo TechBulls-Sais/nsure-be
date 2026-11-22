@@ -358,6 +358,8 @@ public final class ApiAccessRules {
             rule(POST, "/platform/wordings", anyOf("UPDATE_PRODUCT")),
             rule(POST, "/platform/wordings/*/versions/*/approval", anyOf("ACTIVATE_PRODUCT")),
             rule(GET, "/platform/metrics", anyOf("READ_REPORT")),
+            rule(POST, "/platform/metrics/*/versions", anyOf("MANAGE_METRIC")),
+            rule(POST, "/platform/metrics/*/versions/*/approval", anyOf("APPROVE_METRIC")),
             rule(GET, "/platform/extracts", anyOf("READ_REPORT")),
             rule(POST, "/platform/extracts", anyOf("READ_REPORT")),
             rule(GET, "/platform/assistants/log", anyOf("READ_AUDIT")),
@@ -443,7 +445,10 @@ public final class ApiAccessRules {
             rule(POST, "/integration/inbound/*/status-query", anyOf("MANAGE_INTEGRATION")),
 
             // ── management reporting SH13 ──────────────────────────────────────────────────────────────
+            // AT-SH13-03: a partner's export of its own portfolio (scoped by portal_account in the service).
+            rule(GET, "/reports/partner-portfolio", anyOf("USE_PARTNER_PORTAL")),
             rule(GET, "/reports/**", anyOf("READ_REPORT")),
+            rule(POST, "/reports/exports", anyOf("READ_REPORT")),
 
             // ── insurer installation and configuration releases (guide §12, §16) ───────────────────────
             // GET /public/config is covered by /public/** above: branding only, nothing secret.
