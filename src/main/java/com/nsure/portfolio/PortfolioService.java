@@ -1548,6 +1548,7 @@ public class PortfolioService {
     private PortfolioViews.QuoteView quote(CustomerAccount customer, String product, String tierName, JsonNode body) {
         CoverTier tier = tier(product, tierName);
         Optional<RateTableService.PolicyPrice> price = price(tier, customer, lives(body));
+        requireFlatTierAge(tier, customer, price);
         return new PortfolioViews.QuoteView(
                 product, tier.getName(), tier.getCoverAmount(), price.isPresent(),
                 price.map(RateTableService.PolicyPrice::rateTableVersion).orElse(""),
