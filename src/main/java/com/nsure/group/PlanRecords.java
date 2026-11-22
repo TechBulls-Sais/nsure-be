@@ -108,7 +108,7 @@ public final class PlanRecords {
      * of a join or salary change dated before it, which uses the version in force on its effective date.
      */
     @Entity(name = "GroupCategoryVersion")
-    @Table(name = "grp_category_version")
+    @Table(name = "grp_category_terms_version")
     public static class CategoryVersion {
         @Id
         @GeneratedValue(strategy = GenerationType.IDENTITY)

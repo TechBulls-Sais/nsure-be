@@ -59,10 +59,10 @@ databaseChangeLog:
               - column: {name: eligibility_rule, type: varchar(300)}
               - column: {name: version_no, type: int, defaultValueNumeric: 1, constraints: {nullable: false}}
         - createTable:
-            tableName: grp_category_version
+            tableName: grp_category_terms_version
             columns:
               - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
-              - column: {name: category_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_grp_category_version, references: grp_benefit_category(id)}}
+              - column: {name: category_id, type: bigint, constraints: {nullable: false, foreignKeyName: fk_grp_cat_terms_version, references: grp_benefit_category(id)}}
               - column: {name: version_no, type: int, constraints: {nullable: false}}
               - column: {name: effective_from, type: date, constraints: {nullable: false}}
               - column: {name: benefit_basis, type: varchar(20), constraints: {nullable: false}}
@@ -76,9 +76,9 @@ databaseChangeLog:
               - column: {name: changed_by, type: varchar(100), constraints: {nullable: false}}
               - column: {name: changed_at, type: timestamp(6), constraints: {nullable: false}}
         - addUniqueConstraint:
-            tableName: grp_category_version
+            tableName: grp_category_terms_version
             columnNames: category_id, version_no
-            constraintName: uk_grp_category_version
+            constraintName: uk_grp_cat_terms_version
   - changeSet:
       id: 137-h2-benefit-terms-longvarchar
       author: nsure
