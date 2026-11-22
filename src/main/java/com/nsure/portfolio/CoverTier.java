@@ -49,6 +49,32 @@ public class CoverTier {
     protected CoverTier() {
     }
 
+    /** A plan released from a product configuration (NS-SH02-001); it is on sale once {@link #release} runs. */
+    CoverTier(InsuranceProduct product, String name, int displayOrder) {
+        this.product = product;
+        this.name = name;
+        this.displayOrder = displayOrder;
+        this.active = false;
+    }
+
+    /** Puts the configured cover, premium and frequency on sale (or keeps it off sale until it is due). */
+    void release(int coverAmount, int premium, String premiumFrequency, String benefits, boolean onSale) {
+        this.coverAmount = coverAmount;
+        this.premium = premium;
+        this.premiumFrequency = premiumFrequency;
+        this.benefits = benefits == null || benefits.length() <= 500 ? benefits : benefits.substring(0, 500);
+        this.active = onSale;
+    }
+
+    /** Withdrawn from new business (NS-SH02-006): existing policies keep their plan; new quotes cannot choose it. */
+    void withdraw() {
+        this.active = false;
+    }
+
+    void putOnSale() {
+        this.active = true;
+    }
+
     public Long getId() {
         return id;
     }

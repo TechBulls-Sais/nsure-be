@@ -147,6 +147,117 @@ public class ClaimFinancials {
         outbox.publish(Events.BENEFIT_LIMIT_CONSUMED, claim.getPolicyRef(), data, who);
     }
 
+    /**
+     * A settled payout came back (§09, NS-SH05-005): the consumption is reversed by a corrective entry that names the
+     * returned instruction, and the amount is reserved again, because the benefit is still owed.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void reverseConsumption(InsuranceClaim claim, String instructionRef, String actor) {
+        String who = actor == null ? WorkflowHistory.SYSTEM : actor;
+        BigDecimal consumed = BigDecimal.ZERO;
+        for (ClaimLedgers.LimitEntry e : entries(claim.getRef())) {
+            consumed = ClaimLedgers.LimitEntry.CONSUMED.equals(e.getEntry()) ? consumed.add(e.getAmount())
+                    : ClaimLedgers.LimitEntry.REVERSED.equals(e.getEntry()) ? consumed.subtract(e.getAmount()) : consumed;
+        }
+        if (consumed.signum() <= 0) {
+            return;
+        }
+        em.persist(new ClaimLedgers.LimitEntry(claim.getPolicyRef(), lifeKey(claim), claim.getRef(),
+                ClaimLedgers.LimitEntry.REVERSED, consumed, who));
+        em.persist(new ClaimLedgers.LimitEntry(claim.getPolicyRef(), lifeKey(claim), claim.getRef(),
+                ClaimLedgers.LimitEntry.RESERVED, consumed, who));
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("claimRef", claim.getRef());
+        data.put("policyRef", claim.getPolicyRef());
+        data.put("lifeKey", lifeKey(claim));
+        data.put("amount", consumed.negate().toPlainString());
+        data.put("reversalOf", instructionRef);
+        outbox.publish(Events.BENEFIT_LIMIT_CONSUMED, claim.getPolicyRef(), data, who);
+    }
+
+    // ── the benefit calculation (NS-SH03-004, NS-SH05-002) ───────────────────────────────────────
+
+    /** One step of a claim's benefit calculation: a signed amount and why. */
+    public record CalcLine(String label, BigDecimal amount, String reason) {
+    }
+
+    /**
+     * What a claim is eligible for, separate from the decision on it: the sum assured in force on the event date,
+     * less deductions (premiums that fell due on or before the event and were unpaid), capped by what is left of the
+     * life and policy limits. {@code exclusions} are the underwriting terms on the policy the approver must consider.
+     */
+    public record Calculation(LocalDate eventDate, BigDecimal sumAssured, String sumAssuredBasis, List<CalcLine> lines,
+            BigDecimal deductions, BigDecimal eligible, BigDecimal limitRemaining, BigDecimal mostPayable,
+            String exclusions, String version) {
+    }
+
+    /** Version of the claim calculation rules; stored with every decision's trace. */
+    static final String CALCULATION_VERSION = "claim-calc-1 (demo default: outstanding premium deducted, D06/D07)";
+
+    public Calculation calculation(InsuranceClaim claim, InsurancePolicy policy) {
+        LocalDate event = date(claim.getEventDate());
+        List<CalcLine> lines = new ArrayList<>();
+        BigDecimal sumAssured = claim.getAmount() == null ? BigDecimal.ZERO : claim.getAmount();
+        String basis = claim.getCoveredLifeId() != null ? "Cover of " + nameOf(claim) + " on the policy"
+                : "Sum assured in force on " + event;
+        lines.add(new CalcLine("Sum assured on the event date", sumAssured, basis));
+        BigDecimal deductions = BigDecimal.ZERO;
+        if (event != null && policy.getNextPremiumDue() != null && !policy.getNextPremiumDue().isAfter(event)
+                && policy.getPremium() != null && policy.getPremium().signum() > 0) {
+            int months = switch (policy.getPremiumFrequency() == null ? "Monthly" : policy.getPremiumFrequency()) {
+                case "Annually", "Annual", "Yearly" -> 12;
+                case "Quarterly" -> 3;
+                case "Semi-annually", "Half-yearly" -> 6;
+                default -> 1;
+            };
+            int unpaid = 0;
+            LocalDate due = policy.getNextPremiumDue();
+            while (!due.isAfter(event) && unpaid < 24) {
+                unpaid++;
+                due = due.plusMonths(months);
+            }
+            deductions = policy.getPremium().multiply(BigDecimal.valueOf(unpaid));
+            lines.add(new CalcLine("Outstanding premium", deductions.negate(), unpaid + " premium(s) of "
+                    + Money.display(policy.getPremium()) + " due from " + policy.getNextPremiumDue()
+                    + " on or before the event and unpaid (deducted: demo rule)"));
+        }
+        BigDecimal eligible = sumAssured.subtract(deductions).max(BigDecimal.ZERO).setScale(2, java.math.RoundingMode.HALF_UP);
+        lines.add(new CalcLine("Eligible amount", eligible, "Sum assured less deductions"));
+        Limits limits = limits(claim, policy);
+        BigDecimal held = reservedLimit(claim.getRef());
+        BigDecimal remaining = limits.lifeRemaining().min(limits.policyRemaining()).add(held);
+        BigDecimal most = eligible.min(remaining.max(BigDecimal.ZERO));
+        if (most.compareTo(eligible) < 0) {
+            lines.add(new CalcLine("Limit cap", most.subtract(eligible), "Only " + Money.display(remaining)
+                    + " is left of the life and policy benefit limits"));
+        }
+        String exclusions = policy.getUwTerms() == null || policy.getUwTerms().isBlank() ? null : policy.getUwTerms();
+        return new Calculation(event, sumAssured, basis, lines, deductions, eligible, remaining, most, exclusions,
+                CALCULATION_VERSION);
+    }
+
+    /**
+     * The sum assured in force on the event date (NS-SH05-002): the policy's amount as it stands, unless an applied
+     * endorsement changed it after the event, in which case the earliest such change's previous amount applies.
+     */
+    public BigDecimal sumAssuredOn(InsurancePolicy policy, LocalDate event) {
+        if (event == null) {
+            return policy.getAmount();
+        }
+        @SuppressWarnings("unchecked")
+        List<BigDecimal> before = em.createNativeQuery("select old_sum_assured from pol_endorsement where policy_ref = ?1"
+                        + " and applied_at is not null and old_sum_assured is not null and new_sum_assured is not null"
+                        + " and effective_date > ?2 order by effective_date, id")
+                .setParameter(1, policy.getRef()).setParameter(2, event).setMaxResults(1).getResultList();
+        return before.isEmpty() || before.get(0) == null ? policy.getAmount()
+                : new BigDecimal(before.get(0).toString());
+    }
+
+    /** Limit entries of a claim, oldest first, for its ledger view. */
+    public List<ClaimLedgers.LimitEntry> limitEntries(String claimRef) {
+        return entries(claimRef);
+    }
+
     // ── evidence and related claims ──────────────────────────────────────────────────────────────
 
     /** The claim type's evidence checklist, each item marked received when a current document of that type is on file. */
@@ -186,10 +297,22 @@ public class ClaimFinancials {
             boolean sameLife = lifeKey(other).equals(lifeKey(claim));
             boolean close = event != null && otherEvent != null
                     && Math.abs(ChronoUnit.DAYS.between(event, otherEvent)) <= DUPLICATE_WINDOW_DAYS;
+            ClaimLedgers.Link link = link(claim.getRef(), other.getRef());
+            // A person's link decides: same event stays flagged, a confirmed separate benefit is not a duplicate.
+            boolean possible = link == null ? sameLife && close : ClaimLedgers.Link.SAME_EVENT.equals(link.getType());
             related.add(new PortfolioViews.RelatedClaim(other.getRef(), other.getStatus(), other.getEventDate(),
-                    nameOf(other), other.getClaimType(), sameLife && close));
+                    nameOf(other), other.getClaimType(), possible, link == null ? null : link.getType(),
+                    link == null ? null : link.getNote(), link == null ? null : link.getLinkedBy()));
         }
         return related;
+    }
+
+    /** The link between two claims, whichever way it was recorded. */
+    ClaimLedgers.Link link(String claimRef, String otherRef) {
+        return em.createQuery("select l from ClaimLink l where (l.claimRef = :a and l.relatedRef = :b)"
+                        + " or (l.claimRef = :b and l.relatedRef = :a) order by l.id desc", ClaimLedgers.Link.class)
+                .setParameter("a", claimRef).setParameter("b", otherRef).setMaxResults(1).getResultStream()
+                .findFirst().orElse(null);
     }
 
     // ── internals ────────────────────────────────────────────────────────────────────────────────
@@ -235,7 +358,8 @@ public class ClaimFinancials {
                         Object[].class)
                 .setParameter("policy", policyRef).setParameter("life", lifeKey).getResultList()) {
             BigDecimal sum = (BigDecimal) row[1];
-            total = ClaimLedgers.LimitEntry.RELEASED.equals(row[0]) ? total.subtract(sum) : total.add(sum);
+            total = ClaimLedgers.LimitEntry.RELEASED.equals(row[0]) || ClaimLedgers.LimitEntry.REVERSED.equals(row[0])
+                    ? total.subtract(sum) : total.add(sum);
         }
         return total;
     }

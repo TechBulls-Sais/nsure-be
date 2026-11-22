@@ -48,6 +48,10 @@ public class ClaimDecision {
     @Column(name = "decided_at", nullable = false, updatable = false)
     private LocalDateTime decidedAt;
 
+    /** The benefit calculation the decision was made on (NS-SH03-005), as JSON with its input hash; never changed. */
+    @Column(name = "calculation_trace", length = 3000, updatable = false)
+    private String calculationTrace;
+
     /** Set when a later decision supersedes this one; the record itself never changes otherwise. */
     @Column(name = "superseded_by")
     private Integer supersededBy;
@@ -63,6 +67,14 @@ public class ClaimDecision {
         this.amount = amount;
         this.decidedBy = decidedBy;
         this.decidedAt = LocalDateTime.now().withNano(0);
+    }
+
+    void calculation(String trace) {
+        this.calculationTrace = trace == null || trace.length() <= 3000 ? trace : trace.substring(0, 3000);
+    }
+
+    public String getCalculationTrace() {
+        return calculationTrace;
     }
 
     void supersededBy(int sequenceNo) {

@@ -288,4 +288,9 @@ public class InsurancePolicy extends CoverRecord implements TieredCover {
         }
         this.productVersionId = id;
     }
+
+    /** Moves an in-force policy to newer terms; only an approved terms migration calls this (NS-SH02-004). */
+    void migrateProductVersion(Long id) {
+        this.productVersionId = id;
+    }
 }

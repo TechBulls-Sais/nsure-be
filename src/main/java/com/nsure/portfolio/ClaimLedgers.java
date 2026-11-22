@@ -90,6 +90,8 @@ public final class ClaimLedgers {
         static final String RESERVED = "RESERVED";
         static final String RELEASED = "RELEASED";
         static final String CONSUMED = "CONSUMED";
+        /** A corrective entry giving back consumption whose payment was returned (NS-SH05-005, §09). */
+        static final String REVERSED = "REVERSED";
 
         @Id
         @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -141,6 +143,14 @@ public final class ClaimLedgers {
         public String getClaimRef() {
             return claimRef;
         }
+
+        public String getCreatedBy() {
+            return createdBy;
+        }
+
+        public LocalDateTime getCreatedAt() {
+            return createdAt;
+        }
     }
 
     /** A document a claim type needs; product null means every product (NS-SH05-003). */
@@ -188,6 +198,69 @@ public final class ClaimLedgers {
 
         public int getDisplayOrder() {
             return displayOrder;
+        }
+    }
+
+    /** A person's link between two claims on a policy (NS-SH05-001): SAME_EVENT or SEPARATE_BENEFIT, both directions. */
+    @Entity(name = "ClaimLink")
+    @Table(name = "clm_link")
+    public static class Link {
+
+        static final String SAME_EVENT = "SAME_EVENT";
+        static final String SEPARATE_BENEFIT = "SEPARATE_BENEFIT";
+
+        @Id
+        @GeneratedValue(strategy = GenerationType.IDENTITY)
+        private Long id;
+
+        @Column(name = "claim_ref", nullable = false, length = 20, updatable = false)
+        private String claimRef;
+
+        @Column(name = "related_ref", nullable = false, length = 20, updatable = false)
+        private String relatedRef;
+
+        @Column(name = "link_type", nullable = false, length = 20, updatable = false)
+        private String type;
+
+        @Column(nullable = false, length = 300, updatable = false)
+        private String note;
+
+        @Column(name = "linked_by", nullable = false, length = 100, updatable = false)
+        private String linkedBy;
+
+        @Column(name = "linked_at", nullable = false, updatable = false)
+        private LocalDateTime linkedAt;
+
+        protected Link() {
+        }
+
+        Link(String claimRef, String relatedRef, String type, String note, String linkedBy) {
+            this.claimRef = claimRef;
+            this.relatedRef = relatedRef;
+            this.type = type;
+            this.note = note;
+            this.linkedBy = linkedBy;
+            this.linkedAt = LocalDateTime.now();
+        }
+
+        public String getClaimRef() {
+            return claimRef;
+        }
+
+        public String getRelatedRef() {
+            return relatedRef;
+        }
+
+        public String getType() {
+            return type;
+        }
+
+        public String getNote() {
+            return note;
+        }
+
+        public String getLinkedBy() {
+            return linkedBy;
         }
     }
 }

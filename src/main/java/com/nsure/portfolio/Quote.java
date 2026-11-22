@@ -32,16 +32,16 @@ public class Quote {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "record_ref", nullable = false, length = 20)
+    @Column(name = "record_ref", nullable = false, length = 20, updatable = false)
     private String ref;
 
-    @Column(name = "version_no", nullable = false)
+    @Column(name = "version_no", nullable = false, updatable = false)
     private int versionNo;
 
-    @Column(name = "customer_ref", nullable = false, length = 20)
+    @Column(name = "customer_ref", nullable = false, length = 20, updatable = false)
     private String customerRef;
 
-    @Column(name = "customer_name", nullable = false, length = 100)
+    @Column(name = "customer_name", nullable = false, length = 100, updatable = false)
     private String customerName;
 
     @Column(nullable = false, length = 100)
@@ -50,37 +50,37 @@ public class Quote {
     @Column(nullable = false, length = 60)
     private String tier;
 
-    @Column(name = "sum_assured", nullable = false, precision = 19, scale = 2)
+    @Column(name = "sum_assured", nullable = false, precision = 19, scale = 2, updatable = false)
     private BigDecimal sumAssured;
 
-    @Column(nullable = false, precision = 19, scale = 2)
+    @Column(nullable = false, precision = 19, scale = 2, updatable = false)
     private BigDecimal premium;
 
     @Column(nullable = false, length = 3)
     private String currency;
 
-    @Column(name = "pricing_method", nullable = false, length = 20)
+    @Column(name = "pricing_method", nullable = false, length = 20, updatable = false)
     private String pricingMethod;
 
-    @Column(name = "rate_version", nullable = false, length = 60)
+    @Column(name = "rate_version", nullable = false, length = 60, updatable = false)
     private String rateVersion;
 
-    @Column(name = "priced_on", nullable = false)
+    @Column(name = "priced_on", nullable = false, updatable = false)
     private LocalDate pricedOn;
 
-    @Column(name = "valid_until", nullable = false)
+    @Column(name = "valid_until", nullable = false, updatable = false)
     private LocalDate validUntil;
 
-    @Column(name = "inputs_json", nullable = false, length = 4000)
+    @Column(name = "inputs_json", nullable = false, length = 4000, updatable = false)
     private String inputsJson;
 
-    @Column(name = "trace_json", nullable = false, length = 4000)
+    @Column(name = "trace_json", nullable = false, length = 4000, updatable = false)
     private String traceJson;
 
-    @Column(name = "input_hash", nullable = false, length = 64)
+    @Column(name = "input_hash", nullable = false, length = 64, updatable = false)
     private String inputHash;
 
-    @Column(name = "service_version", nullable = false, length = 40)
+    @Column(name = "service_version", nullable = false, length = 40, updatable = false)
     private String serviceVersion;
 
     @Column(nullable = false, length = 20)
@@ -104,10 +104,10 @@ public class Quote {
     @Column(name = "policy_ref", length = 20)
     private String policyRef;
 
-    @Column(name = "created_by", nullable = false, length = 100)
+    @Column(name = "created_by", nullable = false, length = 100, updatable = false)
     private String createdBy;
 
-    @Column(name = "created_at", nullable = false)
+    @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     protected Quote() {

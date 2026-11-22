@@ -342,6 +342,24 @@ databaseChangeLog:
       file: changes/155-group-census-terms.yaml
       relativeToChangelogFile: true
   - include:
+      file: changes/165-payout-instructions.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/166-product-release.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/167-claim-calculation.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/168-care-cash-rules.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/169-terms-migrations.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/170-claim-links.yaml
+      relativeToChangelogFile: true
+  - include:
       file: changes/180-collection-instructions.yaml
       relativeToChangelogFile: true
   - include:

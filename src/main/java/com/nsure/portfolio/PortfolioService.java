@@ -63,6 +63,10 @@ public class PortfolioService {
     private final org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting;
     /** Customer sign-up codes: per request, expiring, attempt-limited; the fixed demo code only in dev/demo. */
     private final OneTimeCodes codes;
+    /** SH02: product configurations are released to the catalogue and constrain what a released plan sells. */
+    private final ProductRelease productRelease;
+    /** NS-SH03-001: explicit effective date, currency and versions of a calculation. */
+    private final com.nsure.rating.RatingInputs ratingInputs;
 
     public PortfolioService(
             EntityManager em,
@@ -81,7 +85,9 @@ public class PortfolioService {
             com.fasterxml.jackson.databind.ObjectMapper mapper, com.nsure.integration.Outbox outbox,
             ApplicationCapture capture, ProductConfigHistory configHistory,
             org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting,
-            OneTimeCodes codes) {
+            OneTimeCodes codes, ProductRelease productRelease, com.nsure.rating.RatingInputs ratingInputs) {
+        this.productRelease = productRelease;
+        this.ratingInputs = ratingInputs;
         this.codes = codes;
         this.underwriting = underwriting;
         this.configHistory = configHistory;
@@ -1089,7 +1095,7 @@ public class PortfolioService {
     public PortfolioViews.ShopView shopClaim(JsonNode body) {
         CustomerAccount account = customerForLogin();
         InsurancePolicy policy = ownPolicy(account, text(body, "policy"));
-        claimWorkflow.lodge(lodgement(policy.getRef(), body), account.getLoginUsername());
+        claimWorkflow.lodge(lodgement(policy.getRef(), body), "PORTAL", account.getLoginUsername());
         return shopFor(account);
     }
 
@@ -1242,13 +1248,36 @@ public class PortfolioService {
     }
 
     private PortfolioViews.QuoteView quote(CustomerAccount customer, String product, String tierName, JsonNode body) {
+        // NS-SH03-001: priced on an explicit date, currency and versions; a mismatch is refused, never guessed.
+        com.nsure.rating.RatingInputs.Inputs inputs = ratingInputs.read(body);
+        if (product == null || product.isBlank()) {
+            throw new com.nsure.common.exception.InvalidFieldException("product", "product is required.");
+        }
+        if (tierName == null || tierName.isBlank()) {
+            throw new com.nsure.common.exception.InvalidFieldException("tier", "Choose a plan: a quote is never priced"
+                    + " on a fallback plan.");
+        }
         CoverTier tier = tier(product, tierName);
-        Optional<RateTableService.PolicyPrice> price = price(tier, customer, lives(body));
+        Optional<String> version = ratingInputs.rateVersionFor(tier, inputs.effectiveDate(), inputs.rateTableVersion());
+        Integer productVersion = ratingInputs.productVersionFor(product, inputs.effectiveDate(), inputs.productVersion());
+        List<RateTableService.LifeToPrice> others = lives(body);
+        List<RateTableService.LifeToPrice> lives = new ArrayList<>();
+        lives.add(new RateTableService.LifeToPrice(selfRelationship(), customer.getName(), customer.getDateOfBirth()));
+        lives.addAll(others);
+        productRelease.requireEligible(tier, lives, inputs.effectiveDate());
+        Optional<RateTableService.PolicyPrice> price = version.isEmpty() ? Optional.empty()
+                : rates.priceAtVersion(tier, lives, inputs.effectiveDate(), version.get());
+        if (price.isEmpty() && !others.isEmpty()) {
+            throw new IllegalArgumentException("The " + tier.getName() + " plan has a flat premium and covers the "
+                    + "main insured only, so lives cannot be added to it.");
+        }
         return new PortfolioViews.QuoteView(
                 product, tier.getName(), tier.getCoverAmount(), price.isPresent(),
                 price.map(RateTableService.PolicyPrice::rateTableVersion).orElse(""),
                 price.map(p -> p.lines().stream().map(PortfolioService::lifeView).toList()).orElse(List.of()),
-                price.map(RateTableService.PolicyPrice::monthlyTotal).orElse(BigDecimal.valueOf(tier.getPremium())));
+                price.map(RateTableService.PolicyPrice::monthlyTotal).orElse(BigDecimal.valueOf(tier.getPremium())),
+                inputs.effectiveDate(), inputs.currency(), productVersion,
+                price.isPresent() ? com.nsure.rating.RatingInputs.AGE_BASIS : "NOT_RATED (flat premium)");
     }
 
     /** KYC review: VERIFIED (the default) or FAILED with a reason the customer sees. */
@@ -1281,7 +1310,8 @@ public class PortfolioService {
     public PortfolioViews.ClaimView createClaim(JsonNode body) {
         AppUser staff = security.authenticatedUser();
         staff.validateHasPermissionTo("CREATE_CLAIM");
-        return claim(claimWorkflow.lodge(lodgement(text(body, "policy"), body), staff.getUsername()));
+        return claim(claimWorkflow.lodge(lodgement(text(body, "policy"), body), optional(body, "source"),
+                staff.getUsername()));
     }
 
     private static ClaimWorkflow.Lodgement lodgement(String policyRef, JsonNode body) {
@@ -1332,7 +1362,8 @@ public class PortfolioService {
             case "assess" -> claimWorkflow.assess(ref, optional(input, "note"), actor);
             case "approve" -> claimWorkflow.approve(ref, payoutAmount(input),
                     optional(input, "overrideReason"), optional(input, "fourEyesOverrideReason"),
-                    optional(input, "evidenceOverrideReason"), actor);
+                    optional(input, "evidenceOverrideReason"), optional(input, "reason"),
+                    optional(input, "exclusionNote"), actor);
             case "reject" -> claimWorkflow.reject(ref, optional(input, "reason"), actor);
             case "pay" -> claimWorkflow.pay(ref, actor);
             case "confirm-payout" -> claimWorkflow.confirmPayout(ref, optional(input, "providerReference"), actor);
@@ -1345,7 +1376,14 @@ public class PortfolioService {
         return claim(claim);
     }
 
-    /** A claim's reserve movements and the benefit limits it draws on (NS-SH05-003/005). */
+    @Transactional
+    public PortfolioViews.ClaimView linkClaim(String ref, JsonNode body) {
+        AppUser actor = security.authenticatedUser();
+        return claim(claimWorkflow.link(ref, optional(body, "relatedRef"), optional(body, "type"),
+                optional(body, "note"), actor));
+    }
+
+        /** A claim's reserve movements and the benefit limits it draws on (NS-SH05-003/005). */
     @Transactional(readOnly = true)
     public PortfolioViews.ClaimFinancialsView claimFinancials(String ref) {
         security.authenticatedUser().validateHasPermissionTo("READ_CLAIM");
@@ -1359,13 +1397,16 @@ public class PortfolioService {
                 limits == null ? null : limits.policyLimit(), limits == null ? null : limits.policyUsed(),
                 claimWorkflow.decisions(ref).stream().map(d -> new PortfolioViews.ClaimDecisionView(d.getSequenceNo(),
                         d.getDecision(), d.getReason(), d.getAmount(), d.getDecidedBy(), d.getDecidedAt(),
-                        d.getSupersededBy())).toList(),
+                        d.getSupersededBy(), readJson(d.getCalculationTrace()))).toList(),
                 claimWorkflow.eventCover(claim),
                 em.createQuery("select r.ref, r.treaty.ref, r.recoveryAmount, r.status, r.receivedAmount from Recovery r"
                                 + " where r.claimRef = :ref order by r.id", Object[].class)
                         .setParameter("ref", ref).getResultList().stream()
                         .map(r -> new PortfolioViews.ClaimRecoveryView((String) r[0], (String) r[1], (BigDecimal) r[2],
-                                (String) r[3], (BigDecimal) r[4])).toList());
+                                (String) r[3], (BigDecimal) r[4])).toList(),
+                policy == null ? null : claimFinancials.calculation(claim, policy),
+                claimFinancials.limitEntries(ref).stream().map(e -> new PortfolioViews.LimitEntryView(e.getEntry(),
+                        e.getAmount(), e.getCreatedBy(), e.getCreatedAt())).toList());
     }
 
     @Transactional(readOnly = true)
@@ -1390,7 +1431,8 @@ public class PortfolioService {
                 : one(ProductConfiguration.class, ref, "Product configuration");
         // Spec 04 §3: activating or deactivating a catalogue entity is product.activate, separate from editing it
         // (an Actuary may edit products but not switch them on or off).
-        String requested = defaultText(body, "status", "Draft");
+        // NS-SH02-003: the release statuses only; Approved and Scheduled come from their own actions.
+        String requested = ProductRelease.requireSaveStatus(defaultText(body, "status", "Draft"));
         String current = ref == null ? "Draft" : row.getStatus();
         boolean activationChange = !requested.equalsIgnoreCase(current == null ? "" : current)
                 && (requested.toLowerCase(java.util.Locale.ROOT).contains("active")
@@ -1425,15 +1467,29 @@ public class PortfolioService {
         row.setChannels(join(body.get("channels")));
         row.setWording(defaultText(body, "wording", "Standard life wording · v1.0"));
         row.setApprovals(body.path("approvals").asBoolean(false));
-        row.setStatus(defaultText(body, "status", "Draft"));
+        // SH02 release fields (catalogue product, plan, typed rules, rate table), validated against their schema.
+        productRelease.applyReleaseFields(row, body);
+        row.setStatus(requested);
         JsonNode after = configHistory.content(row);
         boolean active = "active".equalsIgnoreCase(requested);
-        if (active && (!"active".equalsIgnoreCase(current) || before == null || !before.equals(after))) {
+        boolean changed = before == null || !before.equals(after);
+        if (active && (!"active".equalsIgnoreCase(current) || changed)) {
             // Maker-checker: content reaches Active only as reviewed, and only by someone who did not write it.
             configHistory.requireIndependentActivation(ref, current, before, after, actor.getUsername());
         }
+        if (changed && ref != null) {
+            // An approval and its frozen manifest describe the content as approved, not as it is now.
+            productRelease.contentChanged(row);
+        }
         if (ref == null) {
             em.persist(row);
+        }
+        if (active && !"active".equalsIgnoreCase(current)) {
+            // NS-SH02-001/003: activation passes the release checklist and publishes the plan to the catalogue.
+            productRelease.activateFromSave(row, actor.getUsername());
+        } else if (!active && current != null && ("active".equalsIgnoreCase(current)
+                || ProductRelease.SCHEDULED.equalsIgnoreCase(current))) {
+            productRelease.withdrawFromSave(row, actor.getUsername());
         }
         configHistory.record(row, before, actor.getUsername());
         configHistory.publishStatusChange(row, current, actor.getUsername());
@@ -1518,6 +1574,8 @@ public class PortfolioService {
             if (!others.isEmpty()) {
                 throw new IllegalArgumentException("Choose a tier before adding lives.");
             }
+            // NS-SH03-003: no plan means no calculation; refused for planned products unless manual premiums are on.
+            ratingInputs.requireManualPremiumAllowed(row.getProduct());
             return null;
         }
         CoverTier tier = tier(row.getProduct(), tierName);
@@ -1541,6 +1599,8 @@ public class PortfolioService {
         List<RateTableService.LifeToPrice> lives = new ArrayList<>();
         lives.add(new RateTableService.LifeToPrice(selfRelationship(), customer.getName(), customer.getDateOfBirth()));
         lives.addAll(others);
+        // A plan released from a product configuration sells only within its configured entry ages (NS-SH02-001).
+        productRelease.requireEligible(tier, lives, null);
         Optional<RateTableService.PolicyPrice> price = rates.pricePolicy(tier, lives, null);
         if (price.isEmpty() && !others.isEmpty()) {
             throw new IllegalArgumentException("The " + tier.getName() + " plan has a flat premium and covers the "
@@ -1876,16 +1936,25 @@ public class PortfolioService {
                 blank(row.getCoveredLifeName()).isEmpty() ? row.getCustomerName() : row.getCoveredLifeName(),
                 row.getReserveAmount(),
                 claimFinancials.evidence(row),
-                claimFinancials.related(row));
+                claimFinancials.related(row),
+                blank(row.getNotificationSource()),
+                blank(row.getExclusionNote()));
+    }
+
+    /** A stored JSON trace for a view; null when there is none. */
+    private JsonNode readJson(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            return mapper.readTree(json);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            return null;
+        }
     }
 
     private PortfolioViews.ConfigView config(ProductConfiguration row) {
-        return new PortfolioViews.ConfigView(
-                row.getRef(), row.getName(), row.getCode(), row.getDomain(), row.getCurrency(), row.getDescription(),
-                row.getEffectiveOn(), row.getMinAge(), row.getMaxAge(), row.getWaitingMonths(), row.getCoverAmount(),
-                row.getPremiumAmount(), row.getFrequency(), row.getGraceDays(), row.getUnderwriting(),
-                split(row.getBenefits()), split(row.getChannels()), row.getWording(), row.isApprovals(),
-                row.getStatus(), row.getVersionNo(), configHistory.madeBy(row));
+        return productRelease.view(row);
     }
 
     private static List<String> split(String value) {

@@ -167,7 +167,12 @@ public final class PortfolioViews {
             boolean rated,
             String rateTableVersion,
             List<LifeCoverView> lives,
-            BigDecimal premium
+            BigDecimal premium,
+            // NS-SH03-001: the explicit inputs it was priced on.
+            java.time.LocalDate effectiveDate,
+            String currency,
+            Integer productVersion,
+            String ageBasis
     ) {
     }
 
@@ -224,7 +229,10 @@ public final class PortfolioViews {
             String coveredLife,
             BigDecimal reserve,
             List<EvidenceItem> evidence,
-            List<RelatedClaim> related
+            List<RelatedClaim> related,
+            // NS-SH05-001: where the notification came from; NS-SH05-002: why the event is not excluded.
+            String notificationSource,
+            String exclusionNote
     ) {
     }
 
@@ -234,7 +242,7 @@ public final class PortfolioViews {
 
     /** Another claim on the same policy; {@code possibleDuplicate} when it is for the same life within a week. */
     public record RelatedClaim(String ref, String status, String eventDate, String coveredLife, String type,
-            boolean possibleDuplicate) {
+            boolean possibleDuplicate, String link, String linkNote, String linkedBy) {
     }
 
     /**
@@ -243,7 +251,12 @@ public final class PortfolioViews {
      */
     public record ClaimFinancialsView(String claimRef, BigDecimal reserve, List<ReserveMovementView> movements,
             BigDecimal lifeLimit, BigDecimal lifeUsed, BigDecimal policyLimit, BigDecimal policyUsed,
-            List<ClaimDecisionView> decisions, EventCoverView eventCover, List<ClaimRecoveryView> recoveries) {
+            List<ClaimDecisionView> decisions, EventCoverView eventCover, List<ClaimRecoveryView> recoveries,
+            ClaimFinancials.Calculation calculation, List<LimitEntryView> limitEntries) {
+    }
+
+    /** One movement on the benefit limits (RESERVED, RELEASED, CONSUMED, REVERSED), NS-SH05-005. */
+    public record LimitEntryView(String entry, BigDecimal amount, String by, java.time.LocalDateTime at) {
     }
 
     /**
@@ -263,7 +276,7 @@ public final class PortfolioViews {
 
     /** One decision on a claim; {@code supersededBy} names the later decision that set it aside (§09 reopen). */
     public record ClaimDecisionView(int sequence, String decision, String reason, BigDecimal amount, String decidedBy,
-            java.time.LocalDateTime decidedAt, Integer supersededBy) {
+            java.time.LocalDateTime decidedAt, Integer supersededBy, com.fasterxml.jackson.databind.JsonNode calculation) {
     }
 
     public record ReserveMovementView(BigDecimal change, BigDecimal balance, String reason, String by,
@@ -419,7 +432,24 @@ public final class PortfolioViews {
             String status,
             int version,
             // Who made the content as it stands (the maker); they cannot activate it (NS-SH02-003). Null if unknown.
-            String madeBy
+            String madeBy,
+            // SH02 release: where it is sold, typed rules, dependencies, approval, publication and withdrawal.
+            String catalogueProduct,
+            String plan,
+            com.fasterxml.jackson.databind.JsonNode rules,
+            String rateTableRef,
+            String approvedBy,
+            java.time.LocalDateTime approvedAt,
+            String releasedBy,
+            java.time.LocalDateTime releasedAt,
+            String withdrawnBy,
+            java.time.LocalDateTime withdrawnAt,
+            String releaseNote,
+            String manifestChecksum,
+            boolean published,
+            String sellsAs,
+            String sellsAsPlan,
+            String importedFrom
     ) {
     }
 }

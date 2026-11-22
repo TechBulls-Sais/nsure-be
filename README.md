@@ -357,6 +357,43 @@ how the sender was verified. The bus carries `CommunicationRequested`, `MessageD
   `GET /portfolio/claims/{ref}/financials` also returns the cover as at the event date and the claim's recoveries.
 - **Care Cash payments** follow the claim payout: `/payment` sends a numbered instruction (PAYMENT_SENT), `/payment/confirm`
   settles it (PAID, ContractualBenefitPaid), `/payment/failed` records the provider's reason (PAYMENT_FAILED).
+- **Payout instructions** (`payment/PayoutService`, NS-SH05-007, §09, NS-TXN-003): a claim approval (or Care Cash payment)
+  creates and approves a `pay_instruction` (unique `PI-` reference, idempotency key, one live instruction per benefit) in
+  the same transaction. `pay` submits it to the **simulated** bank rail (`SimulatedBankRail`, no provider; decision D12):
+  Created → Approved → Submitted → Pending → Settled / Failed / Returned, or Unknown after
+  `nsure.payouts.unknown-after-minutes` (60) without an answer; Unknown is reconciled by status enquiry
+  (`/payments/payouts/{ref}/reconcile`) before any retry. Callbacks (`POST /payments/payouts/callback`, MANAGE_INTEGRATION)
+  are kept by event id: a repeat is DUPLICATE with no effect, a contradicting one opens an exception without changing
+  state. A returned settled claim payout reverses the limit consumption (corrective REVERSED entry), re-reserves it and
+  raises ClaimPaymentReturned. Rejected, returned, unknown or contradicted instructions are listed at
+  `GET /payments/payouts/exceptions`; a claim with an open payout exception cannot be closed. The demo console is
+  `POST /payments/payouts/{ref}/simulator` {action: SETTLE, REJECT, RETURN, SETTLE_SILENTLY, TIMEOUT, REPEAT}.
+- **Claim calculation** (NS-SH03-004, NS-SH05-002): a claim pays the sum assured in force on the event date; the
+  financials show the calculation (deductions: premiums due on or before the event and unpaid — demo rule; limit cap;
+  most payable). Approval defaults to the most payable, refuses more than the eligible amount, needs `reason` for a partial
+  approval and `exclusionNote` when the policy has underwriting terms (which also stop STP). Decisions keep the
+  calculation trace with an input hash. Claims record `source` (STAFF, PHONE, EMAIL, BRANCH, PORTAL, INTERMEDIARY,
+  EMPLOYER, LENDER).
+- **Care Cash rules** (section 07): every count, cap and waiting period is an effective-dated `cc_rule_set` version
+  (`/care-cash/rules`, propose UPDATE_PRODUCT, approve ACTIVATE_PRODUCT by someone else); v1 holds demo defaults (D04).
+  Events record the insured life, rule version, linked readmission, anniversary split, procedure, death evidence and
+  waiver window; `/events/{ref}/reverse` and `/policies/{ref}/opening-days` exist.
+
+## Product release and rating (SH02, SH03)
+
+- A product configuration (`/portfolio/product-configs`) names its catalogue product and plan, typed rules
+  (`GET /portfolio/product-rules`: type, unit, range, owner) and optionally a rate table. Lifecycle: Draft → In review →
+  Approved → Scheduled/Active → Withdrawn (`/{ref}/submit|approve|reject|activate|withdraw|rollback`). The release
+  checklist (`/{ref}/checklist`) needs the refund, termination and age-basis rules, rates, wording and an approved
+  PolicyIssued template, posting rules (`nsure.product-release.required-postings`), a commission rule for broker sales,
+  and approved golden cases that pass. Approval (not the maker) freezes the release manifest and checksum; activation
+  publishes the plan, main-insured entry ages and a product terms version, so quoting sells it within those ages;
+  withdrawal takes the plan off sale. Packages: `GET /{ref}/package` (signed, HMAC with
+  `nsure.product-packages.signing-key`, a demo key by default) and `POST /portfolio/product-configs/import`.
+- Golden cases (`/{ref}/golden-cases`, approval needs PUBLISH_RATE_TABLE and another person) also gate rate publication:
+  a rate version that changes an approved result is refused until a revised baseline is approved.
+- Quotes accept `effectiveDate`, `currency`, `rateTableVersion` and `productVersion` and refuse mismatches;
+  `nsure.rating.manual-premium-allowed=false` refuses plan-less premiums for products sold through plans.
 - **Controlled refunds** (`/finance/refunds`, AT-SH10-01): raised with a reason, approved and paid by someone else — never
   the maker, whatever roles they hold. `RefundControls.raise(...)` is the entry point for modules that owe a refund.
 - **Spec-named events** added beside the older names: ClaimRegistered, ClaimAssessed, ClaimDeclined, ClaimPaymentSettled,

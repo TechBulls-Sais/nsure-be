@@ -224,7 +224,13 @@ public class PortfolioController {
         return portfolio.rerunClaimChecks(ref);
     }
 
-    /** A claim's reserve history and the benefit limits it draws on. */
+    /** {relatedRef, type (SAME_EVENT or SEPARATE_BENEFIT), note}: links another claim on the policy (NS-SH05-001). */
+    @PostMapping("/claims/{ref}/links")
+    public PortfolioViews.ClaimView linkClaim(@PathVariable String ref, @RequestBody JsonNode body) {
+        return portfolio.linkClaim(ref, body);
+    }
+
+        /** A claim's reserve history and the benefit limits it draws on. */
     @GetMapping("/claims/{ref}/financials")
     public PortfolioViews.ClaimFinancialsView claimFinancials(@PathVariable String ref) {
         return portfolio.claimFinancials(ref);

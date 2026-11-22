@@ -29,7 +29,9 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 class ProductConfigReviewApiTest {
 
     private static final String CONFIG = """
-            {"name":"Review Life","code":"RV-01","status":"%s","benefits":["Death benefit"],"channels":["Broker portal"]}
+            {"name":"Review Life","code":"RV-01","status":"%s","benefits":["Death benefit"],"channels":["Customer portal"],
+             "rules":{"ageBasis":"LAST_BIRTHDAY","cessationAge":70,"lapseAfterMissedPremiums":2,"coolingOffDays":30,
+                      "refundOnCancellation":"FULL_WITHIN_COOLING_OFF"}}
             """;
 
     @Autowired
@@ -61,6 +63,16 @@ class ProductConfigReviewApiTest {
         mockMvc.perform(json(put("/portfolio/product-configs/" + ref), "configurator", CONFIG.formatted("Active")))
                 .andExpect(status().isForbidden());
         assertThat(events("ProductActivated", ref)).isZero();
+
+        // NS-SH03-006: the release needs an approved golden case (proposed by the maker, approved by an actuary).
+        String golden = mockMvc.perform(json(post("/portfolio/product-configs/" + ref + "/golden-cases"), "configurator",
+                        "{\"label\":\"Age 30\",\"dateOfBirth\":\"" + java.time.LocalDate.now().minusYears(30)
+                                + "\",\"expectedPremium\":\"420.00\"}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        mockMvc.perform(post("/portfolio/product-configs/" + ref + "/golden-cases/"
+                        + ((Number) JsonPath.read(golden, "$.id")).longValue() + "/approve").with(signedIn("actuary", "password")))
+                .andExpect(status().isOk());
 
         // A second person activates it as reviewed: published once.
         mockMvc.perform(json(put("/portfolio/product-configs/" + ref), "admin", CONFIG.formatted("Active")))

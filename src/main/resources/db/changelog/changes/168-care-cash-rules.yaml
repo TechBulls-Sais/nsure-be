@@ -1,0 +1,73 @@
+databaseChangeLog:
+  # Section 07 / NS-SH05-006: the Care Cash counts, caps, percentages and waiting periods become an effective-dated,
+  # approved rule set. Version 1 holds the values the engine used as code constants: DEMO DEFAULTS standing in for
+  # decision D04, labelled as such. Events now record the insured life they are for, the rule version, linked
+  # readmissions, the part of a stay after a cover anniversary, the procedure, death evidence, the premium waiver
+  # window and a reversal; opening (migrated) day consumption has its own table.
+  - changeSet:
+      id: 168-care-cash-rule-set
+      author: nsure
+      changes:
+        - createTable:
+            tableName: cc_rule_set
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_cc_rule_set}}
+              - column: {name: version_no, type: int, constraints: {nullable: false, unique: true, uniqueConstraintName: uk_cc_rule_set_version}}
+              - column: {name: effective_from, type: date, constraints: {nullable: false}}
+              - column: {name: rules, type: varchar(4000), constraints: {nullable: false}}
+              - column: {name: label, type: varchar(120)}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500)}
+              - column: {name: proposed_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: proposed_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: approved_by, type: varchar(100)}
+              - column: {name: approved_at, type: datetime}
+              - column: {name: rejection_reason, type: varchar(500)}
+        - insert:
+            tableName: cc_rule_set
+            columns:
+              - column: {name: version_no, valueNumeric: 1}
+              - column: {name: effective_from, valueDate: "2000-01-01"}
+              - column:
+                  name: rules
+                  value: '{"qualifyingNights":2,"dayCasePercent":50,"icuPercent":150,"icuMaxDays":15,"surgeryPercent":100,"longStay1Nights":7,"longStay1Multiple":3,"longStay2Nights":21,"longStay2Multiple":7,"longStayBasis":"PAID_DAYS","maternityMultiple":5,"maternityMaxClaims":2,"maternityWaitMonths":12,"illnessWaitMonths":3,"accidentWaitMonths":0,"preExistingWaitMonths":12,"waiverAfterDays":10,"waiverMonths":3,"accidentalDeathAmount":25000,"accidentalDeathMinDaily":1000,"eventDayLimit":60,"yearDayLimit":180,"lifetimeDayLimit":720,"policyDayLimit":1000,"readmissionDays":14,"entryAgeMin":18,"entryAgeMax":65,"terminationAge":70,"annualReset":"COVER_ANNIVERSARY","multipleBirths":"PER_BIRTH","accidentalDeathLimit":"SEPARATE","sharedLimitPriority":"FIRST_RECORDED"}'
+              - column: {name: label, value: "Demo defaults (decision D04 open; not an approved tariff)"}
+              - column: {name: status, value: APPROVED}
+              - column: {name: reason, value: "Values of the specification section 07 table; interpretation points are demo defaults"}
+              - column: {name: proposed_by, value: system}
+              - column: {name: proposed_at, valueComputed: CURRENT_TIMESTAMP}
+              - column: {name: approved_by, value: system}
+              - column: {name: approved_at, valueComputed: CURRENT_TIMESTAMP}
+  - changeSet:
+      id: 168-care-cash-event-detail
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: cc_event
+            columns:
+              - column: {name: life_key, type: varchar(40)}
+              - column: {name: rule_version, type: int}
+              - column: {name: pre_existing, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: births, type: int, defaultValueNumeric: 1, constraints: {nullable: false}}
+              - column: {name: linked_event_ref, type: varchar(20)}
+              - column: {name: days_next_year, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: procedure_name, type: varchar(150)}
+              - column: {name: death_evidence, type: varchar(300)}
+              - column: {name: waiver_from, type: date}
+              - column: {name: waiver_to, type: date}
+              - column: {name: reversed_by, type: varchar(100)}
+              - column: {name: reversed_at, type: datetime}
+              - column: {name: reversal_reason, type: varchar(500)}
+        - createTable:
+            tableName: cc_opening_days
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_cc_opening_days}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: life_key, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: life_name, type: varchar(150), constraints: {nullable: false}}
+              - column: {name: lifetime_days, type: int, constraints: {nullable: false}}
+              - column: {name: year_days, type: int, constraints: {nullable: false}}
+              - column: {name: as_of, type: date, constraints: {nullable: false}}
+              - column: {name: note, type: varchar(300), constraints: {nullable: false}}
+              - column: {name: recorded_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: recorded_at, type: datetime, constraints: {nullable: false}}

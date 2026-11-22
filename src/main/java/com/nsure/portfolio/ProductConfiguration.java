@@ -81,6 +81,56 @@ public class ProductConfiguration {
     @Column(name = "display_order", nullable = false)
     private int displayOrder;
 
+    // ── release (SH02): where it is sold, typed rules, dependencies, approval and publication ──
+
+    @Column(name = "catalogue_product", length = 100)
+    private String catalogueProduct;
+
+    @Column(name = "plan_name", length = 60)
+    private String planName;
+
+    @Column(name = "rules", length = 4000)
+    private String rules;
+
+    @Column(name = "rate_table_ref", length = 20)
+    private String rateTableRef;
+
+    @Column(name = "manifest", length = 4000)
+    private String manifest;
+
+    @Column(name = "manifest_checksum", length = 64)
+    private String manifestChecksum;
+
+    @Column(name = "approved_by", length = 100)
+    private String approvedBy;
+
+    @Column(name = "approved_at")
+    private java.time.LocalDateTime approvedAt;
+
+    @Column(name = "released_by", length = 100)
+    private String releasedBy;
+
+    @Column(name = "released_at")
+    private java.time.LocalDateTime releasedAt;
+
+    @Column(name = "withdrawn_by", length = 100)
+    private String withdrawnBy;
+
+    @Column(name = "withdrawn_at")
+    private java.time.LocalDateTime withdrawnAt;
+
+    @Column(name = "release_note", length = 500)
+    private String releaseNote;
+
+    @Column(name = "published_tier_id")
+    private Long publishedTierId;
+
+    @Column(name = "product_version_id")
+    private Long productVersionId;
+
+    @Column(name = "imported_from", length = 200)
+    private String importedFrom;
+
     public Long getId() {
         return id;
     }
@@ -259,5 +309,133 @@ public class ProductConfiguration {
 
     public void setDisplayOrder(int displayOrder) {
         this.displayOrder = displayOrder;
+    }
+
+    public String getCatalogueProduct() {
+        return catalogueProduct;
+    }
+
+    public void setCatalogueProduct(String catalogueProduct) {
+        this.catalogueProduct = catalogueProduct;
+    }
+
+    public String getPlanName() {
+        return planName;
+    }
+
+    public void setPlanName(String planName) {
+        this.planName = planName;
+    }
+
+    public String getRules() {
+        return rules;
+    }
+
+    public void setRules(String rules) {
+        this.rules = rules;
+    }
+
+    public String getRateTableRef() {
+        return rateTableRef;
+    }
+
+    public void setRateTableRef(String rateTableRef) {
+        this.rateTableRef = rateTableRef;
+    }
+
+    public String getManifest() {
+        return manifest;
+    }
+
+    public void setManifest(String manifest) {
+        this.manifest = manifest;
+    }
+
+    public String getManifestChecksum() {
+        return manifestChecksum;
+    }
+
+    public void setManifestChecksum(String manifestChecksum) {
+        this.manifestChecksum = manifestChecksum;
+    }
+
+    public String getApprovedBy() {
+        return approvedBy;
+    }
+
+    public void setApprovedBy(String approvedBy) {
+        this.approvedBy = approvedBy;
+    }
+
+    public java.time.LocalDateTime getApprovedAt() {
+        return approvedAt;
+    }
+
+    public void setApprovedAt(java.time.LocalDateTime approvedAt) {
+        this.approvedAt = approvedAt;
+    }
+
+    public String getReleasedBy() {
+        return releasedBy;
+    }
+
+    public void setReleasedBy(String releasedBy) {
+        this.releasedBy = releasedBy;
+    }
+
+    public java.time.LocalDateTime getReleasedAt() {
+        return releasedAt;
+    }
+
+    public void setReleasedAt(java.time.LocalDateTime releasedAt) {
+        this.releasedAt = releasedAt;
+    }
+
+    public String getWithdrawnBy() {
+        return withdrawnBy;
+    }
+
+    public void setWithdrawnBy(String withdrawnBy) {
+        this.withdrawnBy = withdrawnBy;
+    }
+
+    public java.time.LocalDateTime getWithdrawnAt() {
+        return withdrawnAt;
+    }
+
+    public void setWithdrawnAt(java.time.LocalDateTime withdrawnAt) {
+        this.withdrawnAt = withdrawnAt;
+    }
+
+    public String getReleaseNote() {
+        return releaseNote;
+    }
+
+    public void setReleaseNote(String releaseNote) {
+        this.releaseNote = releaseNote;
+    }
+
+    public Long getPublishedTierId() {
+        return publishedTierId;
+    }
+
+    public void setPublishedTierId(Long publishedTierId) {
+        this.publishedTierId = publishedTierId;
+    }
+
+    public Long getProductVersionId() {
+        return productVersionId;
+    }
+
+    public void setProductVersionId(Long productVersionId) {
+        this.productVersionId = productVersionId;
+    }
+
+    public String getImportedFrom() {
+        return importedFrom;
+    }
+
+    public void setImportedFrom(String importedFrom) {
+        this.importedFrom = importedFrom;
     }
 }

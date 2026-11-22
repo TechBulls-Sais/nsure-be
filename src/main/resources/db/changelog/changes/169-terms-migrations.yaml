@@ -1,0 +1,23 @@
+databaseChangeLog:
+  # NS-SH02-004: in-force policies keep their contracted terms version unless an approved change explicitly migrates
+  # them. A migration is proposed with a reason and applied only when a second person approves it.
+  - changeSet:
+      id: 169-product-terms-migrations
+      author: nsure
+      changes:
+        - createTable:
+            tableName: ins_terms_migration
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_ins_terms_migration}}
+              - column: {name: product_name, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: from_version, type: int}
+              - column: {name: to_version, type: int, constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: policies_expected, type: int, constraints: {nullable: false}}
+              - column: {name: policies_moved, type: int}
+              - column: {name: proposed_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: proposed_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: datetime}
+              - column: {name: rejection_reason, type: varchar(500)}

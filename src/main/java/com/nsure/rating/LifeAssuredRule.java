@@ -44,6 +44,22 @@ public class LifeAssuredRule {
     protected LifeAssuredRule() {
     }
 
+    /** The entry ages a released product configuration sets for a plan's lives (NS-SH02-001). */
+    public LifeAssuredRule(CoverTier tier, RelationshipType relationship, Integer minAge, Integer maxAge, int maxCount,
+            int displayOrder) {
+        this.tier = tier;
+        this.relationship = relationship;
+        this.minAge = minAge;
+        this.maxAge = maxAge;
+        this.maxCount = maxCount;
+        this.displayOrder = displayOrder;
+    }
+
+    public void ages(Integer minAge, Integer maxAge) {
+        this.minAge = minAge;
+        this.maxAge = maxAge;
+    }
+
     public CoverTier getTier() {
         return tier;
     }

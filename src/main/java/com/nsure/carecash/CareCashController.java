@@ -16,9 +16,42 @@ import org.springframework.web.bind.annotation.RestController;
 public class CareCashController {
 
     private final CareCashService careCash;
+    private final CareCashRules rules;
 
-    public CareCashController(CareCashService careCash) {
+    public CareCashController(CareCashService careCash, CareCashRules rules) {
         this.careCash = careCash;
+        this.rules = rules;
+    }
+
+    /** The Care Cash rule set versions (section 07): values, effective dates, approval. */
+    @GetMapping("/rules")
+    public List<CareCashRules.RuleSetView> rules() {
+        return rules.versions();
+    }
+
+    /** {effectiveFrom, reason, label?, rules: {key: value}}: proposes the next version for a second person. */
+    @PostMapping("/rules")
+    public CareCashRules.RuleSetView proposeRules(@RequestBody JsonNode body) {
+        return rules.propose(body);
+    }
+
+    @PostMapping("/rules/{version}/{decision:approve|reject}")
+    public CareCashRules.RuleSetView decideRules(@PathVariable int version, @PathVariable String decision,
+            @RequestBody(required = false) JsonNode body) {
+        return rules.decide(version, "approve".equals(decision),
+                body == null || !body.hasNonNull("reason") ? null : body.get("reason").asText());
+    }
+
+    /** {lifeName?, lifetimeDays, yearDays, asOf?, note}: migrated opening day consumption for a life. */
+    @PostMapping("/policies/{ref}/opening-days")
+    public CareCashService.PolicyView openingDays(@PathVariable String ref, @RequestBody JsonNode body) {
+        return careCash.openingDays(ref, body);
+    }
+
+    /** {reason}: reverses an approved, unpaid event (days released, premium waiver undone). */
+    @PostMapping("/events/{ref}/reverse")
+    public CareCashService.EventView reverse(@PathVariable String ref, @RequestBody JsonNode body) {
+        return careCash.reverse(ref, body);
     }
 
     @GetMapping("/policies")

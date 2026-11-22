@@ -142,6 +142,14 @@ public final class ApiAccessRules {
             rule(GET, "/portfolio/receipts", anyOf("READ_PAYMENT")),
             rule(GET, "/payments/transactions", anyOf("READ_PAYMENT")),
             rule(GET, "/payments/transactions/*/log", anyOf("READ_PAYMENT")),
+            // ── outgoing benefit payments (NS-SH05-007): instructions, exception queue, simulated bank ──────
+            rule(GET, "/payments/payouts", anyOf("READ_CLAIM")),
+            rule(GET, "/payments/payouts/exceptions", anyOf("READ_CLAIM")),
+            rule(GET, "/payments/payouts/*", anyOf("READ_CLAIM")),
+            rule(POST, "/payments/payouts/callback", anyOf("MANAGE_INTEGRATION")),
+            rule(POST, "/payments/payouts/*/reconcile", anyOf("SETTLE_CLAIM")),
+            rule(POST, "/payments/payouts/*/resolve", anyOf("SETTLE_CLAIM")),
+            rule(POST, "/payments/payouts/*/simulator", anyOf("SETTLE_CLAIM")),
             rule(GET, "/portfolio/schemes", anyOf("READ_POLICY")),
 
             // ── claims (Claims Assessor) ───────────────────────────────────────────────────────────────
@@ -159,6 +167,7 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/claims/*/reopen", anyOf("APPROVE_CLAIM")),
             rule(POST, "/portfolio/claims/*/close", anyOf("SETTLE_CLAIM")),
             rule(GET, "/portfolio/claims/*/financials", anyOf("READ_CLAIM")),
+            rule(POST, "/portfolio/claims/*/links", anyOf("ASSESS_CLAIM", "UPDATE_CLAIM")),
             rule(GET, "/portfolio/claims/*/documents", anyOf("READ_CLAIM")),
             rule(GET, "/portfolio/claims/*/documents/*", anyOf("READ_CLAIM")),
             rule(POST, "/portfolio/claims/*/documents", anyOf("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM")),
@@ -182,6 +191,25 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/product-configs", anyOf("CREATE_PRODUCT")),
             rule(PUT, "/portfolio/product-configs/*", anyOf("UPDATE_PRODUCT")),
             rule(GET, "/portfolio/product-configs/*/versions", anyOf("READ_PRODUCT")),
+            // SH02 release: checklist, lifecycle, golden cases (actuarial approval) and signed packages.
+            rule(GET, "/portfolio/product-rules", anyOf("READ_PRODUCT")),
+            rule(GET, "/portfolio/products/*/migrations", anyOf("READ_PRODUCT")),
+            rule(POST, "/portfolio/products/*/migrations", anyOf("UPDATE_PRODUCT")),
+            rule(POST, "/portfolio/products/*/migrations/*/approve", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/products/*/migrations/*/reject", anyOf("ACTIVATE_PRODUCT")),
+            rule(GET, "/portfolio/product-configs/*/checklist", anyOf("READ_PRODUCT")),
+            rule(GET, "/portfolio/product-configs/*/package", anyOf("READ_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/import", anyOf("CREATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/submit", anyOf("UPDATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/rollback", anyOf("UPDATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/approve", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/reject", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/activate", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/withdraw", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/golden-cases", anyOf("UPDATE_PRODUCT", "UPDATE_RATE_TABLE")),
+            rule(POST, "/portfolio/product-configs/*/golden-cases/run", anyOf("READ_PRODUCT")),
+            rule(POST, "/portfolio/product-configs/*/golden-cases/*/approve", anyOf("PUBLISH_RATE_TABLE")),
+            rule(POST, "/portfolio/product-configs/*/golden-cases/*/reject", anyOf("PUBLISH_RATE_TABLE")),
 
             // ── rate tables (Actuary, Product Configurator): function code or capability ───────────────
             rule(GET, "/admin/rate-tables", anyOf("READ_RATE_TABLE")),
@@ -385,6 +413,11 @@ public final class ApiAccessRules {
 
             // ── Care Cash benefit engine (specification section 07) ────────────────────────────────────
             rule(GET, "/care-cash/**", anyOf("READ_CLAIM")),
+            rule(POST, "/care-cash/rules", anyOf("UPDATE_PRODUCT")),
+            rule(POST, "/care-cash/rules/*/approve", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/care-cash/rules/*/reject", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/care-cash/policies/*/opening-days", anyOf("UPDATE_CLAIM")),
+            rule(POST, "/care-cash/events/*/reverse", anyOf("APPROVE_CLAIM")),
             rule(POST, "/care-cash/policies/*/assessment", anyOf("CREATE_CLAIM")),
             rule(POST, "/care-cash/policies/*/events", anyOf("CREATE_CLAIM")),
             rule(POST, "/care-cash/events/*/decision", anyOf("APPROVE_CLAIM")),
