@@ -281,8 +281,9 @@ public class PolicyWorkflow {
         if (!Set.of(PENDING_PAYMENT, ACTIVE, ACTIVE_NO_COVER).contains(previous)) {
             throw new IllegalArgumentException("Policy " + ref + " is " + previous + " and can no longer be cancelled.");
         }
+        int coolingOffDays = productRule(policy.getProduct(), "coolingOffDays", COOLING_OFF_DAYS);
         boolean coolingOff = !PENDING_PAYMENT.equals(previous) && policy.getCoverStartDate() != null
-                && !LocalDate.now().isAfter(policy.getCoverStartDate().plusDays(COOLING_OFF_DAYS));
+                && !LocalDate.now().isAfter(policy.getCoverStartDate().plusDays(coolingOffDays));
         policy.setStatus(CANCELLED);
         policy.terminated("CANCELLATION", LocalDate.now().plusDays(1));
         policy.setPaymentDueBy(null);
@@ -290,7 +291,7 @@ public class PolicyWorkflow {
         // Cover runs to the end of the day it is cancelled: the cancellation applies from the next day.
         history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Cancelled", previous,
                 CANCELLED, PENDING_PAYMENT.equals(previous) ? note
-                        : (coolingOff ? "Cooling-off cancellation within " + COOLING_OFF_DAYS
+                        : (coolingOff ? "Cooling-off cancellation within " + coolingOffDays
                                 + " days of the policy start: premiums refundable unless an insured event occurred · "
                                 : "Cancelled on the policyholder's written request · ") + note, actor,
                 LocalDate.now().plusDays(1));
@@ -338,7 +339,7 @@ public class PolicyWorkflow {
             history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Cover Ended", ACTIVE,
                     ACTIVE_NO_COVER, "Grace period ended " + policy.getGracePeriodEnd() + " with the premium due "
                             + policy.getNextPremiumDue() + " unpaid. The policy stays in force without cover for "
-                            + NO_COVER_MONTHS + " months; paying resumes cover with no new waiting period.",
+                            + productRule(policy.getProduct(), "noCoverMonths", NO_COVER_MONTHS) + " months; paying resumes cover with no new waiting period.",
                     WorkflowHistory.SYSTEM, policy.getGracePeriodEnd().plusDays(1));
             Map<String, Object> lapsed = new LinkedHashMap<>();
             lapsed.put("policyRef", policy.getRef());
@@ -354,17 +355,19 @@ public class PolicyWorkflow {
                 .getResultList();
         for (InsurancePolicy policy : noCover) {
             LocalDate coverEnd = policy.getNextPremiumDue() != null ? policy.getNextPremiumDue() : policy.getGracePeriodEnd();
-            if (coverEnd == null || !coverEnd.plusMonths(NO_COVER_MONTHS).isBefore(today)
+            // NS-IL03-004: how long a policy stays without cover before it lapses is the product's rule.
+            int noCoverMonths = productRule(policy.getProduct(), "noCoverMonths", NO_COVER_MONTHS);
+            if (coverEnd == null || !coverEnd.plusMonths(noCoverMonths).isBefore(today)
                     || !billing.unresolvedPayments(policy.getRef()).isEmpty()) {
                 continue;
             }
             policy.setStatus(LAPSED);
             policy.setLapseDate(today);
             policy.terminated("LAPSE", today);
-            publishTerminated(policy, "LAPSE", "No premium within " + NO_COVER_MONTHS + " months of cover ending",
+            publishTerminated(policy, "LAPSE", "No premium within " + noCoverMonths + " months of cover ending",
                     WorkflowHistory.SYSTEM);
             history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Lapsed", ACTIVE_NO_COVER,
-                    LAPSED, "No premium within " + NO_COVER_MONTHS + " months of cover ending on " + coverEnd
+                    LAPSED, "No premium within " + noCoverMonths + " months of cover ending on " + coverEnd
                             + ". Lapse is final: re-enrolling starts a new policy with new waiting periods.",
                     WorkflowHistory.SYSTEM);
             moved.add(policy.getRef());
@@ -421,10 +424,17 @@ public class PolicyWorkflow {
     // ── reinstatement and termination (NS-IL03-004, IL03 events) ──────────────────────────────────
 
     /** Whether the product's servicing rule holds a late premium's reinstatement for approval. */
+    /** One of the product's servicing rule numbers (prod_servicing_rule), or the convention when it has no rule. */
+    private int productRule(String product, String field, int fallback) {
+        return em.createQuery("select r." + field + " from ServicingRule r where r.product = :product", Integer.class)
+                .setParameter("product", product).getResultStream().findFirst().orElse(fallback);
+    }
+
     private boolean reinstatementNeedsApproval(String product) {
         return em.createQuery("select r.reinstatementNeedsApproval from ServicingRule r where r.product = :product",
                         Boolean.class)
-                .setParameter("product", product).getResultStream().findFirst().orElse(false);
+                // NS-IL03-004: a late payment restores cover automatically only when the product's rule says so.
+                .setParameter("product", product).getResultStream().findFirst().orElse(true);
     }
 
     /** Approves a held reinstatement: cover resumes today with no new waiting period. */

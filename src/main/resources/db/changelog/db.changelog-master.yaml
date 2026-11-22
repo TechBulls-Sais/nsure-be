@@ -311,3 +311,9 @@ databaseChangeLog:
   - include:
       file: changes/121-new-business-capture.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/122-dependants-and-product-rules.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/123-life-consent.yaml
+      relativeToChangelogFile: true

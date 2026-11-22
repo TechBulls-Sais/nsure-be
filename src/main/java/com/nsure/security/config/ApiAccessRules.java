@@ -324,6 +324,7 @@ public final class ApiAccessRules {
             rule(POST, "/servicing/benefit-events/run", anyOf("MANAGE_SERVICING")),
             rule(POST, "/servicing/benefit-events/*/decision", anyOf("APPROVE_BENEFIT")),
             rule(POST, "/servicing/benefit-events/*/payment", anyOf("APPROVE_BENEFIT")),
+            rule(POST, "/servicing/policies/*/lives/*/consent", anyOf("MANAGE_SERVICING")),
             rule(POST, "/servicing/life-reviews/run", anyOf("MANAGE_SERVICING")),
             rule(POST, "/servicing/life-reviews/*/close", anyOf("MANAGE_SERVICING")),
             rule(PUT, "/servicing/benefit-rules", anyOf("MANAGE_BENEFIT_RULE")),

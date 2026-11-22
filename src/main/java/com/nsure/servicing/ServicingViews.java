@@ -51,7 +51,10 @@ public final class ServicingViews {
             LocalDate effectiveFrom,
             LocalDate effectiveTo,
             LocalDate waitingPeriodStart,
-            String ceaseReason) {
+            String ceaseReason,
+            // A re-added person's first cover row (limits continue from it) and the date-of-birth evidence.
+            Long continuityOf,
+            String dobEvidence) {
     }
 
     /** What an endorsement would do, before anything is changed (NS-IL03-003). */
@@ -126,7 +129,12 @@ public final class ServicingViews {
             int childReviewAge,
             int maxCoverAge,
             String updatedBy,
-            LocalDateTime updatedAt) {
+            LocalDateTime updatedAt,
+            String lifeContinuity,
+            String removalApproval,
+            int reviewLeadDays,
+            int noCoverMonths,
+            int coolingOffDays) {
     }
 
     /** A benefit the product's rules will make due, shown before it falls due. */
@@ -183,7 +191,14 @@ public final class ServicingViews {
             // IL04 roster: per-life limits and use, claims, underwriting outcome and eligibility warnings.
             Roster roster,
             // IL03: every beneficiary designation, current and removed, with its dates (no contact or bank details).
-            List<BeneficiaryEpisode> beneficiaryHistory) {
+            List<BeneficiaryEpisode> beneficiaryHistory,
+            // NS-IL04-006: each insured life's own consent decisions about sharing their medical evidence.
+            List<ConsentView> consents) {
+    }
+
+    /** One insured life's consent decision (NS-IL04-006); the newest per life applies. */
+    public record ConsentView(Long id, Long lifeId, String lifeName, boolean adult, String scope, String status,
+            String evidence, String recordedBy, LocalDateTime recordedAt) {
     }
 
     public record BeneficiaryEpisode(

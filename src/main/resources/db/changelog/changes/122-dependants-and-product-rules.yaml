@@ -1,0 +1,27 @@
+# IL04 dependants and IL03 product servicing rules (Nsure Life NS-IL04-001/003/004/005, AT-IL04-02, NS-IL03-004,
+# section 06 checklist). A re-added person continues their first cover row's limits (continuity_of); the product rule
+# says whether their waiting period continues, when a removal needs a second person, how far ahead age reviews are
+# raised, how long a policy stays without cover before it lapses and the cooling-off period. Seeded values are DEMO
+# DEFAULTS (the conventions the code used before), edited in Policy servicing > Rules.
+databaseChangeLog:
+  - changeSet:
+      id: 122-dependants-and-product-rules-schema
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ins_policy_life_cover
+            columns:
+              # The person's first cover row on this policy when they were removed and added again (NS-IL04-004).
+              - column: {name: continuity_of, type: bigint}
+              # How the date of birth was evidenced (document type and reference), when recorded (NS-IL04-001).
+              - column: {name: dob_evidence, type: varchar(150)}
+        - addColumn:
+            tableName: prod_servicing_rule
+            columns:
+              # KEEP_EARLIEST: a re-added life keeps its first waiting-period start; RESTART: waiting starts again.
+              - column: {name: life_continuity, type: varchar(20), defaultValue: KEEP_EARLIEST, constraints: {nullable: false}}
+              # BACKDATED: a removal needs a second person only when backdated; ALWAYS: every removal does.
+              - column: {name: removal_approval, type: varchar(20), defaultValue: BACKDATED, constraints: {nullable: false}}
+              - column: {name: review_lead_days, type: int, defaultValueNumeric: 90, constraints: {nullable: false}}
+              - column: {name: no_cover_months, type: int, defaultValueNumeric: 3, constraints: {nullable: false}}
+              - column: {name: cooling_off_days, type: int, defaultValueNumeric: 30, constraints: {nullable: false}}

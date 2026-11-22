@@ -137,7 +137,14 @@ public class ServicingController {
         return servicing.saveBenefitRule(body);
     }
 
-    @GetMapping("/rules")
+    /** {status GRANTED|WITHDRAWN, evidence}: an insured life's consent to share their medical evidence. */
+    @PostMapping("/policies/{ref}/lives/{lifeId}/consent")
+    public ServicingViews.ServicingView recordConsent(@PathVariable String ref, @PathVariable Long lifeId,
+            @RequestBody com.fasterxml.jackson.databind.JsonNode body) {
+        return servicing.recordConsent(ref, lifeId, body);
+    }
+
+        @GetMapping("/rules")
     public List<ServicingViews.ServicingRuleView> servicingRules() {
         return servicing.servicingRules();
     }
