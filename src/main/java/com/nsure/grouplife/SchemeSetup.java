@@ -701,6 +701,188 @@ public class SchemeSetup {
         return benefitRules.productMaximum(type);
     }
 
+    // ── certificates and scheme documents (NS-GL01-005, AT-GL01-02) ──────────────────────────────
+
+    /** The benefits the member's category has (a category may leave out a scheme benefit). */
+    List<String> certificateBenefits(GroupScheme s, com.nsure.group.SchemeMember m, List<String> schemeBenefits) {
+        List<String> all = schemeBenefits.isEmpty() ? List.of("GLA") : schemeBenefits;
+        String category = m.getCategory() == null ? null : m.getCategory().getCode();
+        return all.stream().filter(t -> benefitRules.included(s.getRef(), category, t, LocalDate.now())).toList();
+    }
+
+    /** What the certificate was generated from: accepted terms, wording and category version, and the member's terms. */
+    Map<String, Object> certificateTerms(GroupScheme s, com.nsure.group.SchemeMember m) {
+        Map<String, Object> v = new LinkedHashMap<>();
+        Quote q = acceptedVersion(s);
+        v.put("acceptedTerms", q == null ? null : q.ref + " v" + q.versionNo);
+        v.put("wording", s.getWordingRef() == null ? null : s.getWordingRef() + " v" + s.getWordingVersion());
+        v.put("categoryCode", m.getCategory() == null ? null : m.getCategory().getCode());
+        v.put("categoryVersion", m.getCategory() == null ? null : m.getCategory().getVersionNo());
+        v.put("loadingPercent", m.getLoadingPercent());
+        v.put("exclusions", m.getExclusions());
+        return v;
+    }
+
+    private Quote acceptedVersion(GroupScheme s) {
+        if (s.getQuoteRef() == null) {
+            return null;
+        }
+        return em.createQuery("select q from SchemeQuote q where q.ref = :r and q.status = 'ACTIVATED'", Quote.class)
+                .setParameter("r", s.getQuoteRef()).setMaxResults(1).getResultStream().findFirst().orElse(null);
+    }
+
+    private String[] wordingText(String ref, Integer version) {
+        if (ref == null) {
+            return null;
+        }
+        jakarta.persistence.Query query = em.createNativeQuery("select title, body from doc_wording where record_ref = ?1"
+                + (version == null ? " and status = 'APPROVED'" : " and version_no = ?2")).setParameter(1, ref);
+        if (version != null) {
+            query.setParameter(2, version);
+        }
+        List<?> rows = query.getResultList();
+        if (rows.isEmpty()) {
+            return null;
+        }
+        Object[] r = (Object[]) rows.get(0);
+        return new String[] {String.valueOf(r[0]), String.valueOf(r[1])};
+    }
+
+    /** The scheme schedule with its benefit summary by category, generated from the accepted version (PDF). */
+    @Transactional(readOnly = true)
+    public byte[] schedule(String schemeRef) {
+        user("READ_SCHEME");
+        GroupScheme s = scheme(schemeRef);
+        if ("SETUP".equals(s.getStatus())) {
+            throw new IllegalArgumentException(schemeRef + " is in set-up; its schedule is issued on activation.");
+        }
+        Quote q = acceptedVersion(s);
+        String source = (q == null ? "terms set up before quotations were kept" : "accepted terms " + q.ref + " v"
+                + q.versionNo) + (s.getWordingRef() == null ? "" : ", wording " + s.getWordingRef() + " v" + s.getWordingVersion());
+        SchemePdf pdf = new SchemePdf("Scheme schedule " + schemeRef, "Scheme schedule", s.getName() + " (" + schemeRef
+                + ") - policy year " + s.getPolicyYear() + ", generated " + LocalDate.now() + " from " + source,
+                "Nsure scheme schedule " + schemeRef + " - generated from " + source);
+        GroupSponsor sponsor = s.getSponsorRef() == null ? null : sponsorOrNull(s.getSponsorRef());
+        pdf.section("Master policy")
+                .row("Scheme", s.getName() + " (" + schemeRef + ")")
+                .row("Legal sponsor", sponsor == null ? s.getName() : sponsor.getLegalName() + (sponsor.getRegistrationNo() == null
+                        ? "" : ", registration " + sponsor.getRegistrationNo()))
+                .row("Payer", s.getPayerName())
+                .row("Broker", s.getBrokerRef() == null ? "Direct" : s.getBrokerRef())
+                .row("Status", label(s.getStatus()))
+                .row("Inception", String.valueOf(s.getInceptionDate()))
+                .row("Policy year", s.getPolicyYear() + ", renewing " + s.getRenewalDate())
+                .row("Billing", label(s.getBillingFrequency()) + (s.getBillingMethod() == null ? "" : ", " + label(s.getBillingMethod())
+                        + ", due day " + s.getBillingDueDay()))
+                .row("Not actively at work", "DEFER".equals(s.getAawRule()) ? "Cover deferred until back at work"
+                        : "All cover referred to underwriting")
+                .row("Partial cover", s.isPartialCoverAllowed() ? "Free cover in force while the excess is underwritten"
+                        : "No cover until all of it is underwritten")
+                .row("Inception conditions", s.getInceptionConditions());
+        if (q != null) {
+            pdf.row("Accepted terms", q.ref + " v" + q.versionNo + ", " + Money.display(q.annualPremium) + " a year at "
+                    + q.ratePerMille.stripTrailingZeros().toPlainString() + " " + GroupRating.unit(q.ratingBasis)
+                    + (q.decidedBy == null ? "" : ", approved by " + q.decidedBy));
+        }
+        List<BenefitCategory> categories = schemes.categoriesOf(s);
+        pdf.section("Categories");
+        for (BenefitCategory c : categories) {
+            pdf.row(c.getCode() + " - " + c.getName(), ("SALARY_MULTIPLE".equals(c.getBenefitBasis())
+                    ? c.getSalaryMultiple().stripTrailingZeros().toPlainString() + " x " + (c.getSalaryBasis() == null
+                    ? "annual" : label(c.getSalaryBasis()).toLowerCase(Locale.ROOT)) + " salary"
+                    : Money.display(c.getFixedCover()) + " fixed")
+                    + (c.getMaxCover() == null ? "" : ", capped at " + Money.display(c.getMaxCover()))
+                    + "; free cover " + Money.display(c.getFreeCoverLimit()) + "; entry ages " + c.getMinEntryAge() + "-"
+                    + c.getMaxEntryAge() + (c.getExitAge() == null ? "" : ", cover to age " + c.getExitAge())
+                    + (c.getWaitingDays() == null ? "" : "; waiting period " + c.getWaitingDays() + " days")
+                    + "; " + c.getRatePerMille().stripTrailingZeros().toPlainString() + " per 1,000 a month"
+                    + (c.getEligibilityRule() == null ? "" : ". Eligibility: " + c.getEligibilityRule())
+                    + " (version " + c.getVersionNo() + ")");
+        }
+        pdf.section("Benefit summary");
+        List<Benefit> benefits = em.createQuery("select b from SchemeBenefit b where b.schemeRef = :r order by b.benefitType",
+                Benefit.class).setParameter("r", schemeRef).getResultList();
+        for (Benefit b : benefits) {
+            String amount = "FIXED".equals(b.basis) ? Money.display(b.fixedAmount) : b.multiple == null ? label(b.basis)
+                    : b.multiple.stripTrailingZeros().toPlainString() + ("MONTHLY_INCOME_PERCENT".equals(b.basis)
+                    ? "% of monthly income" : " x salary");
+            pdf.row(label(b.benefitType), amount + ("PENDING".equals(b.approvalStatus) ? " (change awaiting approval)" : ""));
+            Map<String, String> labels = benefitRules.parameterLabels(b.benefitType);
+            for (BenefitCategory c : categories) {
+                if (!benefitRules.included(schemeRef, c.getCode(), b.benefitType, LocalDate.now())) {
+                    pdf.row("  " + c.getCode(), "Not provided for this category");
+                    continue;
+                }
+                Map<String, String> resolved = benefitRules.resolved(schemeRef, c.getCode(), b.benefitType, LocalDate.now());
+                List<String> parts = new ArrayList<>();
+                resolved.forEach((k, v) -> {
+                    if (v != null) {
+                        parts.add(labels.getOrDefault(k, k) + ": " + v.replace('_', ' ').toLowerCase(Locale.ROOT));
+                    }
+                });
+                pdf.row("  " + c.getCode(), String.join("; ", parts));
+            }
+        }
+        String[] wording = wordingText(s.getWordingRef(), s.getWordingVersion());
+        if (wording != null) {
+            pdf.section("Wording " + s.getWordingRef() + " v" + s.getWordingVersion() + ": " + wording[0]).paragraph(wording[1]);
+        }
+        return pdf.bytes();
+    }
+
+    /** One member's certificate: accepted cover only, pending shown as not in force, the category's benefits (PDF). */
+    @Transactional(readOnly = true)
+    public byte[] certificate(String schemeRef, String memberKey) {
+        user("READ_SCHEME");
+        GroupScheme s = scheme(schemeRef);
+        com.nsure.group.SchemeMember m = em.createQuery("select m from SchemeMember m join fetch m.category"
+                        + " where m.scheme = :s and m.memberKey = :k and m.status in :on and m.acceptedCover > 0",
+                        com.nsure.group.SchemeMember.class)
+                .setParameter("s", s).setParameter("k", memberKey).setParameter("on", com.nsure.group.SchemeMember.ON_COVER)
+                .getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("No certified cover for member " + memberKey + " on " + schemeRef));
+        List<String> schemeBenefits = em.createQuery("select b.benefitType from SchemeBenefit b where b.schemeRef = :r"
+                + " order by b.benefitType", String.class).setParameter("r", schemeRef).getResultList();
+        Quote q = acceptedVersion(s);
+        String source = (q == null ? "scheme terms" : "accepted terms " + q.ref + " v" + q.versionNo)
+                + (s.getWordingRef() == null ? "" : ", wording " + s.getWordingRef() + " v" + s.getWordingVersion())
+                + ", category " + m.getCategory().getCode() + " v" + m.getCategory().getVersionNo();
+        SchemePdf pdf = new SchemePdf("Certificate " + schemeRef + "-" + memberKey, "Member certificate",
+                s.getName() + " (" + schemeRef + ") - certificate " + schemeRef + "-" + memberKey + ", generated "
+                        + LocalDate.now(), "Nsure member certificate " + schemeRef + "-" + memberKey + " - from " + source);
+        pdf.section("Member")
+                .row("Member", m.getFirstName() + " " + m.getLastName() + " (" + memberKey + ")")
+                .row("Category", m.getCategory().getCode() + " - " + m.getCategory().getName())
+                .row("Cover period", m.getJoinDate() + " to " + s.getRenewalDate() + " (policy year " + s.getPolicyYear() + ")")
+                .row("Cover in force", Money.display(m.getAcceptedCover()))
+                .row("Pending underwriting", m.getPendingCover().signum() > 0 ? Money.display(m.getPendingCover())
+                        + " - not in force until the insurer accepts it in writing" : null)
+                .row("Loading", m.getLoadingPercent() == null ? null : m.getLoadingPercent().stripTrailingZeros().toPlainString() + "%")
+                .row("Exclusions", m.getExclusions());
+        pdf.section("Benefits");
+        for (String type : certificateBenefits(s, m, schemeBenefits)) {
+            Map<String, String> labels = benefitRules.parameterLabels(type);
+            Map<String, String> resolved = benefitRules.resolved(schemeRef, m.getCategory().getCode(), type, LocalDate.now());
+            List<String> parts = new ArrayList<>();
+            resolved.forEach((k, v) -> {
+                if (v != null && !k.startsWith("MAX_")) {
+                    parts.add(labels.getOrDefault(k, k) + ": " + v.replace('_', ' ').toLowerCase(Locale.ROOT));
+                }
+            });
+            pdf.row(label(type), parts.isEmpty() ? "As the scheme schedule" : String.join("; ", parts));
+        }
+        String[] wording = wordingText("WRD-G002", null);
+        if (wording != null) {
+            pdf.section(wording[0]).paragraph(wording[1]);
+        }
+        return pdf.bytes();
+    }
+
+    private GroupSponsor sponsorOrNull(String ref) {
+        return em.createQuery("select s from GroupSponsor s where s.ref = :r", GroupSponsor.class).setParameter("r", ref)
+                .getResultStream().findFirst().orElse(null);
+    }
+
     // ── wording, sponsors ──────────────────────────────────────────────────────────────────────────
 
     /** The approved group wordings a master policy can be issued on (SH09A library, product "Group …"). */
@@ -776,6 +958,9 @@ public class SchemeSetup {
 
     private GroupSponsor sponsorFor(Quote q, JsonNode body, String actor) {
         String ref = text(body, "sponsorRef");
+        if (ref == null && terms(q) != null) {
+            ref = terms(q).sponsorRef; // the prospect the quotation was made for
+        }
         if (ref != null) {
             return sponsor(ref);
         }

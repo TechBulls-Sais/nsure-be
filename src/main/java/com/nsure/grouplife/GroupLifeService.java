@@ -776,7 +776,9 @@ public class GroupLifeService {
                     // AT-GL03-01: only accepted cover is certified; cover awaiting underwriting is shown as pending.
                     c.put("acceptedCover", m.getAcceptedCover());
                     c.put("pendingCover", m.getPendingCover());
-                    c.put("benefits", benefits.isEmpty() ? List.of("GLA") : benefits);
+                    // AT-GL01-02: the member's category benefits only, stamped with the terms they came from.
+                    c.put("benefits", setup.certificateBenefits(s, m, benefits));
+                    c.putAll(setup.certificateTerms(s, m));
                     return c;
                 }).toList();
     }

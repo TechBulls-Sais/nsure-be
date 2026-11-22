@@ -139,6 +139,30 @@ class SchemeSetupApiTest {
                 .andExpect(jsonPath("$[?(@.ref == '" + sponsor + "')].status").value(hasItem("CLIENT")));
     }
 
+    @Test
+    void theDemoQuotationsCanBeApprovedAndActivated() throws Exception {
+        // Changeset 140 (demo context): a draft, a submitted and an accepted quotation, each rated on a valid census.
+        mockMvc.perform(get("/group-life/quotes").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.ref == 'GQ-9001')].status").value(hasItem("DRAFT")))
+                .andExpect(jsonPath("$[?(@.ref == 'GQ-9001')].pricingStatus").value(hasItem("RATED")))
+                .andExpect(jsonPath("$[?(@.ref == 'GQ-9001')].census.lives").value(hasItem(5)))
+                .andExpect(jsonPath("$[?(@.ref == 'GQ-9002')].status").value(hasItem("SUBMITTED")));
+        mockMvc.perform(get("/group-life/quotes/GQ-9001/census/1").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.rows.length()").value(5));
+        mockMvc.perform(json(post("/group-life/quotes/GQ-9002/progress"), "secadmin", "{\"action\":\"APPROVE\",\"note\":\"Demo\"}"))
+                .andExpect(jsonPath("$.status").value("APPROVED"));
+        String scheme = JsonPath.read(mockMvc.perform(json(post("/group-life/quotes/GQ-9003/activation"), "admin",
+                        "{\"inceptionDate\":\"2026-12-01\",\"wordingRef\":\"WRD-G001\"," + CONDITIONS + "}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVATED"))
+                .andReturn().getResponse().getContentAsString(), "$.schemeRef");
+        mockMvc.perform(get("/group/schemes/" + scheme).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.scheme.setup.sponsorRef").value("SPN-9003"))
+                .andExpect(jsonPath("$.categories[0].code").value("ALL"))
+                .andExpect(jsonPath("$.categories[0].freeCoverLimit").value(1000000.0))
+                .andExpect(jsonPath("$.categories[0].ratePerMille").value(0.2083));
+    }
+
     private String acceptedQuote(String sponsor, int freeCover) throws Exception {
         String quote = JsonPath.read(mockMvc.perform(json(post("/group-life/quotes"), "admin", "{\"sponsorName\":\""
                         + sponsor + "\",\"sector\":\"Retail\",\"lives\":2,\"salaryRoll\":1000000,\"benefits\":[\"GLA\"],"

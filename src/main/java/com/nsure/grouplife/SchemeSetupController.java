@@ -61,6 +61,25 @@ public class SchemeSetupController {
         return rating.approveRateTable(code, version);
     }
 
+    /** The scheme schedule and benefit summary generated from the accepted version (NS-GL01-005). */
+    @GetMapping("/group-life/schemes/{ref}/schedule")
+    public org.springframework.http.ResponseEntity<byte[]> schedule(@PathVariable String ref) {
+        return pdf(setup.schedule(ref), "scheme-schedule-" + ref + ".pdf");
+    }
+
+    @GetMapping("/group-life/schemes/{ref}/certificates/{memberKey}/document")
+    public org.springframework.http.ResponseEntity<byte[]> certificate(@PathVariable String ref,
+            @PathVariable String memberKey) {
+        return pdf(setup.certificate(ref, memberKey), "certificate-" + ref + "-" + memberKey + ".pdf");
+    }
+
+    private static org.springframework.http.ResponseEntity<byte[]> pdf(byte[] bytes, String name) {
+        return org.springframework.http.ResponseEntity.ok()
+                .contentType(org.springframework.http.MediaType.APPLICATION_PDF)
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + name + "\"")
+                .body(bytes);
+    }
+
     @GetMapping("/group-life/sponsors")
     public List<Map<String, Object>> sponsors() {
         return setup.sponsors();

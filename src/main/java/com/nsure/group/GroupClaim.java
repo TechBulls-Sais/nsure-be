@@ -88,6 +88,54 @@ public class GroupClaim {
     @Column(name = "decided_at")
     private LocalDateTime decidedAt;
 
+    // ── benefit-pack details (NS-GL02-004/005) ─────────────────────────────────────────────────────
+
+    /** Family benefits: MEMBER, SPOUSE, CHILD or STILLBIRTH. */
+    @Column(name = "life_insured", length = 20)
+    private String lifeInsured;
+
+    @Column(name = "life_name", length = 100)
+    private String lifeName;
+
+    /** Critical illness: the condition group (related conditions share one payment). */
+    @Column(name = "condition_group", length = 60)
+    private String conditionGroup;
+
+    @Column(name = "partial_claim", length = 3)
+    private String partial;
+
+    @Column(length = 3)
+    private String accident;
+
+    @Column(name = "gestation_weeks")
+    private Integer gestationWeeks;
+
+    @Column(name = "child_age")
+    private Integer childAge;
+
+    @Column(name = "survival_confirmed_on")
+    private LocalDate survivalConfirmedOn;
+
+    /** The most the claim could pay under the benefit terms on the event date. */
+    @Column(name = "benefit_limit", precision = 15, scale = 2)
+    private BigDecimal benefitLimit;
+
+    @Column(name = "first_payment_date")
+    private LocalDate firstPaymentDate;
+
+    @Column(name = "cessation_date")
+    private LocalDate cessationDate;
+
+    @Column(name = "escalation_percent", precision = 7, scale = 2)
+    private BigDecimal escalationPercent;
+
+    /** Life cover reduced by this critical-illness payment (accelerated benefit). */
+    @Column(name = "accelerated_amount", precision = 15, scale = 2)
+    private BigDecimal acceleratedAmount;
+
+    @Column(name = "reinstated_on")
+    private LocalDate reinstatedOn;
+
     @Column(name = "updated_by", nullable = false, length = 100)
     private String updatedBy;
 
@@ -110,6 +158,92 @@ public class GroupClaim {
         this.notifiedBy = actor;
         this.notifiedAt = LocalDateTime.now();
         touch(actor);
+    }
+
+    void details(String lifeInsured, String lifeName, String conditionGroup, boolean partial, boolean accident,
+            Integer gestationWeeks, Integer childAge, BigDecimal benefitLimit, LocalDate firstPaymentDate,
+            LocalDate cessationDate, BigDecimal escalationPercent) {
+        this.lifeInsured = lifeInsured;
+        this.lifeName = lifeName;
+        this.conditionGroup = conditionGroup;
+        this.partial = partial ? "YES" : null;
+        this.accident = accident ? "YES" : null;
+        this.gestationWeeks = gestationWeeks;
+        this.childAge = childAge;
+        this.benefitLimit = benefitLimit;
+        this.firstPaymentDate = firstPaymentDate;
+        this.cessationDate = cessationDate;
+        this.escalationPercent = escalationPercent;
+    }
+
+    void survivalConfirmed(LocalDate on) {
+        this.survivalConfirmedOn = on;
+    }
+
+    void accelerated(BigDecimal amount) {
+        this.acceleratedAmount = amount;
+    }
+
+    void reinstated(LocalDate on, String note, String actor) {
+        this.reinstatedOn = on;
+        this.note = note;
+        touch(actor);
+    }
+
+    public String getLifeInsured() {
+        return lifeInsured;
+    }
+
+    public String getLifeName() {
+        return lifeName;
+    }
+
+    public String getConditionGroup() {
+        return conditionGroup;
+    }
+
+    public boolean isPartial() {
+        return "YES".equals(partial);
+    }
+
+    public boolean isAccident() {
+        return "YES".equals(accident);
+    }
+
+    public Integer getGestationWeeks() {
+        return gestationWeeks;
+    }
+
+    public Integer getChildAge() {
+        return childAge;
+    }
+
+    public LocalDate getSurvivalConfirmedOn() {
+        return survivalConfirmedOn;
+    }
+
+    public BigDecimal getBenefitLimit() {
+        return benefitLimit;
+    }
+
+    public LocalDate getFirstPaymentDate() {
+        return firstPaymentDate;
+    }
+
+    public LocalDate getCessationDate() {
+        return cessationDate;
+    }
+
+    public BigDecimal getEscalationPercent() {
+        return escalationPercent;
+    }
+
+    public BigDecimal getAcceleratedAmount() {
+        return acceleratedAmount;
+    }
+
+    public LocalDate getReinstatedOn() {
+        return reinstatedOn;
     }
 
     void approve(BigDecimal amount, boolean income, LocalDate firstReview, String note, String actor) {

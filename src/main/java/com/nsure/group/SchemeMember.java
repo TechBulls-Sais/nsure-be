@@ -228,6 +228,18 @@ public class SchemeMember {
         return acceptedCover.multiply(ratePerMille()).divide(BigDecimal.valueOf(1000), 2, java.math.RoundingMode.HALF_UP);
     }
 
+    /** A critical-illness payment that accelerates the life cover reduces it by the amount paid (section 08). */
+    void accelerate(BigDecimal amount) {
+        this.acceptedCover = acceptedCover.subtract(amount).max(BigDecimal.ZERO).setScale(2);
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /** Restores accelerated cover under the approved reinstatement rule, never above the requested cover. */
+    void reinstate(BigDecimal amount) {
+        this.acceptedCover = acceptedCover.add(amount).min(requestedCover).setScale(2);
+        this.updatedAt = LocalDateTime.now();
+    }
+
     public BigDecimal getLoadingPercent() {
         return loadingPercent;
     }

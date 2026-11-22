@@ -69,6 +69,13 @@ public class BenefitRules {
         return rules(benefitType).stream().filter(r -> r.parameter.equals(parameter)).findFirst().orElse(null);
     }
 
+    /** Parameter code to label for the benefit, in display order (for documents). */
+    public Map<String, String> parameterLabels(String benefitType) {
+        Map<String, String> out = new LinkedHashMap<>();
+        rules(benefitType).forEach(r -> out.put(r.parameter, r.label));
+        return out;
+    }
+
     @Transactional(readOnly = true)
     public List<Map<String, Object>> productRules() {
         security.authenticatedUser().validateHasPermissionTo("READ_SCHEME");

@@ -1,0 +1,53 @@
+databaseChangeLog:
+  # Demo group quotations (demo installations only) so the GL01 journey can be walked straight away: three prospect
+  # sponsors, each with a quotation rated on a validated five-life census at a negotiated demo rate (2.5 per 1,000 sum
+  # assured, 3 x salary): GQ-9001 is a draft to submit, GQ-9002 is submitted (prepared by admin, so secadmin
+  # approves it), GQ-9003 is accepted by the sponsor and ready to set up and activate. References in the 9000s keep
+  # clear of the numbers the application issues.
+  - changeSet:
+      id: 140-group-demo-quotes
+      author: nsure
+      context: demo
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO grp_sponsor (record_ref, legal_name, registration_no, sector, contact_name, contact_email, sponsor_status, created_by, created_at)
+              SELECT s.r, s.n, s.g, s.c, s.p, s.e, 'PROSPECT', 'admin', CURRENT_TIMESTAMP FROM (
+                SELECT 'SPN-9001' r, 'Okavango Logistics (Pty) Ltd' n, 'BW00001234567' g, 'Logistics' c, 'Neo Dintwa' p, 'hr@okavango-logistics.example' e UNION ALL
+                SELECT 'SPN-9002', 'Tsodilo Retail Group', 'BW00007654321', 'Retail', 'Lorato Kgari', 'people@tsodilo-retail.example' UNION ALL
+                SELECT 'SPN-9003', 'Chobe Engineering Works', 'BW00005550123', 'Engineering', 'Kabo Seretse', 'hr@chobe-engineering.example'
+              ) s
+        - sql:
+            sql: |
+              INSERT INTO grp_quote (record_ref, version_no, sponsor_name, sector, lives, salary_roll, benefits, rating_basis, salary_multiple, rate_per_mille, annual_premium, free_cover_limit, valid_until, status, notes, created_by, created_at, decided_by, decided_at, decision_note)
+              SELECT q.r, 1, q.n, q.c, 5, 1200000.00, 'GLA,FAMILY', 'SUM_ASSURED', 3.00, 2.5000, 9000.00, 1000000.00, DATE '2027-12-31', q.s, 'Demo quotation (illustrative terms)', 'admin', CURRENT_TIMESTAMP, q.d, q.t, q.o FROM (
+                SELECT 'GQ-9003' r, 'Chobe Engineering Works' n, 'Engineering' c, 'ACCEPTED' s, 'secadmin' d, CURRENT_TIMESTAMP t, 'Demo: terms approved' o UNION ALL
+                SELECT 'GQ-9001', 'Okavango Logistics (Pty) Ltd', 'Logistics', 'DRAFT', NULL, NULL, NULL UNION ALL
+                SELECT 'GQ-9002', 'Tsodilo Retail Group', 'Retail', 'SUBMITTED', NULL, NULL, NULL
+              ) q
+        - sql:
+            sql: |
+              INSERT INTO grp_quote_census (quote_ref, census_version, file_hash, total_rows, valid_rows, invalid_rows, lives, salary_roll, loan_balance, average_age, warnings, census_status, submitted_by, submitted_at)
+              SELECT r, 1, 'demo-census-five-lives', 5, 5, 0, 5, 1200000.00, 0.00, 38.0, NULL, 'VALID', 'admin', CURRENT_TIMESTAMP FROM (
+                SELECT 'GQ-9001' r UNION ALL SELECT 'GQ-9002' UNION ALL SELECT 'GQ-9003'
+              ) q
+        - sql:
+            sql: |
+              INSERT INTO grp_quote_census_row (census_id, line_no, member_key, date_of_birth, category_code, salary, loan_balance, row_status, error)
+              SELECT c.id, l.n, l.k, l.d, NULL, l.s, NULL, 'VALID', NULL FROM grp_quote_census c CROSS JOIN (
+                SELECT 2 n, 'E001' k, '1996-03-14' d, '120000' s UNION ALL
+                SELECT 3, 'E002', '1991-07-02', '180000' UNION ALL
+                SELECT 4, 'E003', '1987-11-23', '240000' UNION ALL
+                SELECT 5, 'E004', '1983-05-09', '300000' UNION ALL
+                SELECT 6, 'E005', '1978-01-30', '360000'
+              ) l
+              WHERE c.quote_ref IN ('GQ-9001', 'GQ-9002', 'GQ-9003') AND c.census_version = 1
+        - sql:
+            sql: |
+              INSERT INTO grp_quote_terms (quote_id, census_id, sponsor_ref, rate_source, pricing_status, technical_premium, adjustment_percent, expense_percent, commission_percent, profit_percent, validity_days, rate_tables, pricing_detail, design)
+              SELECT q.id, c.id, m.s, 'NEGOTIATED', 'RATED', 9000.00, 0.00, 10.00, 5.00, 5.00, 30, NULL,
+                     '{"indicativeReason":null,"sumAssured":3600000.00,"benefits":[{"benefits":["GLA","FAMILY"],"basis":"SUM_ASSURED","source":"Negotiated rate 2.5 per 1,000 of sum assured a year (demo)","premium":9000.00}],"categories":[{"category":"ALL","lives":5,"sumAssured":3600000.00,"annualPremium":9000.00,"monthlyRatePerMille":0.2083}]}',
+                     NULL
+              FROM grp_quote q JOIN grp_quote_census c ON c.quote_ref = q.record_ref AND c.census_version = 1
+              JOIN (SELECT 'GQ-9001' r, 'SPN-9001' s UNION ALL SELECT 'GQ-9002', 'SPN-9002' UNION ALL SELECT 'GQ-9003', 'SPN-9003') m ON m.r = q.record_ref
+              WHERE q.version_no = 1

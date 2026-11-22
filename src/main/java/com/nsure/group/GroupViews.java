@@ -232,7 +232,22 @@ public final class GroupViews {
             String notifiedBy,
             LocalDateTime notifiedAt,
             String decidedBy,
-            LocalDateTime decidedAt) {
+            LocalDateTime decidedAt,
+            // Benefit-pack details (NS-GL02-004/005): the life claimed for, CI condition group, partial disability,
+            // accident, the limit under the terms in force, income benefit dates and escalation, CI survival and
+            // acceleration/reinstatement.
+            String lifeInsured,
+            String lifeName,
+            String conditionGroup,
+            boolean partial,
+            boolean accident,
+            BigDecimal benefitLimit,
+            LocalDate firstPaymentDate,
+            LocalDate cessationDate,
+            BigDecimal escalationPercent,
+            LocalDate survivalConfirmedOn,
+            BigDecimal acceleratedAmount,
+            LocalDate reinstatedOn) {
     }
 
     /** The allocation just made (or the existing one for a repeated reference) and the invoice after it. */

@@ -317,3 +317,9 @@ databaseChangeLog:
   - include:
       file: changes/138-group-member-underwriting.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/139-group-claim-benefit-rules.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/140-group-demo-quotes.yaml
+      relativeToChangelogFile: true
