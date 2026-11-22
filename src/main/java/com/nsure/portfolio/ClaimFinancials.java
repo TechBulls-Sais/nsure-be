@@ -175,6 +175,84 @@ public class ClaimFinancials {
         outbox.publish(Events.BENEFIT_LIMIT_CONSUMED, claim.getPolicyRef(), data, who);
     }
 
+    // ── the benefit calculation (NS-SH03-004, NS-SH05-002) ───────────────────────────────────────
+
+    /** One step of a claim's benefit calculation: a signed amount and why. */
+    public record CalcLine(String label, BigDecimal amount, String reason) {
+    }
+
+    /**
+     * What a claim is eligible for, separate from the decision on it: the sum assured in force on the event date,
+     * less deductions (premiums that fell due on or before the event and were unpaid), capped by what is left of the
+     * life and policy limits. {@code exclusions} are the underwriting terms on the policy the approver must consider.
+     */
+    public record Calculation(LocalDate eventDate, BigDecimal sumAssured, String sumAssuredBasis, List<CalcLine> lines,
+            BigDecimal deductions, BigDecimal eligible, BigDecimal limitRemaining, BigDecimal mostPayable,
+            String exclusions, String version) {
+    }
+
+    /** Version of the claim calculation rules; stored with every decision's trace. */
+    static final String CALCULATION_VERSION = "claim-calc-1 (demo default: outstanding premium deducted, D06/D07)";
+
+    public Calculation calculation(InsuranceClaim claim, InsurancePolicy policy) {
+        LocalDate event = date(claim.getEventDate());
+        List<CalcLine> lines = new ArrayList<>();
+        BigDecimal sumAssured = claim.getAmount() == null ? BigDecimal.ZERO : claim.getAmount();
+        String basis = claim.getCoveredLifeId() != null ? "Cover of " + nameOf(claim) + " on the policy"
+                : "Sum assured in force on " + event;
+        lines.add(new CalcLine("Sum assured on the event date", sumAssured, basis));
+        BigDecimal deductions = BigDecimal.ZERO;
+        if (event != null && policy.getNextPremiumDue() != null && !policy.getNextPremiumDue().isAfter(event)
+                && policy.getPremium() != null && policy.getPremium().signum() > 0) {
+            int months = switch (policy.getPremiumFrequency() == null ? "Monthly" : policy.getPremiumFrequency()) {
+                case "Annually", "Annual", "Yearly" -> 12;
+                case "Quarterly" -> 3;
+                case "Semi-annually", "Half-yearly" -> 6;
+                default -> 1;
+            };
+            int unpaid = 0;
+            LocalDate due = policy.getNextPremiumDue();
+            while (!due.isAfter(event) && unpaid < 24) {
+                unpaid++;
+                due = due.plusMonths(months);
+            }
+            deductions = policy.getPremium().multiply(BigDecimal.valueOf(unpaid));
+            lines.add(new CalcLine("Outstanding premium", deductions.negate(), unpaid + " premium(s) of "
+                    + Money.display(policy.getPremium()) + " due from " + policy.getNextPremiumDue()
+                    + " on or before the event and unpaid (deducted: demo rule)"));
+        }
+        BigDecimal eligible = sumAssured.subtract(deductions).max(BigDecimal.ZERO).setScale(2, java.math.RoundingMode.HALF_UP);
+        lines.add(new CalcLine("Eligible amount", eligible, "Sum assured less deductions"));
+        Limits limits = limits(claim, policy);
+        BigDecimal held = reservedLimit(claim.getRef());
+        BigDecimal remaining = limits.lifeRemaining().min(limits.policyRemaining()).add(held);
+        BigDecimal most = eligible.min(remaining.max(BigDecimal.ZERO));
+        if (most.compareTo(eligible) < 0) {
+            lines.add(new CalcLine("Limit cap", most.subtract(eligible), "Only " + Money.display(remaining)
+                    + " is left of the life and policy benefit limits"));
+        }
+        String exclusions = policy.getUwTerms() == null || policy.getUwTerms().isBlank() ? null : policy.getUwTerms();
+        return new Calculation(event, sumAssured, basis, lines, deductions, eligible, remaining, most, exclusions,
+                CALCULATION_VERSION);
+    }
+
+    /**
+     * The sum assured in force on the event date (NS-SH05-002): the policy's amount as it stands, unless an applied
+     * endorsement changed it after the event, in which case the earliest such change's previous amount applies.
+     */
+    public BigDecimal sumAssuredOn(InsurancePolicy policy, LocalDate event) {
+        if (event == null) {
+            return policy.getAmount();
+        }
+        @SuppressWarnings("unchecked")
+        List<BigDecimal> before = em.createNativeQuery("select old_sum_assured from pol_endorsement where policy_ref = ?1"
+                        + " and applied_at is not null and old_sum_assured is not null and new_sum_assured is not null"
+                        + " and effective_date > ?2 order by effective_date, id")
+                .setParameter(1, policy.getRef()).setParameter(2, event).setMaxResults(1).getResultList();
+        return before.isEmpty() || before.get(0) == null ? policy.getAmount()
+                : new BigDecimal(before.get(0).toString());
+    }
+
     /** Limit entries of a claim, oldest first, for its ledger view. */
     public List<ClaimLedgers.LimitEntry> limitEntries(String claimRef) {
         return entries(claimRef);

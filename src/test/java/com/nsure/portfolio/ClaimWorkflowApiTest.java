@@ -133,10 +133,10 @@ class ClaimWorkflowApiTest {
         // Four-eyes: the assessor cannot approve their own recommendation.
         mockMvc.perform(post("/portfolio/claims/" + claim + "/approve").with(signedIn("assessor", "password")))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":60000}"))
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":60000}"))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("Payout of BWP 60,000 exceeds the policy cover of BWP 50,000"));
-        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":45000," + EVIDENCE + "}"))
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":45000," + EVIDENCE + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Approved"))
                 .andExpect(jsonPath("$.payoutAmount").value(45000))
@@ -318,17 +318,17 @@ class ClaimWorkflowApiTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.maxPayoutAmount").value(10000.00));
             // Spec 04 §5.3: over the limit needs a more senior approver.
-            mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":45000}"))
+            mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":45000}"))
                     .andExpect(status().isForbidden())
                     .andExpect(jsonPath("$.message").value("This payout of BWP 45,000 exceeds your approval limit of "
                             + "BWP 10,000. It needs a more senior approver."));
             // NS-API-001: a malformed field is a 400 schema error naming the field, not a business rule refusal.
-            mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":\"ten\"}"))
+            mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":\"ten\"}"))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
                     .andExpect(jsonPath("$.message").value("Payout amount must be a number"))
                     .andExpect(jsonPath("$.fieldErrors[0].field").value("payoutAmount"));
-            mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"payoutAmount\":9000," + EVIDENCE + "}"))
+            mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "assessor2", "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":9000," + EVIDENCE + "}"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.status").value("Approved"))
                     .andExpect(jsonPath("$.adjudicatedBy").value("assessor2"))
@@ -516,7 +516,7 @@ class ClaimWorkflowApiTest {
 
         mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk());
-        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":45000," + EVIDENCE + "}"))
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":45000," + EVIDENCE + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.reserve").value(45000.0));
         mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
@@ -568,23 +568,23 @@ class ClaimWorkflowApiTest {
                 .andExpect(jsonPath("$[?(@.action == 'Assessed')].details").value(org.hamcrest.Matchers.hasItem(
                         org.hamcrest.Matchers.containsString("evidence outstanding: Death certificate, Identity document"))));
 
-        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":40000}"))
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":40000}"))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value("Required evidence is not yet on file for " + claim
                         + ": Death certificate, Identity document. Enter a reason for approving without it; the reason"
                         + " is kept with the claim."));
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
-                        "{\"payoutAmount\":40000,\"evidenceOverrideReason\":\"   \"}"))
+                        "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":40000,\"evidenceOverrideReason\":\"   \"}"))
                 .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
-                        "{\"payoutAmount\":40000,\"evidenceOverrideReason\":\"Originals seen at the branch\"}"))
+                        "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":40000,\"evidenceOverrideReason\":\"Originals seen at the branch\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Approved"))
                 .andExpect(jsonPath("$.evidenceOverrideReason").value("Originals seen at the branch"));
         mockMvc.perform(get("/portfolio/claims/" + claim + "/financials").with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$.decisions[0].decision").value("PARTIALLY_APPROVED"))
-                .andExpect(jsonPath("$.decisions[0].reason").value(
-                        "Approved without Death certificate, Identity document: Originals seen at the branch"));
+                .andExpect(jsonPath("$.decisions[0].reason").value(org.hamcrest.Matchers.endsWith(
+                        "Approved without Death certificate, Identity document: Originals seen at the branch")));
         mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
                 .andExpect(jsonPath("$[?(@.action == 'Approved')].details").value(org.hamcrest.Matchers.hasItem(
                         org.hamcrest.Matchers.containsString("approved without it: Originals seen at the branch"))));
@@ -611,7 +611,7 @@ class ClaimWorkflowApiTest {
         mockMvc.perform(post("/portfolio/claims/" + complete + "/assess").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk());
         mockMvc.perform(json(post("/portfolio/claims/" + complete + "/approve"), "admin",
-                        "{\"payoutAmount\":5000,\"overrideReason\":\"Second event confirmed separately\"}"))
+                        "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":5000,\"overrideReason\":\"Second event confirmed separately\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Approved"))
                 .andExpect(jsonPath("$.evidenceOverrideReason").value(""));
@@ -667,7 +667,7 @@ class ClaimWorkflowApiTest {
         mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk());
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
-                        "{\"payoutAmount\":20000," + EVIDENCE + "}"))
+                        "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":20000," + EVIDENCE + "}"))
                 .andExpect(status().isOk());
         String sent = mockMvc.perform(post("/portfolio/claims/" + claim + "/pay").with(signedIn("admin", "password")))
                 .andExpect(status().isOk())
@@ -728,7 +728,7 @@ class ClaimWorkflowApiTest {
         String claim = staffLodge(policy, "Bonolo Lifecycle");
         mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk());
-        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"payoutAmount\":30000," + EVIDENCE + "}"))
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin", "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":30000," + EVIDENCE + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.actions").value(org.hamcrest.Matchers.hasItems("pay", "reopen")));
         String approved = tx.execute(s -> em.createQuery("select e.payload from OutboxEvent e where e.aggregateRef = :ref"
@@ -800,7 +800,7 @@ class ClaimWorkflowApiTest {
             results.add(pool.submit(() -> {
                 go.await();
                 return mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
-                                "{\"payoutAmount\":30000,\"overrideReason\":\"Separate benefit events confirmed\","
+                                "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":30000,\"overrideReason\":\"Separate benefit events confirmed\","
                                         + EVIDENCE + "}"))
                         .andReturn().getResponse().getStatus();
             }));

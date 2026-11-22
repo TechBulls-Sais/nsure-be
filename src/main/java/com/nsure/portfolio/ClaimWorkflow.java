@@ -160,6 +160,21 @@ public class ClaimWorkflow {
      */
     @Transactional
     public InsuranceClaim lodge(Lodgement input, String actor) {
+        return lodge(input, "STAFF", actor);
+    }
+
+    /** Where a notification may come from (NS-SH05-001). */
+    public static final Set<String> SOURCES = Set.of("STAFF", "PHONE", "EMAIL", "BRANCH", "PORTAL", "INTERMEDIARY",
+            "EMPLOYER", "LENDER");
+
+    /** As {@link #lodge(Lodgement, String)}, recording where the notification came from. */
+    @Transactional
+    public InsuranceClaim lodge(Lodgement input, String source, String actor) {
+        String channel = source == null || source.isBlank() ? "STAFF" : source.trim().toUpperCase(Locale.ROOT);
+        if (!SOURCES.contains(channel)) {
+            throw new com.nsure.common.exception.InvalidFieldException("source", "source must be one of "
+                    + String.join(", ", new java.util.TreeSet<>(SOURCES)) + ".");
+        }
         InsurancePolicy policy = policies.policy(required(input.policyRef(), "policy"));
         String claimant = required(input.claimantName(), "claimantName");
         String mobile = required(input.claimantMobile(), "claimantMobile");
@@ -176,8 +191,10 @@ public class ClaimWorkflow {
         claim.setCustomerRef(policy.getCustomerRef());
         claim.setProduct(policy.getProduct());
         claim.setPolicyRef(policy.getRef());
-        // A claim pays the policy's cover; an assessor may approve a partial amount.
-        claim.setAmount(policy.getAmount());
+        // A claim pays the cover in force on the event date (NS-SH05-002), not what the policy says today; an
+        // assessor may approve a partial amount.
+        claim.setAmount(financials.sumAssuredOn(policy, event));
+        claim.setNotificationSource(channel);
         coveredLife(claim, policy, input.coveredLife());
         claim.setPremium(BigDecimal.ZERO);
         claim.setStatus(INITIATED);
@@ -194,7 +211,10 @@ public class ClaimWorkflow {
         payeeFromBeneficiary(claim, policy);
         em.persist(claim);
         history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Lodged", null, INITIATED,
-                "On " + policy.getRef() + " by " + claimant + " (" + relationship + "), event " + event, actor);
+                "On " + policy.getRef() + " by " + claimant + " (" + relationship + "), event " + event + " · via "
+                        + channel.toLowerCase(Locale.ROOT) + (claim.getAmount().compareTo(policy.getAmount()) == 0 ? ""
+                        : " · cover on the event date " + Money.display(claim.getAmount()) + " (today "
+                                + Money.display(policy.getAmount()) + ")"), actor);
         financials.reserve(claim, claim.getAmount(), "Initial case reserve on lodging", actor);
 
         boolean allPassed = runChecks(claim, policy);
@@ -214,13 +234,17 @@ public class ClaimWorkflow {
             claim.verifyPayout(SYSTEM_VERIFIER);
             claim.setStatus(APPROVED);
             claim.setProcessingType(STP);
-            claim.setPayoutAmount(claim.getAmount());
+            ClaimFinancials.Calculation calc = financials.calculation(claim, policy);
+            claim.setPayoutAmount(calc.mostPayable());
             claim.resolve(null);
-            financials.reserveLimit(claim, policy, claim.getAmount(), WorkflowHistory.SYSTEM);
+            financials.reserveLimit(claim, policy, calc.mostPayable(), WorkflowHistory.SYSTEM);
             payouts.authorise(payoutRequest(claim), WorkflowHistory.SYSTEM);
             history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Auto Approved", INITIATED,
-                    APPROVED, "Straight-through: all five checks passed · payout " + Money.display(claim.getAmount()),
+                    APPROVED, "Straight-through: all five checks passed · payout " + Money.display(calc.mostPayable()),
                     WorkflowHistory.SYSTEM);
+            recordDecision(claim, calc.mostPayable().compareTo(claim.getAmount()) < 0 ? ClaimDecision.PARTIALLY_APPROVED
+                    : ClaimDecision.APPROVED, "Straight-through", calc.mostPayable(), WorkflowHistory.SYSTEM,
+                    trace(claim, calc, calc.mostPayable()));
             outbox.publish(Events.CLAIM_APPROVED, claim.getRef(), decisionPayload(claim, null), WorkflowHistory.SYSTEM);
         } else {
             claim.setStatus(UNDER_REVIEW);
@@ -241,6 +265,7 @@ public class ClaimWorkflow {
     static final String STP_PRODUCT_OPT_OUT = "PRODUCT_OPT_OUT";
     static final String STP_CLAIM_LIMIT = "CLAIM_LIMIT";
     static final String STP_OVER_LIMIT = "OVER_LIMIT";
+    static final String STP_UNDERWRITING_TERMS = "UNDERWRITING_TERMS";
 
     /** Why a claim whose checks all passed may not be approved straight through. */
     record StpDecision(String code, String text) {
@@ -252,6 +277,10 @@ public class ClaimWorkflow {
      */
     private StpDecision stpDecision(InsuranceClaim claim, InsurancePolicy policy) {
         ProductStpPolicy product = stpPolicies.findByProductId(policies.product(policy).getId()).orElse(null);
+        if (policy.getUwTerms() != null && !policy.getUwTerms().isBlank()) {
+            return new StpDecision(STP_UNDERWRITING_TERMS, "The policy carries underwriting terms (" + policy.getUwTerms()
+                    + "); a person checks the event against them");
+        }
         if (product != null && !product.isStpEnabled()) {
             return new StpDecision(STP_PRODUCT_OPT_OUT, "Straight-through processing is switched off for "
                     + policy.getProduct());
@@ -431,6 +460,21 @@ public class ClaimWorkflow {
     @Transactional
     public InsuranceClaim approve(String ref, BigDecimal requestedPayout, String overrideReason,
             String fourEyesOverrideReason, String evidenceOverrideReason, AppUser actor) {
+        return approve(ref, requestedPayout, overrideReason, fourEyesOverrideReason, evidenceOverrideReason, null, null,
+                actor);
+    }
+
+    /**
+     * As above, with the benefit calculation separate from the decision (NS-SH03-004, NS-SH05-004): the payout
+     * defaults to the most payable (eligible amount after deductions, within the limits), never more than the eligible
+     * amount; less than the most payable is a partial approval that needs {@code decisionReason}; a policy with
+     * underwriting terms needs {@code exclusionNote} saying the event is not excluded (NS-SH05-002). The calculation
+     * is kept with the decision as an immutable trace (NS-SH03-005).
+     */
+    @Transactional
+    public InsuranceClaim approve(String ref, BigDecimal requestedPayout, String overrideReason,
+            String fourEyesOverrideReason, String evidenceOverrideReason, String decisionReason, String exclusionNote,
+            AppUser actor) {
         InsuranceClaim claim = claim(ref);
         String previous = guard(claim, "approve", actor);
         String fourEyesReason = trim(fourEyesOverrideReason);
@@ -461,7 +505,9 @@ public class ClaimWorkflow {
             throw new IllegalArgumentException(
                     "Please verify the payee's payout details against the claim documents before approving.");
         }
-        BigDecimal payout = requestedPayout == null ? claim.getAmount() : requestedPayout;
+        InsurancePolicy policy = policies.policy(claim.getPolicyRef());
+        ClaimFinancials.Calculation calc = financials.calculation(claim, policy);
+        BigDecimal payout = requestedPayout == null ? calc.mostPayable() : requestedPayout;
         if (payout.signum() <= 0) {
             throw new IllegalArgumentException("Payout amount must be greater than zero");
         }
@@ -469,6 +515,26 @@ public class ClaimWorkflow {
             throw new IllegalArgumentException(
                     "Payout of " + Money.display(payout) + " exceeds the policy cover of " + Money.display(claim.getAmount()));
         }
+        if (payout.compareTo(calc.eligible()) > 0) {
+            throw new IllegalArgumentException("Payout of " + Money.display(payout) + " is more than the eligible amount of "
+                    + Money.display(calc.eligible()) + " after deductions (" + Money.display(calc.deductions()) + ").");
+        }
+        String partialReason = trim(decisionReason);
+        boolean discretionary = payout.compareTo(calc.mostPayable()) < 0;
+        if (discretionary && partialReason.isEmpty()) {
+            throw new IllegalArgumentException("A payout of " + Money.display(payout) + " is less than the "
+                    + Money.display(calc.mostPayable()) + " the claim is eligible for. Give the reason for the partial"
+                    + " approval; the claimant is told it.");
+        }
+        if (partialReason.length() > 500) {
+            throw new IllegalArgumentException("Keep the reason to 500 characters.");
+        }
+        String exclusion = trim(exclusionNote);
+        if (calc.exclusions() != null && exclusion.length() < 5) {
+            throw new IllegalArgumentException("The policy carries underwriting terms (" + calc.exclusions() + "). Say why"
+                    + " this event is not excluded by them before approving.");
+        }
+        claim.setExclusionNote(calc.exclusions() == null ? null : clip(exclusion));
         approvalLimits.assertWithinLimit(actor, payout);
         List<String> missing = financials.missingMandatory(claim);
         String evidenceReason = trim(evidenceOverrideReason);
@@ -481,7 +547,7 @@ public class ClaimWorkflow {
             throw new IllegalArgumentException("Keep the reason for approving without the evidence to 500 characters.");
         }
         claim.setEvidenceOverrideReason(missing.isEmpty() ? null : evidenceReason);
-        financials.reserveLimit(claim, policies.policy(claim.getPolicyRef()), payout, actor.getUsername());
+        financials.reserveLimit(claim, policy, payout, actor.getUsername());
         claim.setPayoutAmount(payout);
         financials.reserve(claim, payout, "Set to the approved payout", actor.getUsername());
         claim.setStatus(APPROVED);
@@ -489,13 +555,24 @@ public class ClaimWorkflow {
         // NS-TXN-003: the payment instruction is created and approved with the decision, in this transaction.
         PayoutInstruction instruction = payouts.authorise(payoutRequest(claim), actor.getUsername());
         boolean partial = payout.compareTo(claim.getAmount()) < 0;
-        String decisionReason = softFailed.isEmpty() ? null : reason;
+        String recorded = partialReason.isEmpty() ? null : (discretionary ? "Partial: " : "") + partialReason;
+        if (!softFailed.isEmpty()) {
+            recorded = recorded == null ? reason : recorded + " · " + reason;
+        }
+        if (calc.deductions().signum() > 0) {
+            String deducted = "Deducted " + Money.display(calc.deductions()) + " outstanding premium";
+            recorded = recorded == null ? deducted : recorded + " · " + deducted;
+        }
+        if (calc.exclusions() != null) {
+            String checked = "Not excluded by " + calc.exclusions() + ": " + exclusion;
+            recorded = recorded == null ? checked : recorded + " · " + checked;
+        }
         if (!missing.isEmpty()) {
             String withoutEvidence = "Approved without " + String.join(", ", missing) + ": " + evidenceReason;
-            decisionReason = decisionReason == null ? withoutEvidence : decisionReason + " · " + withoutEvidence;
+            recorded = recorded == null ? withoutEvidence : recorded + " · " + withoutEvidence;
         }
-        recordDecision(claim, partial ? ClaimDecision.PARTIALLY_APPROVED : ClaimDecision.APPROVED, decisionReason, payout,
-                actor.getUsername());
+        recordDecision(claim, partial ? ClaimDecision.PARTIALLY_APPROVED : ClaimDecision.APPROVED, recorded, payout,
+                actor.getUsername(), trace(claim, calc, payout));
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Approved", previous, APPROVED,
                 clip("Payout: " + Money.display(payout) + (partial ? " (partial approval of the "
                         + Money.display(claim.getAmount()) + " claimed)" : "") + (softFailed.isEmpty() ? ""
@@ -666,8 +743,15 @@ public class ClaimWorkflow {
 
     private ClaimDecision recordDecision(InsuranceClaim claim, String decision, String reason, BigDecimal amount,
             String actor) {
+        return recordDecision(claim, decision, reason, amount, actor, null);
+    }
+
+    /** Records a decision with the calculation it was made on; the trace is written once, with the row. */
+    private ClaimDecision recordDecision(InsuranceClaim claim, String decision, String reason, BigDecimal amount,
+            String actor, String calculation) {
         int next = decisions(claim.getRef()).stream().mapToInt(ClaimDecision::getSequenceNo).max().orElse(0) + 1;
         ClaimDecision row = new ClaimDecision(claim.getRef(), next, decision, reason, amount, actor);
+        row.calculation(calculation);
         em.persist(row);
         return row;
     }
@@ -818,6 +902,34 @@ public class ClaimWorkflow {
         data.put("instructionRef", instruction.getRef());
         data.put("reason", reason.length() <= 200 ? reason : reason.substring(0, 200));
         outbox.publish(Events.CLAIM_PAYMENT_RETURNED, claim.getRef(), data, actor);
+    }
+
+    /** The benefit calculation as kept with a decision: steps, amounts, version and an input hash (NS-SH03-005). */
+    private static String trace(InsuranceClaim claim, ClaimFinancials.Calculation calc, BigDecimal payout) {
+        StringBuilder lines = new StringBuilder();
+        for (ClaimFinancials.CalcLine line : calc.lines()) {
+            if (!lines.isEmpty()) {
+                lines.append(',');
+            }
+            lines.append("{\"label\":").append(json(line.label())).append(",\"amount\":\"")
+                    .append(line.amount().toPlainString()).append("\",\"reason\":").append(json(line.reason())).append('}');
+        }
+        String inputs = claim.getRef() + "|" + claim.getPolicyRef() + "|" + calc.eventDate() + "|"
+                + calc.sumAssured().toPlainString() + "|" + calc.deductions().toPlainString() + "|"
+                + calc.limitRemaining().toPlainString() + "|" + calc.version();
+        return "{\"version\":" + json(calc.version()) + ",\"eventDate\":" + json(String.valueOf(calc.eventDate()))
+                + ",\"lines\":[" + lines + "],\"eligible\":\"" + calc.eligible().toPlainString()
+                + "\",\"limitRemaining\":\"" + calc.limitRemaining().toPlainString() + "\",\"mostPayable\":\""
+                + calc.mostPayable().toPlainString() + "\",\"payout\":\"" + payout.toPlainString()
+                + "\",\"exclusions\":" + json(calc.exclusions()) + ",\"inputHash\":\"" + ProductRelease.sha256(inputs)
+                + "\",\"calculatedAt\":\"" + LocalDateTime.now().withNano(0) + "\"}";
+    }
+
+    private static String json(String value) {
+        if (value == null) {
+            return "null";
+        }
+        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ") + "\"";
     }
 
     private PayoutService.Request payoutRequest(InsuranceClaim claim) {

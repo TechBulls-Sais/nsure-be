@@ -1092,7 +1092,7 @@ public class PortfolioService {
     public PortfolioViews.ShopView shopClaim(JsonNode body) {
         CustomerAccount account = customerForLogin();
         InsurancePolicy policy = ownPolicy(account, text(body, "policy"));
-        claimWorkflow.lodge(lodgement(policy.getRef(), body), account.getLoginUsername());
+        claimWorkflow.lodge(lodgement(policy.getRef(), body), "PORTAL", account.getLoginUsername());
         return shopFor(account);
     }
 
@@ -1284,7 +1284,8 @@ public class PortfolioService {
     public PortfolioViews.ClaimView createClaim(JsonNode body) {
         AppUser staff = security.authenticatedUser();
         staff.validateHasPermissionTo("CREATE_CLAIM");
-        return claim(claimWorkflow.lodge(lodgement(text(body, "policy"), body), staff.getUsername()));
+        return claim(claimWorkflow.lodge(lodgement(text(body, "policy"), body), optional(body, "source"),
+                staff.getUsername()));
     }
 
     private static ClaimWorkflow.Lodgement lodgement(String policyRef, JsonNode body) {
@@ -1335,7 +1336,8 @@ public class PortfolioService {
             case "assess" -> claimWorkflow.assess(ref, optional(input, "note"), actor);
             case "approve" -> claimWorkflow.approve(ref, payoutAmount(input),
                     optional(input, "overrideReason"), optional(input, "fourEyesOverrideReason"),
-                    optional(input, "evidenceOverrideReason"), actor);
+                    optional(input, "evidenceOverrideReason"), optional(input, "reason"),
+                    optional(input, "exclusionNote"), actor);
             case "reject" -> claimWorkflow.reject(ref, optional(input, "reason"), actor);
             case "pay" -> claimWorkflow.pay(ref, actor);
             case "confirm-payout" -> claimWorkflow.confirmPayout(ref, optional(input, "providerReference"), actor);
@@ -1362,13 +1364,16 @@ public class PortfolioService {
                 limits == null ? null : limits.policyLimit(), limits == null ? null : limits.policyUsed(),
                 claimWorkflow.decisions(ref).stream().map(d -> new PortfolioViews.ClaimDecisionView(d.getSequenceNo(),
                         d.getDecision(), d.getReason(), d.getAmount(), d.getDecidedBy(), d.getDecidedAt(),
-                        d.getSupersededBy())).toList(),
+                        d.getSupersededBy(), readJson(d.getCalculationTrace()))).toList(),
                 claimWorkflow.eventCover(claim),
                 em.createQuery("select r.ref, r.treaty.ref, r.recoveryAmount, r.status, r.receivedAmount from Recovery r"
                                 + " where r.claimRef = :ref order by r.id", Object[].class)
                         .setParameter("ref", ref).getResultList().stream()
                         .map(r -> new PortfolioViews.ClaimRecoveryView((String) r[0], (String) r[1], (BigDecimal) r[2],
-                                (String) r[3], (BigDecimal) r[4])).toList());
+                                (String) r[3], (BigDecimal) r[4])).toList(),
+                policy == null ? null : claimFinancials.calculation(claim, policy),
+                claimFinancials.limitEntries(ref).stream().map(e -> new PortfolioViews.LimitEntryView(e.getEntry(),
+                        e.getAmount(), e.getCreatedBy(), e.getCreatedAt())).toList());
     }
 
     @Transactional(readOnly = true)
@@ -1896,7 +1901,21 @@ public class PortfolioService {
                 blank(row.getCoveredLifeName()).isEmpty() ? row.getCustomerName() : row.getCoveredLifeName(),
                 row.getReserveAmount(),
                 claimFinancials.evidence(row),
-                claimFinancials.related(row));
+                claimFinancials.related(row),
+                blank(row.getNotificationSource()),
+                blank(row.getExclusionNote()));
+    }
+
+    /** A stored JSON trace for a view; null when there is none. */
+    private JsonNode readJson(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            return mapper.readTree(json);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            return null;
+        }
     }
 
     private PortfolioViews.ConfigView config(ProductConfiguration row) {

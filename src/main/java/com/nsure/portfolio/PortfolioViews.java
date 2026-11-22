@@ -224,7 +224,10 @@ public final class PortfolioViews {
             String coveredLife,
             BigDecimal reserve,
             List<EvidenceItem> evidence,
-            List<RelatedClaim> related
+            List<RelatedClaim> related,
+            // NS-SH05-001: where the notification came from; NS-SH05-002: why the event is not excluded.
+            String notificationSource,
+            String exclusionNote
     ) {
     }
 
@@ -243,7 +246,12 @@ public final class PortfolioViews {
      */
     public record ClaimFinancialsView(String claimRef, BigDecimal reserve, List<ReserveMovementView> movements,
             BigDecimal lifeLimit, BigDecimal lifeUsed, BigDecimal policyLimit, BigDecimal policyUsed,
-            List<ClaimDecisionView> decisions, EventCoverView eventCover, List<ClaimRecoveryView> recoveries) {
+            List<ClaimDecisionView> decisions, EventCoverView eventCover, List<ClaimRecoveryView> recoveries,
+            ClaimFinancials.Calculation calculation, List<LimitEntryView> limitEntries) {
+    }
+
+    /** One movement on the benefit limits (RESERVED, RELEASED, CONSUMED, REVERSED), NS-SH05-005. */
+    public record LimitEntryView(String entry, BigDecimal amount, String by, java.time.LocalDateTime at) {
     }
 
     /**
@@ -263,7 +271,7 @@ public final class PortfolioViews {
 
     /** One decision on a claim; {@code supersededBy} names the later decision that set it aside (§09 reopen). */
     public record ClaimDecisionView(int sequence, String decision, String reason, BigDecimal amount, String decidedBy,
-            java.time.LocalDateTime decidedAt, Integer supersededBy) {
+            java.time.LocalDateTime decidedAt, Integer supersededBy, com.fasterxml.jackson.databind.JsonNode calculation) {
     }
 
     public record ReserveMovementView(BigDecimal change, BigDecimal balance, String reason, String by,

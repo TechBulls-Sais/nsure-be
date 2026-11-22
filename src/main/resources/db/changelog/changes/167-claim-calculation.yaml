@@ -1,0 +1,17 @@
+databaseChangeLog:
+  # NS-SH03-004 / NS-SH03-005 / NS-SH05-003: a claim decision keeps the benefit calculation it was made on — the sum
+  # assured on the event date, deductions (outstanding premium), limits, eligible amount and its input hash — as an
+  # immutable trace; NS-SH05-001: where the notification came from.
+  - changeSet:
+      id: 167-claim-decision-calculation
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: clm_decision
+            columns:
+              - column: {name: calculation_trace, type: varchar(3000)}
+        - addColumn:
+            tableName: ins_claim
+            columns:
+              - column: {name: notification_source, type: varchar(30)}
+              - column: {name: exclusion_note, type: varchar(500)}

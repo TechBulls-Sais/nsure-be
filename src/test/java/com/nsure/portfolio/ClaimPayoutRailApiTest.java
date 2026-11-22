@@ -253,7 +253,7 @@ class ClaimPayoutRailApiTest {
         mockMvc.perform(post("/portfolio/claims/" + claim + "/assess").with(signedIn("assessor", "password")))
                 .andExpect(status().isOk());
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/approve"), "admin",
-                        "{\"payoutAmount\":" + payout + "," + EVIDENCE + "}"))
+                        "{\"reason\":\"Partial payout agreed with the claimant\",\"payoutAmount\":" + payout + "," + EVIDENCE + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("Approved"));
         return claim;

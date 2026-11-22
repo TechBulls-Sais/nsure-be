@@ -520,6 +520,30 @@ public class InsuranceClaim extends CoverRecord {
         this.fourEyesApplied = Boolean.FALSE;
     }
 
+    @jakarta.persistence.Column(name = "notification_source", length = 30)
+    private String notificationSource;
+
+    @jakarta.persistence.Column(name = "exclusion_note", length = 500)
+    private String exclusionNote;
+
+    /** NS-SH05-001: where the notification came from (STAFF, PORTAL, INTERMEDIARY, EMPLOYER, LENDER). */
+    public String getNotificationSource() {
+        return notificationSource;
+    }
+
+    void setNotificationSource(String notificationSource) {
+        this.notificationSource = notificationSource;
+    }
+
+    /** NS-SH05-002: the approver's note that the event is not excluded by the policy's underwriting terms. */
+    public String getExclusionNote() {
+        return exclusionNote;
+    }
+
+    void setExclusionNote(String exclusionNote) {
+        this.exclusionNote = exclusionNote;
+    }
+
     /** A settled payout came back (§09): the claim is unpaid again, and no longer closed. */
     void payoutReturned() {
         this.paidAt = null;
