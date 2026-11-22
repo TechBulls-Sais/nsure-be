@@ -242,14 +242,17 @@ class CommunicationApiTest {
         assertThat(email.get("status")).isEqualTo("QUEUED");
         Number id = (Number) email.get("id");
 
-        for (int attempt = 1; attempt <= 3; attempt++) {
-            mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
-                    .andExpect(status().isOk());
-            email = one(messagesFor(policy), "POLICY_ISSUED_EMAIL");
-            assertThat(email.get("attempts")).isEqualTo(attempt);
-            assertThat(email.get("status")).isEqualTo(attempt < 3 ? "QUEUED" : "FAILED");
-        }
-        assertThat((String) email.get("lastError")).contains("rejected").contains("attempt 3 of 3");
+        // NS-SH09B-005: the provider rejects the address for good, so there is no retry: straight to the failed queue.
+        mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
+                .andExpect(status().isOk());
+        email = one(messagesFor(policy), "POLICY_ISSUED_EMAIL");
+        assertThat(email.get("attempts")).isEqualTo(1);
+        assertThat(email.get("status")).isEqualTo("FAILED");
+        assertThat(email.get("failureKind")).isEqualTo("PERMANENT");
+        assertThat((String) email.get("lastError")).contains("rejected").contains("not retried");
+        mockMvc.perform(post("/communications/dispatch").with(signedIn("service", "password")))
+                .andExpect(status().isOk());
+        assertThat(one(messagesFor(policy), "POLICY_ISSUED_EMAIL").get("attempts")).isEqualTo(1);
 
         mockMvc.perform(get("/communications/messages?status=FAILED").with(signedIn("service", "password")))
                 .andExpect(jsonPath("$[?(@.id == " + id + ")].status").value("FAILED"));
@@ -644,8 +647,9 @@ class CommunicationApiTest {
     }
 
     private static Map<String, Object> one(List<Map<String, Object>> messages, String templateCode) {
+        // A fallback carries its original's template content (AT-SH09B-02); it is not the template's own message.
         List<Map<String, Object>> matching = messages.stream()
-                .filter(m -> templateCode.equals(m.get("templateCode"))).toList();
+                .filter(m -> templateCode.equals(m.get("templateCode")) && "".equals(m.get("fallbackOf"))).toList();
         assertThat(matching).as("messages for " + templateCode).hasSize(1);
         return matching.get(0);
     }

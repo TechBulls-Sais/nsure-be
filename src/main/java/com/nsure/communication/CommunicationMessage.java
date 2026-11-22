@@ -30,6 +30,9 @@ public class CommunicationMessage {
     public static final String SUPPRESSED = "SUPPRESSED";
     // Blueprint §5: read is reported by the provider where available. It is not proof the customer accepted anything.
     public static final String READ = "READ";
+    /** failure_kind: retried with backoff, or rejected for good. */
+    public static final String TRANSIENT = "TRANSIENT";
+    public static final String PERMANENT = "PERMANENT";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -122,6 +125,21 @@ public class CommunicationMessage {
 
     @Column(name = "owned_at")
     private LocalDateTime ownedAt;
+
+    // NS-SH09B-005: a transient error waits until this time (bounded backoff) before the next attempt.
+    @Column(name = "next_attempt_at")
+    private LocalDateTime nextAttemptAt;
+
+    // TRANSIENT (retried, then exhausted) or PERMANENT (straight to the failed queue).
+    @Column(name = "failure_kind", length = 20)
+    private String failureKind;
+
+    // AT-SH09B-02: the message this one stands in for on another channel, and the fallback raised for this one.
+    @Column(name = "fallback_of", length = 20)
+    private String fallbackOf;
+
+    @Column(name = "fallback_ref", length = 20)
+    private String fallbackRef;
 
     protected CommunicationMessage() {
     }
@@ -245,15 +263,45 @@ public class CommunicationMessage {
 
     /** A provider error on the attempt just submitted: queued again until maxAttempts, then the failed queue. */
     void failedAttempt(String error, int maxAttempts) {
+        failedAttempt(error, maxAttempts, null);
+    }
+
+    /**
+     * A transient provider error (NS-SH09B-005): queued again, not before {@code nextAttempt}, until maxAttempts; then
+     * the failed queue.
+     */
+    void failedAttempt(String error, int maxAttempts, LocalDateTime nextAttempt) {
         lastError = cut(error, 500);
+        failureKind = TRANSIENT;
         status = attempts >= maxAttempts ? FAILED : QUEUED;
+        nextAttemptAt = FAILED.equals(status) ? null : nextAttempt;
+        updatedAt = LocalDateTime.now();
+    }
+
+    /** A permanent provider error: no retry; the message goes straight to the failed queue. */
+    void failedPermanently(String error) {
+        lastError = cut(error, 500);
+        failureKind = PERMANENT;
+        status = FAILED;
+        nextAttemptAt = null;
         updatedAt = LocalDateTime.now();
     }
 
     void retry() {
         status = QUEUED;
         attempts = 0;
+        nextAttemptAt = null;
         updatedAt = LocalDateTime.now();
+    }
+
+    /** This message stands in for {@code original} on another channel (AT-SH09B-02). */
+    void fallbackFor(String original) {
+        this.fallbackOf = original;
+    }
+
+    /** The fallback message raised because this one could not reach its recipient. */
+    void fellBackTo(String fallback) {
+        this.fallbackRef = fallback;
     }
 
     private static String cut(String value, int max) {
@@ -366,5 +414,21 @@ public class CommunicationMessage {
 
     public LocalDateTime getOwnedAt() {
         return ownedAt;
+    }
+
+    public LocalDateTime getNextAttemptAt() {
+        return nextAttemptAt;
+    }
+
+    public String getFailureKind() {
+        return failureKind;
+    }
+
+    public String getFallbackOf() {
+        return fallbackOf;
+    }
+
+    public String getFallbackRef() {
+        return fallbackRef;
     }
 }

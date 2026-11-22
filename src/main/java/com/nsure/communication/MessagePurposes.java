@@ -17,21 +17,27 @@ final class MessagePurposes {
     static final String CLAIM_PROGRESS = "CLAIM_PROGRESS";
     static final String SERVICE_UPDATE = "SERVICE_UPDATE";
     static final String OPERATIONAL_NOTICE = "OPERATIONAL_NOTICE";
+    static final String EVIDENCE_REQUEST = "EVIDENCE_REQUEST";
+    static final String COMMISSION_STATEMENT = "COMMISSION_STATEMENT";
+    static final String LENDER_NOTICE = "LENDER_NOTICE";
 
     /** Words that name a marketing purpose; refused for templates. */
     static final Set<String> PROMOTIONAL = Set.of("PROMOTIONAL", "MARKETING", "CAMPAIGN");
 
-    private static final Map<String, String> BY_EVENT = Map.of(
-            Events.POLICY_ISSUED, POLICY_ISSUANCE,
-            Events.PREMIUM_RECEIVED, PAYMENT_CONFIRMATION,
-            Events.PREMIUM_DUE_REMINDER, PREMIUM_REMINDER,
-            Events.CLAIM_RECEIVED, CLAIM_PROGRESS,
-            Events.CLAIM_APPROVED, CLAIM_PROGRESS,
-            Events.CLAIM_REJECTED, CLAIM_PROGRESS,
-            Events.CLAIM_PAID, CLAIM_PROGRESS,
-            Events.SERVICE_CASE_OPENED, SERVICE_UPDATE,
-            Events.OPERATIONAL_NOTICE, OPERATIONAL_NOTICE,
-            CommunicationService.SERVICE_MESSAGE, SERVICE_UPDATE);
+    private static final Map<String, String> BY_EVENT = Map.ofEntries(
+            Map.entry(Events.EVIDENCE_REQUESTED, EVIDENCE_REQUEST),
+            Map.entry(Events.COMMISSION_PAID, COMMISSION_STATEMENT),
+            Map.entry(Events.LOAN_DISBURSED, LENDER_NOTICE),
+            Map.entry(Events.POLICY_ISSUED, POLICY_ISSUANCE),
+            Map.entry(Events.PREMIUM_RECEIVED, PAYMENT_CONFIRMATION),
+            Map.entry(Events.PREMIUM_DUE_REMINDER, PREMIUM_REMINDER),
+            Map.entry(Events.CLAIM_RECEIVED, CLAIM_PROGRESS),
+            Map.entry(Events.CLAIM_APPROVED, CLAIM_PROGRESS),
+            Map.entry(Events.CLAIM_REJECTED, CLAIM_PROGRESS),
+            Map.entry(Events.CLAIM_PAID, CLAIM_PROGRESS),
+            Map.entry(Events.SERVICE_CASE_OPENED, SERVICE_UPDATE),
+            Map.entry(Events.OPERATIONAL_NOTICE, OPERATIONAL_NOTICE),
+            Map.entry(CommunicationService.SERVICE_MESSAGE, SERVICE_UPDATE));
 
     private MessagePurposes() {
     }

@@ -1,0 +1,173 @@
+databaseChangeLog:
+  # SH09B delivery rules (work package e): retry classification and bounded backoff, channel fallback by purpose,
+  # the event-to-recipient matrix, purpose-level choices with consent evidence, SMS and the WhatsApp provider's own
+  # template approval. Every rule value seeded here is a demo default the insurer replaces in the workspace
+  # (Communications > Rules), not an approved messaging policy (D12).
+  - changeSet:
+      id: 195-message-retry-and-fallback
+      author: nsure
+      comment: >-
+        NS-SH09B-005: a transient provider error waits until next_attempt_at (bounded exponential backoff); a permanent
+        one goes straight to the failed queue. failure_kind records which. A message that could not reach its recipient
+        may be followed by a fallback message on another approved channel: fallback_of / fallback_ref link the two.
+      changes:
+        - addColumn:
+            tableName: com_message
+            columns:
+              - column: {name: next_attempt_at, type: timestamp(6)}
+              - column: {name: failure_kind, type: varchar(20)}
+              - column: {name: fallback_of, type: varchar(20)}
+              - column: {name: fallback_ref, type: varchar(20)}
+        - createIndex:
+            tableName: com_message
+            indexName: ix_com_message_event_customer
+            columns:
+              - column: {name: event_id}
+              - column: {name: customer_ref}
+  - changeSet:
+      id: 195-template-provider-approval
+      author: nsure
+      comment: >-
+        Blueprint 5 (BP-COMMS): a WhatsApp template must also be approved by the WhatsApp provider before it is used.
+        Email and SMS templates need no provider approval. The starter WhatsApp templates are recorded as approved at
+        installation by the simulated provider.
+      changes:
+        - addColumn:
+            tableName: com_template
+            columns:
+              - column: {name: provider_status, type: varchar(20), defaultValue: NOT_REQUIRED, constraints: {nullable: false}}
+              - column: {name: provider_note, type: varchar(300)}
+        - sql:
+            sql: >-
+              UPDATE com_template SET provider_status = 'APPROVED',
+              provider_note = 'Starter template: approval recorded at installation (simulated WhatsApp provider)'
+              WHERE channel = 'WHATSAPP';
+  - changeSet:
+      id: 195-purpose-and-recipient-rules
+      author: nsure
+      comment: >-
+        NS-SH09B-001 / AT-SH09B-02 / NS-SH01-006. com_purpose_rule: per purpose, whether it is a contractual notice,
+        the channels a message may fall back to (in order), whether a customer may opt out of the purpose itself, and
+        whether it is marketing (needs opt-in with consent evidence). com_recipient_rule: which recipient roles each
+        event messages. com_purpose_preference: a customer's choice for one purpose (on one channel or ALL), with its
+        consent source and evidence. com_preference_history: every channel or purpose choice, as verification history.
+      changes:
+        - createTable:
+            tableName: com_purpose_rule
+            columns:
+              - column: {name: purpose, type: varchar(40), constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_com_purpose_rule}}
+              - column: {name: label, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: contractual, type: varchar(1), constraints: {nullable: false}}
+              - column: {name: fallback_channels, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: customer_may_opt_out, type: varchar(1), constraints: {nullable: false}}
+              - column: {name: marketing, type: varchar(1), constraints: {nullable: false}}
+              - column: {name: updated_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: updated_at, type: timestamp(6), constraints: {nullable: false}}
+        - createTable:
+            tableName: com_recipient_rule
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_com_recipient_rule}}
+              - column: {name: event_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: recipient_role, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: purpose, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: enabled, type: varchar(1), constraints: {nullable: false}}
+              - column: {name: note, type: varchar(300)}
+              - column: {name: updated_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: updated_at, type: timestamp(6), constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: com_recipient_rule
+            columnNames: event_type, recipient_role
+            constraintName: uk_com_recipient_rule
+        - createTable:
+            tableName: com_purpose_preference
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_com_purpose_preference}}
+              - column: {name: customer_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: purpose, type: varchar(40), constraints: {nullable: false}}
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: consent_source, type: varchar(40)}
+              - column: {name: consent_evidence, type: varchar(300)}
+              - column: {name: updated_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: updated_at, type: timestamp(6), constraints: {nullable: false}}
+        - addUniqueConstraint:
+            tableName: com_purpose_preference
+            columnNames: customer_ref, purpose, channel
+            constraintName: uk_com_purpose_preference
+        - createTable:
+            tableName: com_preference_history
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_com_preference_history}}
+              - column: {name: customer_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: purpose, type: varchar(40)}
+              - column: {name: status_before, type: varchar(20)}
+              - column: {name: status_after, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: contact_masked, type: varchar(150)}
+              - column: {name: verified, type: varchar(1)}
+              - column: {name: consent_source, type: varchar(40)}
+              - column: {name: evidence, type: varchar(300)}
+              - column: {name: actor, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: occurred_at, type: timestamp(6), constraints: {nullable: false}}
+        - createIndex:
+            tableName: com_preference_history
+            indexName: ix_com_preference_history_customer
+            columns:
+              - column: {name: customer_ref}
+        - sql:
+            comment: Demo defaults for each purpose (D12). Fallback goes only to Email or SMS, which accept free text.
+            sql: |
+              INSERT INTO com_purpose_rule (purpose, label, contractual, fallback_channels, customer_may_opt_out, marketing, updated_by, updated_at) VALUES
+              ('POLICY_ISSUANCE', 'Policy issuance', 'Y', 'EMAIL,SMS', 'N', 'N', 'system', CURRENT_TIMESTAMP),
+              ('PAYMENT_CONFIRMATION', 'Payment confirmation', 'N', '', 'N', 'N', 'system', CURRENT_TIMESTAMP),
+              ('PREMIUM_REMINDER', 'Premium reminder', 'N', 'SMS', 'Y', 'N', 'system', CURRENT_TIMESTAMP),
+              ('CLAIM_PROGRESS', 'Claim progress', 'Y', 'EMAIL,SMS', 'N', 'N', 'system', CURRENT_TIMESTAMP),
+              ('SERVICE_UPDATE', 'Service update', 'N', 'EMAIL', 'N', 'N', 'system', CURRENT_TIMESTAMP),
+              ('OPERATIONAL_NOTICE', 'Operational notice', 'N', '', 'N', 'N', 'system', CURRENT_TIMESTAMP),
+              ('EVIDENCE_REQUEST', 'Missing evidence', 'Y', 'EMAIL,SMS', 'N', 'N', 'system', CURRENT_TIMESTAMP),
+              ('COMMISSION_STATEMENT', 'Commission statement', 'N', '', 'N', 'N', 'system', CURRENT_TIMESTAMP),
+              ('LENDER_NOTICE', 'Lender cover notice', 'N', '', 'N', 'N', 'system', CURRENT_TIMESTAMP),
+              ('MARKETING', 'Marketing and offers', 'N', '', 'Y', 'Y', 'system', CURRENT_TIMESTAMP);
+        - sql:
+            comment: The event-to-recipient matrix as the code behaved before (customer and servicing agent), plus the new events.
+            sql: |
+              INSERT INTO com_recipient_rule (event_type, recipient_role, purpose, enabled, note, updated_by, updated_at) VALUES
+              ('PolicyIssued', 'CUSTOMER', 'POLICY_ISSUANCE', 'Y', 'Policyholder', 'system', CURRENT_TIMESTAMP),
+              ('PolicyIssued', 'INTERMEDIARY', 'POLICY_ISSUANCE', 'Y', 'Active agent servicing the policy; references only', 'system', CURRENT_TIMESTAMP),
+              ('PremiumReceived', 'CUSTOMER', 'PAYMENT_CONFIRMATION', 'Y', 'Policyholder', 'system', CURRENT_TIMESTAMP),
+              ('PremiumReceived', 'INTERMEDIARY', 'PAYMENT_CONFIRMATION', 'Y', 'Active agent servicing the policy; references only', 'system', CURRENT_TIMESTAMP),
+              ('PremiumDueReminder', 'CUSTOMER', 'PREMIUM_REMINDER', 'Y', 'Policyholder', 'system', CURRENT_TIMESTAMP),
+              ('PremiumDueReminder', 'INTERMEDIARY', 'PREMIUM_REMINDER', 'Y', 'Arrears task for the servicing agent; references only', 'system', CURRENT_TIMESTAMP),
+              ('ClaimReceived', 'CUSTOMER', 'CLAIM_PROGRESS', 'Y', 'Policyholder', 'system', CURRENT_TIMESTAMP),
+              ('ClaimReceived', 'INTERMEDIARY', 'CLAIM_PROGRESS', 'Y', 'Claim reference only; no claim detail', 'system', CURRENT_TIMESTAMP),
+              ('ClaimApproved', 'CUSTOMER', 'CLAIM_PROGRESS', 'Y', 'Policyholder', 'system', CURRENT_TIMESTAMP),
+              ('ClaimApproved', 'INTERMEDIARY', 'CLAIM_PROGRESS', 'Y', 'Claim reference only; no claim detail', 'system', CURRENT_TIMESTAMP),
+              ('ClaimRejected', 'CUSTOMER', 'CLAIM_PROGRESS', 'Y', 'Policyholder', 'system', CURRENT_TIMESTAMP),
+              ('ClaimRejected', 'INTERMEDIARY', 'CLAIM_PROGRESS', 'Y', 'Claim reference only; never the reason', 'system', CURRENT_TIMESTAMP),
+              ('ClaimPaid', 'CUSTOMER', 'CLAIM_PROGRESS', 'Y', 'Policyholder', 'system', CURRENT_TIMESTAMP),
+              ('ClaimPaid', 'INTERMEDIARY', 'CLAIM_PROGRESS', 'Y', 'Claim reference only; no amount', 'system', CURRENT_TIMESTAMP),
+              ('ServiceCaseOpened', 'CUSTOMER', 'SERVICE_UPDATE', 'Y', 'Customer who raised the case', 'system', CURRENT_TIMESTAMP),
+              ('ServiceCaseOpened', 'INTERMEDIARY', 'SERVICE_UPDATE', 'N', 'Service cases stay between the customer and the insurer', 'system', CURRENT_TIMESTAMP),
+              ('OperationalNotice', 'CUSTOMER', 'OPERATIONAL_NOTICE', 'Y', 'Customers chosen by an approved bulk notice', 'system', CURRENT_TIMESTAMP),
+              ('EvidenceRequested', 'CUSTOMER', 'EVIDENCE_REQUEST', 'Y', 'Applicant; the requirement itself is shown only in the secure portal', 'system', CURRENT_TIMESTAMP),
+              ('EvidenceRequested', 'INTERMEDIARY', 'EVIDENCE_REQUEST', 'N', 'Underwriting evidence may be medical: not copied to agents', 'system', CURRENT_TIMESTAMP),
+              ('CommissionPaid', 'INTERMEDIARY', 'COMMISSION_STATEMENT', 'Y', 'The intermediary the statement is for', 'system', CURRENT_TIMESTAMP),
+              ('LoanDisbursed', 'LENDER', 'LENDER_NOTICE', 'Y', 'The lender whose loan was covered; references only', 'system', CURRENT_TIMESTAMP);
+        - sql:
+            comment: Starter templates for the newly wired events (approved, like the other starter templates).
+            sql: |
+              INSERT INTO com_template (code, event_type, channel, audience, version, subject, body, status, created_by, created_at, approved_by, approved_at, provider_status)
+              VALUES ('EVIDENCE_REQUESTED_EMAIL', 'EvidenceRequested', 'EMAIL', 'CUSTOMER', 1,
+                      'We need a little more information for {{applicationRef}}',
+                      'Dear {{customerName}}, to finish assessing application {{applicationRef}} we need further evidence by {{dueDate}}. See what is needed and upload it securely in your portal: {{portalLink}}',
+                      'APPROVED', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP, 'NOT_REQUIRED');
+              INSERT INTO com_template (code, event_type, channel, audience, version, subject, body, status, created_by, created_at, approved_by, approved_at, provider_status)
+              VALUES ('COMMISSION_STATEMENT_EMAIL', 'CommissionPaid', 'EMAIL', 'INTERMEDIARY', 1,
+                      'Commission statement {{statementRef}} paid',
+                      'Dear {{intermediaryName}}, commission statement {{statementRef}} ({{amount}}) has been paid. The statement lines are in your partner portal: {{portalLink}}',
+                      'APPROVED', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP, 'NOT_REQUIRED');
+              INSERT INTO com_template (code, event_type, channel, audience, version, subject, body, status, created_by, created_at, approved_by, approved_at, provider_status)
+              VALUES ('LOAN_COVERED_LENDER_EMAIL', 'LoanDisbursed', 'EMAIL', 'LENDER', 1,
+                      'Loan {{lenderLoanId}} recorded as disbursed',
+                      'Dear {{lenderName}}, loan {{lenderLoanId}} (our reference {{loanRef}}) was recorded as disbursed on {{disbursementDate}}. Its cover certificate is in your partner portal: {{portalLink}}',
+                      'APPROVED', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP, 'NOT_REQUIRED');

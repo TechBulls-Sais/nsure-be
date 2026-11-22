@@ -36,8 +36,11 @@ public class CommunicationService {
     /** eventType on a message a staff member wrote by hand. */
     static final String SERVICE_MESSAGE = "ServiceMessage";
 
-    private static final Set<String> CHANNELS = Set.of(EMAIL, WHATSAPP);
-    private static final Set<String> AUDIENCES = Set.of(CUSTOMER, INTERMEDIARY);
+    static final String SMS = DeliveryRules.SMS;
+    static final String LENDER = DeliveryRules.LENDER;
+    private static final Set<String> CHANNELS = Set.of(EMAIL, WHATSAPP, SMS);
+    private static final Set<String> AUDIENCES = Set.of(CUSTOMER, INTERMEDIARY, LENDER);
+    private static final String CHANNEL_CHOICE = "Channel must be EMAIL, WHATSAPP or SMS.";
     private static final Set<String> MESSAGE_STATES = Set.of(CommunicationMessage.QUEUED,
             CommunicationMessage.SUBMITTED, CommunicationMessage.ACCEPTED, CommunicationMessage.DELIVERED,
             CommunicationMessage.FAILED, CommunicationMessage.SUPPRESSED, CommunicationMessage.READ);
@@ -48,16 +51,18 @@ public class CommunicationService {
     private final CommunicationDispatcher dispatcher;
     private final EvidenceChain audit;
     private final MessageTrail trail;
+    private final DeliveryRules rules;
     private final String portalLink;
 
     public CommunicationService(EntityManager em, PlatformSecurityContext security,
-            CommunicationDispatcher dispatcher, EvidenceChain audit, MessageTrail trail,
+            CommunicationDispatcher dispatcher, EvidenceChain audit, MessageTrail trail, DeliveryRules rules,
             @Value("${nsure.communications.portal-link:http://127.0.0.1:5180}") String portalLink) {
         this.em = em;
         this.security = security;
         this.dispatcher = dispatcher;
         this.audit = audit;
         this.trail = trail;
+        this.rules = rules;
         this.portalLink = portalLink;
     }
 
@@ -99,11 +104,11 @@ public class CommunicationService {
                     + String.join(", ", MergeFields.eventTypes()) + ".");
         }
         if (channel == null || !CHANNELS.contains(channel)) {
-            throw new IllegalArgumentException("Channel must be EMAIL or WHATSAPP.");
+            throw new IllegalArgumentException(CHANNEL_CHOICE);
         }
         audience = audience == null ? CUSTOMER : audience;
         if (!AUDIENCES.contains(audience)) {
-            throw new IllegalArgumentException("Audience must be CUSTOMER or INTERMEDIARY.");
+            throw new IllegalArgumentException("Audience must be CUSTOMER, INTERMEDIARY or LENDER.");
         }
         String purpose = upper(text(body, "purpose"));
         if (purpose != null && MessagePurposes.PROMOTIONAL.contains(purpose)) {
@@ -169,7 +174,8 @@ public class CommunicationService {
                 template.getSubject(), template.getBody());
         if (!unknown.isEmpty()) {
             throw new IllegalArgumentException("Unknown merge field " + braces(unknown) + " for "
-                    + template.getEventType() + (INTERMEDIARY.equals(template.getAudience()) ? " to an intermediary" : "")
+                    + template.getEventType() + (INTERMEDIARY.equals(template.getAudience()) ? " to an intermediary"
+                            : LENDER.equals(template.getAudience()) ? " to a lender" : "")
                     + ". Use only: " + braces(MergeFields.known(template.getEventType(), template.getAudience())) + ".");
         }
         em.createQuery("select t from MessageTemplate t where t.code = :code and t.status = :approved",
@@ -330,14 +336,14 @@ public class CommunicationService {
         String channel = upper(text(body, "channel"));
         channel = channel == null ? EMAIL : channel;
         if (!CHANNELS.contains(channel)) {
-            throw new IllegalArgumentException("Channel must be EMAIL or WHATSAPP.");
+            throw new IllegalArgumentException(CHANNEL_CHOICE);
         }
         String subject = text(body, "subject");
         String content = text(body, "body");
         validateContent(channel, subject, content);
         // Consent first (AT-SH09B-02): an opted-out or not-opted-in channel is recorded as SUPPRESSED with the reason,
         // whatever else would have stopped the send, so the opt-out is visible in the log (D-23).
-        Route route = route(customer, channel);
+        DeliveryRules.Route route = rules.route(customer, channel, MessagePurposes.of(SERVICE_MESSAGE));
         if (route.reason() == null && WHATSAPP.equals(channel)) {
             // Blueprint §5 / WhatsApp Business policy: a free-form message only within 24 hours of the customer's last
             // WhatsApp message; outside that window only approved templates are sent.
@@ -412,7 +418,7 @@ public class CommunicationService {
         CustomerAccount customer = customerByRef(customerRef);
         String channel = upper(text(body, "channel"));
         if (channel == null || !CHANNELS.contains(channel)) {
-            throw new IllegalArgumentException("Channel must be EMAIL or WHATSAPP.");
+            throw new IllegalArgumentException(CHANNEL_CHOICE);
         }
         String status = upper(text(body, "status"));
         if (!ChannelPreference.OPTED_IN.equals(status) && !ChannelPreference.OPTED_OUT.equals(status)) {
@@ -432,8 +438,11 @@ public class CommunicationService {
         if (contact != null && EMAIL.equals(channel) && !contact.matches("[^@\\s]+@[^@\\s]+\\.[^@\\s]+")) {
             throw new IllegalArgumentException("Enter a valid email address.");
         }
-        if (contact != null && WHATSAPP.equals(channel) && digits(contact).length() < 7) {
-            throw new IllegalArgumentException("Enter a valid WhatsApp mobile number.");
+        if (contact == null && SMS.equals(channel)) {
+            contact = blankToNull(customer.getPhone());
+        }
+        if (contact != null && !EMAIL.equals(channel) && digits(contact).length() < 7) {
+            throw new IllegalArgumentException("Enter a valid " + label(channel) + " mobile number.");
         }
         if (ChannelPreference.OPTED_IN.equals(status) && contact == null) {
             throw new IllegalArgumentException("Give the " + label(channel) + " contact to opt the customer in.");
@@ -449,9 +458,102 @@ public class CommunicationService {
         } else {
             preference.set(status, contact, verified, user.getUsername());
         }
+        // NS-SH01-005 / NS-SH01-006: every choice is kept with how it was given, as verification and consent history.
+        String source = upper(text(body, "consentSource"));
+        String evidence = text(body, "evidence");
+        if (evidence != null && evidence.length() > 300) {
+            throw new IllegalArgumentException("Keep the evidence to 300 characters.");
+        }
+        rules.history(customer.getRef(), channel, null, preference == null ? null : before, status, contact, verified,
+                source == null ? "STAFF" : source, evidence, user.getUsername());
         audit.record(user.getUsername(), "Channel preference changed", "Customer", customer.getRef(),
                 label(channel) + ": " + before + " -> " + status + (verified ? " (verified contact)" : ""));
         return preferencesOf(customer);
+    }
+
+    /**
+     * {purpose, channel (EMAIL | WHATSAPP | SMS | ALL), status, consentSource, evidence}: a customer's choice for one
+     * purpose (AT-SH09B-02, NS-SH01-006). Marketing is opt-in with consent evidence; a contractual notice cannot be
+     * stopped, only routed.
+     */
+    @Transactional
+    public CommunicationViews.CustomerPreferencesView choosePurpose(String customerRef, JsonNode body) {
+        AppUser user = user("MANAGE_COMMUNICATION");
+        CustomerAccount customer = customerByRef(customerRef);
+        rules.choose(customer, upper(text(body, "purpose")), upper(text(body, "channel")), upper(text(body, "status")),
+                upper(text(body, "consentSource")), text(body, "evidence"), user.getUsername());
+        return preferencesOf(customer);
+    }
+
+    /** Every channel and purpose choice of the customer, newest first (verification and consent history). */
+    @Transactional(readOnly = true)
+    public List<java.util.Map<String, Object>> preferenceHistory(String customerRef) {
+        user("READ_COMMUNICATION");
+        return rules.historyOf(customerByRef(customerRef).getRef());
+    }
+
+    // ── delivery rules (NS-SH09B-001, AT-SH09B-02) ───────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public java.util.Map<String, Object> deliveryRules() {
+        user("READ_COMMUNICATION");
+        java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("purposes", rules.purposes());
+        out.put("recipients", rules.recipients());
+        out.put("events", MergeFields.eventTypes());
+        out.put("roles", DeliveryRules.ROLES);
+        out.put("fallbackChannels", List.of(EMAIL, SMS));
+        return out;
+    }
+
+    /** {fallbackChannels: [..], customerMayOptOut, reason}. */
+    @Transactional
+    public DeliveryRules.PurposeRule savePurposeRule(String purpose, JsonNode body) {
+        AppUser user = user("MANAGE_COMMUNICATION");
+        List<String> fallback = null;
+        if (body != null && body.has("fallbackChannels")) {
+            fallback = new ArrayList<>();
+            for (JsonNode c : body.get("fallbackChannels")) {
+                String channel = upper(c.asText().trim());
+                if (!channel.isEmpty() && !fallback.contains(channel)) {
+                    fallback.add(channel);
+                }
+            }
+        }
+        Boolean optOut = body != null && body.hasNonNull("customerMayOptOut") ? body.get("customerMayOptOut").asBoolean()
+                : null;
+        return rules.savePurpose(upper(purpose), fallback, optOut, text(body, "reason"), user.getUsername());
+    }
+
+    /** {eventType, recipientRole, enabled, reason}: one cell of the event-to-recipient matrix. */
+    @Transactional
+    public DeliveryRules.RecipientRule saveRecipientRule(JsonNode body) {
+        AppUser user = user("MANAGE_COMMUNICATION");
+        return rules.saveRecipient(text(body, "eventType"), upper(text(body, "recipientRole")),
+                body != null && body.path("enabled").asBoolean(false), text(body, "reason"), user.getUsername());
+    }
+
+    /** BP-COMMS: sends a WhatsApp template version to the WhatsApp provider for its approval. */
+    @Transactional
+    public CommunicationViews.TemplateView submitToProvider(Long id) {
+        AppUser user = user("MANAGE_COMMUNICATION");
+        MessageTemplate template = template(id);
+        if (!WHATSAPP.equals(template.getChannel())) {
+            throw new IllegalArgumentException("Only WhatsApp templates need the provider's approval.");
+        }
+        if (!MessageTemplate.DRAFT.equals(template.getStatus()) && !MessageTemplate.APPROVED.equals(template.getStatus())) {
+            throw new IllegalArgumentException(template.getCode() + " v" + template.getVersion() + " is "
+                    + template.getStatus() + " and is no longer used.");
+        }
+        if (Set.of(MessageTemplate.PROVIDER_SUBMITTED, MessageTemplate.PROVIDER_APPROVED)
+                .contains(template.getProviderStatus())) {
+            throw new IllegalArgumentException(template.getCode() + " v" + template.getVersion() + " is already "
+                    + template.getProviderStatus().toLowerCase(Locale.ROOT) + " at the provider.");
+        }
+        template.submitToProvider(user.getUsername());
+        audit.record(user.getUsername(), "Template sent for provider approval", "Message template",
+                template.getCode() + " v" + template.getVersion(), "WhatsApp provider");
+        return CommunicationViews.TemplateView.of(template);
     }
 
     // ── event notifications ──────────────────────────────────────────────────────────────────────────
@@ -474,15 +576,24 @@ public class CommunicationService {
         if (templates.isEmpty()) {
             return 0;
         }
-        String purpose = MessagePurposes.of(event.eventType());
         int created = 0;
         Recipient customer = null;
         Recipient agent = null;
+        Recipient lender = null;
+        List<CommunicationMessage> suppressedForCustomer = new ArrayList<>();
         for (MessageTemplate template : templates) {
+            // NS-SH09B-001: the event-to-recipient matrix decides which roles this event messages.
+            if (!rules.sends(event.eventType(), template.getAudience())) {
+                continue;
+            }
+            String purpose = rules.purposeOf(event.eventType(), template.getAudience());
             Recipient to;
             if (INTERMEDIARY.equals(template.getAudience())) {
                 agent = agent != null ? agent : intermediaryFor(event);
                 to = agent;
+            } else if (LENDER.equals(template.getAudience())) {
+                lender = lender != null ? lender : lenderFor(event);
+                to = lender;
             } else {
                 customer = customer != null ? customer : customerFor(event);
                 to = customer;
@@ -510,13 +621,18 @@ public class CommunicationService {
             message.recipient(template.getAudience(), to.basis(), purpose);
             if (to.unavailable() != null) {
                 message.suppress(to.contact(template.getChannel()), to.unavailable());
+            } else if (!template.providerAllows()) {
+                // BP-COMMS: a WhatsApp template is used only once the WhatsApp provider has approved it.
+                message.suppress(to.customer() == null ? to.contact(template.getChannel()) : null, "WhatsApp template "
+                        + template.getCode() + " v" + template.getVersion() + " is not approved by the WhatsApp provider ("
+                        + template.getProviderStatus().toLowerCase(Locale.ROOT).replace('_', ' ') + ").");
             } else if (to.customer() != null) {
-                route(message, to.customer(), template.getChannel());
+                route(message, to.customer(), template.getChannel(), purpose);
             } else {
                 String contact = to.contact(template.getChannel());
                 if (contact == null) {
                     message.suppress(null, "No " + (EMAIL.equals(template.getChannel()) ? "email address" : "mobile number")
-                            + " on file for intermediary " + to.key() + ".");
+                            + " on file for " + (to.lender() ? "lender " : "intermediary ") + to.key() + ".");
                 } else {
                     message.queue(contact);
                 }
@@ -524,10 +640,18 @@ public class CommunicationService {
             save(message);
             trail.requested(message, "system", event.correlationId());
             if (CommunicationMessage.SUPPRESSED.equals(message.getStatus())) {
-                log.info("Message {} for event {} suppressed: {}", message.getRef(), event.eventId(),
-                        message.getLastError());
+                log.info("Message {} for event {} suppressed", message.getRef(), event.eventId());
+                if (to.customer() != null) {
+                    suppressedForCustomer.add(message);
+                }
             }
             created++;
+        }
+        // AT-SH09B-02: once every template of the event is handled, a customer not reached may get a fallback.
+        for (CommunicationMessage message : suppressedForCustomer) {
+            if (rules.fallback(message) != null) {
+                created++;
+            }
         }
         return created;
     }
@@ -537,13 +661,26 @@ public class CommunicationService {
      * customer record to route by preference, or an intermediary's contacts; {@code unavailable} suppresses with a reason.
      */
     private record Recipient(String key, String name, CustomerAccount customer, String email, String mobile,
-            String basis, String unavailable, String intermediaryName) {
+            String basis, String unavailable, String intermediaryName, boolean lender) {
+
+        Recipient(String key, String name, CustomerAccount customer, String email, String mobile, String basis,
+                String unavailable, String intermediaryName) {
+            this(key, name, customer, email, mobile, basis, unavailable, intermediaryName, false);
+        }
 
         String contact(String channel) {
             return EMAIL.equals(channel) ? blankToNull(email) : blankToNull(mobile);
         }
 
         String value(String field, DomainEvent event, String portalLink) {
+            if (lender) {
+                // A lender gets references only (MergeFields), never the borrower's health or claim detail.
+                return switch (field) {
+                    case MergeFields.LENDER_NAME -> name;
+                    case MergeFields.PORTAL_LINK -> portalLink;
+                    default -> MergeFields.known(event.eventType(), LENDER).contains(field) ? event.text(field) : "";
+                };
+            }
             if (intermediaryName != null) {
                 // An intermediary never gets a field outside MergeFields' safe list, even if one slipped into a template.
                 return switch (field) {
@@ -556,6 +693,8 @@ public class CommunicationService {
             return switch (field) {
                 case MergeFields.CUSTOMER_REF -> customer == null ? "" : customer.getRef();
                 case MergeFields.PORTAL_LINK -> portalLink;
+                case "customerName" -> event.text(field) != null || customer == null ? event.text(field)
+                        : customer.getName();
                 default -> event.text(field);
             };
         }
@@ -595,16 +734,26 @@ public class CommunicationService {
      */
     private Recipient intermediaryFor(DomainEvent event) {
         String policyRef = event.text("policyRef");
+        String named = event.text("intermediaryRef");
         Recipient nobody = new Recipient(null, null, null, null, null, null, null, null);
-        if (policyRef == null) {
+        if (policyRef == null && named == null) {
             return nobody;
         }
-        String basis = "Intermediary servicing policy " + policyRef + " (open assignment)";
-        List<?> rows = em.createNativeQuery("select i.record_ref, i.name, i.status, i.appointment_expiry, i.email, i.mobile"
-                        + " from dist_intermediary i join dist_policy_assignment a on a.intermediary_id = i.id"
-                        + " where a.policy_ref = ?1 and a.ended_on is null")
-                .setParameter(1, policyRef).getResultList();
-        if (rows.isEmpty()) {
+        String basis;
+        List<?> rows;
+        if (named != null) {
+            // The event names its intermediary (e.g. a commission statement): that one, nobody else.
+            basis = "Intermediary named on " + event.eventType() + " " + event.aggregateRef();
+            rows = em.createNativeQuery("select i.record_ref, i.name, i.status, i.appointment_expiry, i.email, i.mobile"
+                    + " from dist_intermediary i where i.record_ref = ?1").setParameter(1, named).getResultList();
+        } else {
+            basis = "Intermediary servicing policy " + policyRef + " (open assignment)";
+            rows = em.createNativeQuery("select i.record_ref, i.name, i.status, i.appointment_expiry, i.email, i.mobile"
+                            + " from dist_intermediary i join dist_policy_assignment a on a.intermediary_id = i.id"
+                            + " where a.policy_ref = ?1 and a.ended_on is null")
+                    .setParameter(1, policyRef).getResultList();
+        }
+        if (rows.isEmpty() && named == null) {
             basis = "Intermediary who sold the application for policy " + policyRef;
             rows = em.createNativeQuery("select i.record_ref, i.name, i.status, i.appointment_expiry, i.email, i.mobile"
                             + " from dist_intermediary i join ins_application ap on ap.intermediary_code = i.record_ref"
@@ -625,6 +774,26 @@ public class CommunicationService {
                 : expiry != null && expiry.isBefore(java.time.LocalDate.now())
                         ? "Intermediary " + ref + "'s appointment expired on " + expiry + "." : null;
         return new Recipient(ref, name, null, (String) row[4], (String) row[5], basis + ": " + ref, unavailable, name);
+    }
+
+    /** The lender the event names (NS-SH09B-001): only an active lender with a contact address is messaged. */
+    private Recipient lenderFor(DomainEvent event) {
+        String lenderRef = event.text("lenderRef");
+        if (lenderRef == null) {
+            return new Recipient(null, null, null, null, null, null, null, null);
+        }
+        List<?> rows = em.createNativeQuery("select l.name, l.contact_email, l.active from crd_lender l"
+                + " where l.record_ref = ?1").setParameter(1, lenderRef).getResultList();
+        if (rows.isEmpty()) {
+            return new Recipient(null, null, null, null, null, null, null, null);
+        }
+        Object[] row = (Object[]) rows.get(0);
+        String name = (String) row[0];
+        boolean active = row[2] instanceof Boolean b ? b : row[2] != null && !"0".equals(String.valueOf(row[2]))
+                && !"false".equalsIgnoreCase(String.valueOf(row[2]));
+        return new Recipient(lenderRef, name, null, (String) row[1], null, "Lender named on " + event.eventType() + " "
+                + event.aggregateRef() + ": " + lenderRef, active ? null : "Lender " + lenderRef + " is not active.",
+                null, true);
     }
 
     // ── provider status callbacks (Blueprint §5) ─────────────────────────────────────────────────────
@@ -652,6 +821,9 @@ public class CommunicationService {
         if (message.providerStatus(reported, detail)) {
             trail.changed(message, "Provider reported " + reported.toLowerCase(Locale.ROOT)
                     + (detail == null ? "" : ": " + detail), MessageEvent.PROVIDER, rawPayload, "provider");
+            if (CommunicationMessage.FAILED.equals(message.getStatus())) {
+                rules.fallback(message);
+            }
         }
         return message.getStatus();
     }
@@ -840,7 +1012,7 @@ public class CommunicationService {
             message.recipient(CUSTOMER, "Holds " + (notice.getProduct() == null ? "a" : "a " + notice.getProduct())
                     + " policy that is " + notice.getPolicyStatus() + ": bulk notice " + notice.getRef() + " requested by "
                     + notice.getRequestedBy() + ", approved by " + user.getUsername(), MessagePurposes.OPERATIONAL_NOTICE);
-            route(message, customer, template.getChannel());
+            route(message, customer, template.getChannel(), MessagePurposes.OPERATIONAL_NOTICE);
             save(message);
             trail.requested(message, user.getUsername(), null);
             if (CommunicationMessage.SUPPRESSED.equals(message.getStatus())) {
@@ -913,8 +1085,8 @@ public class CommunicationService {
     }
 
     /** Queues the message at the customer's contact for the channel, or suppresses it with the reason. */
-    private void route(CommunicationMessage message, CustomerAccount customer, String channel) {
-        Route route = route(customer, channel);
+    private void route(CommunicationMessage message, CustomerAccount customer, String channel, String purpose) {
+        DeliveryRules.Route route = rules.route(customer, channel, purpose);
         if (route.reason() == null) {
             message.queue(route.contact());
         } else {
@@ -922,50 +1094,35 @@ public class CommunicationService {
         }
     }
 
-    private record Route(String contact, String reason) {
-    }
-
-    private Route route(CustomerAccount customer, String channel) {
-        ChannelPreference preference = preference(customer.getRef(), channel);
-        String chosen = preference == null ? null : blankToNull(preference.getContact());
-        if (EMAIL.equals(channel)) {
-            String contact = chosen != null ? chosen : blankToNull(customer.getEmail());
-            if (preference != null && ChannelPreference.OPTED_OUT.equals(preference.getStatus())) {
-                return new Route(contact, "Customer opted out of Email messages.");
-            }
-            if (contact == null) {
-                return new Route(null, "No email address on file.");
-            }
-            return new Route(contact, null);
-        }
-        if (preference == null) {
-            return new Route(null, "Customer has not opted in to WhatsApp messages.");
-        }
-        if (ChannelPreference.OPTED_OUT.equals(preference.getStatus())) {
-            return new Route(chosen, "Customer opted out of WhatsApp messages.");
-        }
-        if (chosen == null) {
-            return new Route(null, "No WhatsApp number on file.");
-        }
-        return new Route(chosen, null);
-    }
-
     private CommunicationViews.CustomerPreferencesView preferencesOf(CustomerAccount customer) {
         List<CommunicationViews.PreferenceView> channels = new ArrayList<>();
-        for (String channel : List.of(EMAIL, WHATSAPP)) {
+        for (String channel : List.of(EMAIL, WHATSAPP, SMS)) {
             ChannelPreference preference = preference(customer.getRef(), channel);
-            Route route = route(customer, channel);
+            DeliveryRules.Route route = rules.route(customer, channel);
             String status = preference != null ? preference.getStatus()
-                    : EMAIL.equals(channel) ? ChannelPreference.OPTED_IN : "NOT_SET";
+                    : WHATSAPP.equals(channel) ? "NOT_SET" : ChannelPreference.OPTED_IN;
             boolean verified = preference != null ? "Y".equals(preference.getVerified())
-                    : EMAIL.equals(channel) && blankToNull(customer.getEmail()) != null;
+                    : EMAIL.equals(channel) ? blankToNull(customer.getEmail()) != null
+                    : SMS.equals(channel) && blankToNull(customer.getPhone()) != null;
             channels.add(new CommunicationViews.PreferenceView(channel, status, preference != null,
                     CommunicationViews.mask(route.contact()), verified ? "Y" : "N", route.reason() == null,
                     route.reason() == null ? "" : route.reason(),
                     preference == null ? "" : preference.getUpdatedBy(),
                     preference == null ? "" : CommunicationViews.time(preference.getUpdatedAt())));
         }
-        return new CommunicationViews.CustomerPreferencesView(customer.getRef(), customer.getName(), channels);
+        List<CommunicationViews.PurposePreferenceView> purposes = new ArrayList<>();
+        List<DeliveryRules.PurposeChoice> choices = rules.choices(customer.getRef());
+        for (DeliveryRules.PurposeRule rule : rules.purposes()) {
+            List<DeliveryRules.PurposeChoice> mine = choices.stream().filter(c -> c.purpose().equals(rule.purpose()))
+                    .toList();
+            String summary = rule.marketing()
+                    ? mine.stream().anyMatch(c -> ChannelPreference.OPTED_IN.equals(c.status())) ? "OPTED_IN" : "NOT_SET"
+                    : mine.stream().anyMatch(c -> ChannelPreference.OPTED_OUT.equals(c.status())) ? "OPTED_OUT"
+                    : "DEFAULT";
+            purposes.add(new CommunicationViews.PurposePreferenceView(rule.purpose(), rule.label(), rule.contractual(),
+                    rule.customerMayOptOut(), rule.marketing(), rule.fallbackChannels(), summary, mine));
+        }
+        return new CommunicationViews.CustomerPreferencesView(customer.getRef(), customer.getName(), channels, purposes);
     }
 
     private ChannelPreference preference(String customerRef, String channel) {
@@ -1002,6 +1159,9 @@ public class CommunicationService {
         if (EMAIL.equals(channel) && subject == null) {
             throw new IllegalArgumentException("An email needs a subject.");
         }
+        if (SMS.equals(channel) && content.length() > 480) {
+            throw new IllegalArgumentException("Keep an SMS to 480 characters (three parts).");
+        }
         if (subject != null && subject.length() > 200) {
             throw new IllegalArgumentException("Keep the subject to 200 characters.");
         }
@@ -1026,7 +1186,7 @@ public class CommunicationService {
     }
 
     private static String label(String channel) {
-        return EMAIL.equals(channel) ? "Email" : "WhatsApp";
+        return DeliveryRules.label(channel);
     }
 
     static String digits(String value) {

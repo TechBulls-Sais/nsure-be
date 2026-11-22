@@ -402,6 +402,11 @@ public final class ApiAccessRules {
             rule(POST, "/communications/templates/preview", anyOf("MANAGE_COMMUNICATION", "APPROVE_TEMPLATE")),
             rule(POST, "/communications/dispatch", anyOf("MANAGE_COMMUNICATION")),
             rule(PUT, "/communications/preferences/*", anyOf("MANAGE_COMMUNICATION")),
+            // SH09B delivery rules (work package e): purpose choices with consent evidence, the recipient matrix, the
+            // purpose fallback rules and the WhatsApp provider's template approval.
+            rule(PUT, "/communications/preferences/*/purposes", anyOf("MANAGE_COMMUNICATION")),
+            rule(PUT, "/communications/rules/**", anyOf("MANAGE_COMMUNICATION")),
+            rule(POST, "/communications/templates/*/provider-submission", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/inbound/*/assign", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/inbound/*/owner", anyOf("MANAGE_COMMUNICATION")),
             rule(POST, "/communications/bulk-notices", anyOf("MANAGE_COMMUNICATION")),

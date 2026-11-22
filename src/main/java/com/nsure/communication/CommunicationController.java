@@ -124,6 +124,37 @@ public class CommunicationController {
 
     // ── inbound correspondence and triage (Blueprint §5) ──
 
+    @PutMapping("/preferences/{customerRef}/purposes")
+    public CommunicationViews.CustomerPreferencesView choosePurpose(@PathVariable String customerRef,
+            @RequestBody JsonNode body) {
+        return communications.choosePurpose(customerRef, body);
+    }
+
+    @GetMapping("/preferences/{customerRef}/history")
+    public java.util.List<java.util.Map<String, Object>> preferenceHistory(@PathVariable String customerRef) {
+        return communications.preferenceHistory(customerRef);
+    }
+
+    @GetMapping("/rules")
+    public java.util.Map<String, Object> rules() {
+        return communications.deliveryRules();
+    }
+
+    @PutMapping("/rules/purposes/{purpose}")
+    public DeliveryRules.PurposeRule savePurposeRule(@PathVariable String purpose, @RequestBody JsonNode body) {
+        return communications.savePurposeRule(purpose, body);
+    }
+
+    @PutMapping("/rules/recipients")
+    public DeliveryRules.RecipientRule saveRecipientRule(@RequestBody JsonNode body) {
+        return communications.saveRecipientRule(body);
+    }
+
+    @PostMapping("/templates/{id}/provider-submission")
+    public CommunicationViews.TemplateView submitToProvider(@PathVariable Long id) {
+        return communications.submitToProvider(id);
+    }
+
     @GetMapping("/inbound")
     public List<CommunicationViews.InboundView> inbound(@RequestParam(required = false) String status) {
         return webhooks.list(status);
