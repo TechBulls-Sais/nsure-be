@@ -38,11 +38,14 @@ public class InterfaceCatalogue {
     private final StaffAlertService alerts;
     private final boolean simulator;
     private final PaymentCallbacks payments;
+    private final ScreeningService screening;
 
     public InterfaceCatalogue(JdbcTemplate jdbc, PlatformSecurityContext security, InterfaceRegistry registry,
             OutboxDispatcher dispatcher, OperatorActionLog actions, StaffAlertService alerts,
-            @Value("${nsure.integration.provider-simulator:true}") boolean simulator, PaymentCallbacks payments) {
+            @Value("${nsure.integration.provider-simulator:true}") boolean simulator, PaymentCallbacks payments,
+            ScreeningService screening) {
         this.payments = payments;
+        this.screening = screening;
         this.jdbc = jdbc;
         this.security = security;
         this.registry = registry;
@@ -205,6 +208,9 @@ public class InterfaceCatalogue {
                 // NS-SH12-004: the provider answers again, so unknown payment outcomes are asked about now.
                 outcome += "; " + payments.requeryUnknown() + " unknown payment outcome(s) resolved by status query";
             }
+            if ("KYC_AML".equals(code)) {
+                outcome += "; " + screening.retryPending() + " pending screening check(s) answered";
+            }
             actions.record("INTERFACE_RESTORED", code, null, reason, outcome, user.getUsername());
         } else {
             outcome = "Marked unavailable (simulated outage)";
@@ -339,6 +345,12 @@ public class InterfaceCatalogue {
                             + " sum(case when status = 'FAILED' then 1 else 0 end) from com_message");
                     lines.add(line("Customer messages", "Sent to provider", m[0], "Delivered or read", m[1], "COUNT",
                             "Failed " + num(m[2]) + "; the rest await a delivery report"));
+                }
+                case "KYC_AML" -> {
+                    Object[] k = row("select count(*), sum(case when status <> 'PENDING' then 1 else 0 end),"
+                            + " sum(case when referral_status = 'OPEN' then 1 else 0 end) from int_screening_check");
+                    lines.add(line("Screening checks", "Requested", k[0], "Matched to an outcome", k[1], "COUNT",
+                            "Open compliance referrals " + num(k[2])));
                 }
                 case "EMPLOYER_LENDER" -> {
                     Object[] c = row("select coalesce(sum(total_rows), 0), coalesce(sum(accepted_rows), 0),"

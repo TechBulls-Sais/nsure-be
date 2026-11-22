@@ -317,3 +317,6 @@ databaseChangeLog:
   - include:
       file: changes/213-governed-assistants.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/214-kyc-aml-screening.yaml
+      relativeToChangelogFile: true

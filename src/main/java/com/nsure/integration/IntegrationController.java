@@ -22,10 +22,13 @@ public class IntegrationController {
     private final ProviderStatusClient providerStatus;
     private final InterfaceCatalogue catalogue;
     private final PaymentCallbacks callbacks;
+    private final ScreeningService screening;
 
     public IntegrationController(IntegrationService integration, PaymentNotifications payments,
-            ProviderStatusClient providerStatus, InterfaceCatalogue catalogue, PaymentCallbacks callbacks) {
+            ProviderStatusClient providerStatus, InterfaceCatalogue catalogue, PaymentCallbacks callbacks,
+            ScreeningService screening) {
         this.callbacks = callbacks;
+        this.screening = screening;
         this.integration = integration;
         this.payments = payments;
         this.providerStatus = providerStatus;
@@ -89,6 +92,28 @@ public class IntegrationController {
     @GetMapping("/reconciliation")
     public List<Map<String, Object>> reconciliation() {
         return catalogue.reconciliation();
+    }
+
+    @GetMapping("/screening")
+    public List<Map<String, Object>> screeningChecks() {
+        return screening.checks();
+    }
+
+    /** {customerRef}: a KYC/AML screening request through the (simulated) screening provider. */
+    @PostMapping("/screening")
+    public Map<String, Object> requestScreening(@RequestBody JsonNode body) {
+        return screening.request(body);
+    }
+
+    @PostMapping("/screening/retry")
+    public Map<String, Object> retryScreening() {
+        return screening.retryNow();
+    }
+
+    /** {outcome CLEARED | CONFIRMED_MATCH, note}: Compliance decides a referral. */
+    @PostMapping("/screening/{ref}/disposition")
+    public Map<String, Object> disposeScreening(@PathVariable String ref, @RequestBody JsonNode body) {
+        return screening.dispose(ref, body);
     }
 
     @GetMapping("/operator-actions")

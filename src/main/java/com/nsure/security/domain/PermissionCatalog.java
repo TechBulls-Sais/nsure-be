@@ -131,6 +131,8 @@ public enum PermissionCatalog {
     RELEASE_DOCUMENT(null),
     READ_SERVICE_CASE(null),
     MANAGE_SERVICE_CASE(null),
+    // Compliance disposes of KYC/AML screening referrals (spec 11 Identity/KYC/AML).
+    DISPOSE_SCREENING(null),
     READ_INTEGRATION(null),
     MANAGE_INTEGRATION(null),
     READ_REPORT(null),

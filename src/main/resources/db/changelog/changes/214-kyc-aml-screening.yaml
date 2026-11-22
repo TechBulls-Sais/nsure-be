@@ -1,0 +1,40 @@
+databaseChangeLog:
+  # §11 Identity/KYC/AML ↔ PAS through the screening simulator: every requested check is matched to an outcome with
+  # an evidence reference and expiry; provider outages leave it pending (retried); hits become compliance referrals
+  # that Compliance disposes of.
+  - changeSet:
+      id: 214-kyc-aml-screening
+      author: nsure
+      changes:
+        - createTable:
+            tableName: int_screening_check
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_int_screening_check}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_int_screening_ref}}
+              - column: {name: request_id, type: varchar(36), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_int_screening_request}}
+              - column: {name: customer_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: provider, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: outcome_detail, type: varchar(500)}
+              - column: {name: evidence_ref, type: varchar(40)}
+              - column: {name: expires_on, type: date}
+              - column: {name: attempts, type: int, constraints: {nullable: false}}
+              - column: {name: last_attempt_at, type: datetime}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: completed_at, type: datetime}
+              - column: {name: referral_status, type: varchar(20)}
+              - column: {name: referral_owner, type: varchar(60)}
+              - column: {name: disposed_by, type: varchar(100)}
+              - column: {name: disposed_at, type: datetime}
+              - column: {name: disposition_note, type: varchar(500)}
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT 'compliance', 'DISPOSE_SCREENING', 'SCREENING', 'DISPOSE', FALSE, 'Decide a KYC/AML screening referral (clear or confirm the match)'
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = 'DISPOSE_SCREENING');
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code = 'DISPOSE_SCREENING'
+              WHERE r.name = 'Super Admin'
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);

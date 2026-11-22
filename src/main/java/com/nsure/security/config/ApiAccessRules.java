@@ -441,6 +441,11 @@ public final class ApiAccessRules {
             rule(POST, "/collections/reconciliation/*/resolve", anyOf("MANAGE_FINANCE")),
 
             // ── integration and operational control SH12 (Operations Manager) ──────────────────────────
+            // §11 KYC/AML screening: onboarding requests it, Compliance disposes of referrals.
+            rule(GET, "/integration/screening", anyOf("READ_CUSTOMER", "READ_INTEGRATION")),
+            rule(POST, "/integration/screening", anyOf("KYC_CUSTOMER")),
+            rule(POST, "/integration/screening/retry", anyOf("KYC_CUSTOMER")),
+            rule(POST, "/integration/screening/*/disposition", anyOf("DISPOSE_SCREENING")),
             rule(GET, "/integration/**", anyOf("READ_INTEGRATION")),
             rule(POST, "/integration/outbox/dispatch", anyOf("MANAGE_INTEGRATION")),
             rule(POST, "/integration/deliveries/*/replay", anyOf("MANAGE_INTEGRATION")),
