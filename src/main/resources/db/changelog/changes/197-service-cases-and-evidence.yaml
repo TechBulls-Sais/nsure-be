@@ -1,0 +1,155 @@
+databaseChangeLog:
+  # SH10 service requests and complaints, and SH09A evidence intake for KYC and service cases (work package e). The
+  # pause reasons, resolution codes, escalation levels and SLA basis seeded here are demo defaults (D10) the insurer
+  # replaces; they are data, not code.
+  - changeSet:
+      id: 197-service-case-fields
+      author: nsure
+      comment: >-
+        NS-SH10-004/005/001: the remedy the customer asked for, a coded resolution and (complaints) an outcome, the
+        escalation level reached, the workflow version and SLA hours the case was opened under (running cases keep
+        them), an approved pause reason with its evidence and expected resume date (and who approved it when the reason
+        needs approval), and the working minutes the clock was stopped.
+      changes:
+        - addColumn:
+            tableName: svc_case
+            columns:
+              - column: {name: requested_remedy, type: varchar(300)}
+              - column: {name: resolution_code, type: varchar(40)}
+              - column: {name: outcome, type: varchar(30)}
+              - column: {name: escalation_level, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: escalated_at, type: timestamp(6)}
+              - column: {name: external_reference, type: varchar(60)}
+              - column: {name: workflow_version, type: int}
+              - column: {name: sla_hours, type: int}
+              - column: {name: sla_basis, type: varchar(20)}
+              - column: {name: pause_code, type: varchar(40)}
+              - column: {name: pause_evidence, type: varchar(300)}
+              - column: {name: pause_expected_resume, type: date}
+              - column: {name: pause_requested_by, type: varchar(100)}
+              - column: {name: pause_approved_by, type: varchar(100)}
+              - column: {name: paused_working_minutes, type: int, defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: unowned_alerted_at, type: timestamp(6)}
+        - createTable:
+            tableName: svc_pause_reason
+            columns:
+              - column: {name: code, type: varchar(40), constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_svc_pause_reason}}
+              - column: {name: label, type: varchar(120), constraints: {nullable: false}}
+              - column: {name: requires_evidence, type: varchar(1), constraints: {nullable: false}}
+              - column: {name: requires_approval, type: varchar(1), constraints: {nullable: false}}
+              - column: {name: max_days, type: int, constraints: {nullable: false}}
+              - column: {name: active, type: varchar(1), constraints: {nullable: false}}
+        - createTable:
+            tableName: svc_resolution_code
+            columns:
+              - column: {name: code, type: varchar(40), constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_svc_resolution_code}}
+              - column: {name: label, type: varchar(120), constraints: {nullable: false}}
+              - column: {name: case_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: active, type: varchar(1), constraints: {nullable: false}}
+        - createTable:
+            tableName: svc_escalation_rule
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_svc_escalation_rule}}
+              - column: {name: case_type, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: level_no, type: int, constraints: {nullable: false}}
+              - column: {name: label, type: varchar(120), constraints: {nullable: false}}
+              - column: {name: after_percent, type: int, constraints: {nullable: false}}
+              - column: {name: notify_permission, type: varchar(60), constraints: {nullable: false}}
+        - sql:
+            comment: Demo defaults (D10).
+            sql: |
+              INSERT INTO svc_pause_reason (code, label, requires_evidence, requires_approval, max_days, active) VALUES
+              ('AWAITING_CUSTOMER', 'Waiting for information from the customer', 'Y', 'N', 14, 'Y'),
+              ('AWAITING_THIRD_PARTY', 'Waiting for a third party (doctor, bank, employer)', 'Y', 'N', 21, 'Y'),
+              ('CUSTOMER_REQUESTED_HOLD', 'The customer asked us to hold the case', 'Y', 'Y', 30, 'Y'),
+              ('LEGAL_REVIEW', 'Referred for legal review', 'Y', 'Y', 30, 'Y');
+              INSERT INTO svc_resolution_code (code, label, case_type, active) VALUES
+              ('DONE_AS_REQUESTED', 'Done as the customer asked', 'ALL', 'Y'),
+              ('INFORMATION_GIVEN', 'Information or explanation given', 'ALL', 'Y'),
+              ('NOT_POSSIBLE', 'Not possible under the policy terms', 'ALL', 'Y'),
+              ('WITHDRAWN', 'Withdrawn by the customer', 'ALL', 'Y'),
+              ('REDRESS_PAID', 'Redress or goodwill payment made', 'COMPLAINT', 'Y'),
+              ('PROCESS_CORRECTED', 'Error corrected and process fixed', 'COMPLAINT', 'Y'),
+              ('REFERRED_EXTERNALLY', 'Closed after external (ombudsman) referral', 'COMPLAINT', 'Y');
+              INSERT INTO svc_escalation_rule (case_type, level_no, label, after_percent, notify_permission) VALUES
+              ('COMPLAINT', 1, 'Team leader review', 50, 'ASSIGN_WORK'),
+              ('COMPLAINT', 2, 'Head of customer service (deadline passed)', 100, 'ASSIGN_WORK'),
+              ('SERVICE_REQUEST', 1, 'Supervisor (deadline passed)', 100, 'ASSIGN_WORK');
+  - changeSet:
+      id: 197-workflow-definition-versions
+      author: nsure
+      comment: >-
+        NS-SH10-001: a definition also states its entry criteria, the permission codes that work it, an authority limit
+        and the evidence it needs; every change keeps the previous version in wf_definition_version.
+      changes:
+        - addColumn:
+            tableName: wf_definition
+            columns:
+              - column: {name: entry_criteria, type: varchar(500)}
+              - column: {name: roles, type: varchar(300)}
+              - column: {name: authority_limit, type: "decimal(19,2)"}
+              - column: {name: required_evidence, type: varchar(500)}
+        - createTable:
+            tableName: wf_definition_version
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_wf_definition_version}}
+              - column: {name: code, type: varchar(30), constraints: {nullable: false}}
+              - column: {name: version_no, type: int, constraints: {nullable: false}}
+              - column: {name: name, type: varchar(120), constraints: {nullable: false}}
+              - column: {name: team, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: sla_hours, type: int, constraints: {nullable: false}}
+              - column: {name: priority, type: varchar(20)}
+              - column: {name: steps, type: varchar(1000), constraints: {nullable: false}}
+              - column: {name: entry_criteria, type: varchar(500)}
+              - column: {name: roles, type: varchar(300)}
+              - column: {name: authority_limit, type: "decimal(19,2)"}
+              - column: {name: required_evidence, type: varchar(500)}
+              - column: {name: changed_by, type: varchar(100)}
+              - column: {name: changed_at, type: timestamp(6)}
+        - addUniqueConstraint:
+            tableName: wf_definition_version
+            columnNames: code, version_no
+            constraintName: uk_wf_definition_version
+        - sql:
+            sql: |
+              UPDATE wf_definition SET entry_criteria = 'A customer request from the portal, a call, a walk-in or correspondence', roles = 'MANAGE_SERVICE_CASE', required_evidence = 'Whatever the request needs (e.g. ID for a change of details)' WHERE code = 'SERVICE_REQUEST';
+              UPDATE wf_definition SET entry_criteria = 'Any expression of dissatisfaction, however received', roles = 'MANAGE_SERVICE_CASE', required_evidence = 'The customer''s account of the problem and the remedy they want' WHERE code = 'COMPLAINT';
+              UPDATE wf_definition SET roles = 'APPROVE_CLAIM', required_evidence = 'Mandatory claim evidence for the product' WHERE code = 'CLAIM_DECISION';
+              INSERT INTO wf_definition_version (code, version_no, name, team, sla_hours, priority, steps, entry_criteria, roles, authority_limit, required_evidence, changed_by, changed_at)
+              SELECT code, version_no, name, team, sla_hours, priority, steps, entry_criteria, roles, authority_limit, required_evidence, coalesce(updated_by, 'system'), coalesce(updated_at, CURRENT_TIMESTAMP) FROM wf_definition;
+  - changeSet:
+      id: 197-evidence-intake
+      author: nsure
+      comment: >-
+        NS-SH09A-004: identity evidence (KYC) and service case evidence enter the upload quarantine like claim evidence.
+        A released case upload is filed here. RELEASE_DOCUMENT is also given to the Onboarding Specialist, who reviews
+        identity evidence; each kind still needs the read permission of its owning record (claim evidence READ_CLAIM,
+        identity evidence READ_CUSTOMER, case evidence READ_SERVICE_CASE), so onboarding cannot release claim evidence.
+      changes:
+        - createTable:
+            tableName: svc_case_document
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_svc_case_document}}
+              - column: {name: case_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: document_type, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: file_name, type: varchar(255), constraints: {nullable: false}}
+              - column: {name: content_type, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: size_bytes, type: bigint, constraints: {nullable: false}}
+              - column: {name: storage_path, type: varchar(255), constraints: {nullable: false}}
+              - column: {name: sha256, type: varchar(64), constraints: {nullable: false}}
+              - column: {name: uploaded_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: uploaded_at, type: timestamp(6), constraints: {nullable: false}}
+              - column: {name: channel, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: released_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: upload_id, type: bigint, constraints: {nullable: false}}
+        - createIndex:
+            tableName: svc_case_document
+            indexName: ix_svc_case_document_case
+            columns:
+              - column: {name: case_ref}
+        - sql:
+            sql: |
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code = 'RELEASE_DOCUMENT'
+              WHERE r.name IN ('Onboarding Specialist')
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);

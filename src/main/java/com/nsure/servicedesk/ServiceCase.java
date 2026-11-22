@@ -98,6 +98,59 @@ public class ServiceCase {
     @Column(nullable = false)
     private int version;
 
+    // NS-SH10-004: what the customer asked to be put right, the coded resolution and (complaints) the outcome.
+    @Column(name = "requested_remedy", length = 300)
+    private String requestedRemedy;
+
+    @Column(name = "resolution_code", length = 40)
+    private String resolutionCode;
+
+    @Column(name = "outcome", length = 30)
+    private String outcome;
+
+    // The escalation level reached (0 = none) and an external referral (e.g. the ombudsman's reference).
+    @Column(name = "escalation_level", nullable = false)
+    private int escalationLevel;
+
+    @Column(name = "escalated_at")
+    private LocalDateTime escalatedAt;
+
+    @Column(name = "external_reference", length = 60)
+    private String externalReference;
+
+    // NS-SH10-001: the workflow version and SLA the case was opened under; a later definition change does not move it.
+    @Column(name = "workflow_version")
+    private Integer workflowVersion;
+
+    @Column(name = "sla_hours")
+    private Integer slaHours;
+
+    // WORKING_HOURS (business calendar) or ELAPSED (cases opened before the calendar applied).
+    @Column(name = "sla_basis", length = 20)
+    private String slaBasis;
+
+    // NS-SH10-005: an approved pause reason with its evidence and expected resume date; who asked and who approved.
+    @Column(name = "pause_code", length = 40)
+    private String pauseCode;
+
+    @Column(name = "pause_evidence", length = 300)
+    private String pauseEvidence;
+
+    @Column(name = "pause_expected_resume")
+    private java.time.LocalDate pauseExpectedResume;
+
+    @Column(name = "pause_requested_by", length = 100)
+    private String pauseRequestedBy;
+
+    @Column(name = "pause_approved_by", length = 100)
+    private String pauseApprovedBy;
+
+    @Column(name = "paused_working_minutes", nullable = false)
+    private int pausedWorkingMinutes;
+
+    @Column(name = "unowned_alerted_at")
+    private LocalDateTime unownedAlertedAt;
+
     protected ServiceCase() {
     }
 
@@ -134,6 +187,138 @@ public class ServiceCase {
         pauseReason = reason;
     }
 
+    /** A pause for an approved reason (NS-SH10-005); one that needs approval waits until someone else approves it. */
+    void requestPause(String code, String label, String evidence, java.time.LocalDate expectedResume, String by,
+            boolean needsApproval) {
+        pauseCode = code;
+        pauseEvidence = evidence;
+        pauseExpectedResume = expectedResume;
+        pauseRequestedBy = by;
+        pauseApprovedBy = null;
+        if (!needsApproval) {
+            pause(label);
+        }
+    }
+
+    void approvePause(String label, String approver) {
+        pauseApprovedBy = approver;
+        pause(label);
+    }
+
+    void declinePause() {
+        pauseCode = null;
+        pauseEvidence = null;
+        pauseExpectedResume = null;
+        pauseRequestedBy = null;
+    }
+
+    /** Opened under a workflow version, with its SLA counted in working hours of the business calendar. */
+    void sla(Integer workflowVersion, int hours, LocalDateTime due, String basis) {
+        this.workflowVersion = workflowVersion;
+        this.slaHours = hours;
+        this.dueAt = due;
+        this.slaBasis = basis;
+    }
+
+    /** Restarts the clock: the due time moves out by the working time the case was paused. */
+    long resumeWorking(LocalDateTime newDue, long workingMinutes) {
+        long minutes = Math.max(0, java.time.Duration.between(pausedAt, LocalDateTime.now()).toMinutes());
+        pausedMinutes += (int) minutes;
+        pausedWorkingMinutes += (int) workingMinutes;
+        dueAt = newDue;
+        pausedAt = null;
+        pauseCode = null;
+        pauseRequestedBy = null;
+        status = owner == null ? OPEN : IN_PROGRESS;
+        return minutes;
+    }
+
+    void remedy(String requestedRemedy) {
+        this.requestedRemedy = requestedRemedy;
+    }
+
+    void resolveWith(String resolution, String code, String outcome) {
+        resolve(resolution);
+        this.resolutionCode = code;
+        this.outcome = outcome;
+    }
+
+    void escalate(int level, String externalReference) {
+        this.escalationLevel = level;
+        this.escalatedAt = LocalDateTime.now();
+        if (externalReference != null) {
+            this.externalReference = externalReference;
+        }
+    }
+
+    void unownedAlerted() {
+        this.unownedAlertedAt = LocalDateTime.now();
+    }
+
+    public String getRequestedRemedy() {
+        return requestedRemedy;
+    }
+
+    public String getResolutionCode() {
+        return resolutionCode;
+    }
+
+    public String getOutcome() {
+        return outcome;
+    }
+
+    public int getEscalationLevel() {
+        return escalationLevel;
+    }
+
+    public LocalDateTime getEscalatedAt() {
+        return escalatedAt;
+    }
+
+    public String getExternalReference() {
+        return externalReference;
+    }
+
+    public Integer getWorkflowVersion() {
+        return workflowVersion;
+    }
+
+    public Integer getSlaHours() {
+        return slaHours;
+    }
+
+    public String getSlaBasis() {
+        return slaBasis;
+    }
+
+    public String getPauseCode() {
+        return pauseCode;
+    }
+
+    public String getPauseEvidence() {
+        return pauseEvidence;
+    }
+
+    public java.time.LocalDate getPauseExpectedResume() {
+        return pauseExpectedResume;
+    }
+
+    public String getPauseRequestedBy() {
+        return pauseRequestedBy;
+    }
+
+    public String getPauseApprovedBy() {
+        return pauseApprovedBy;
+    }
+
+    public int getPausedWorkingMinutes() {
+        return pausedWorkingMinutes;
+    }
+
+    public LocalDateTime getUnownedAlertedAt() {
+        return unownedAlertedAt;
+    }
+
     /** Restarts the clock and returns the minutes it was stopped, which push the due date out. */
     long resume() {
         long minutes = Math.max(0, java.time.Duration.between(pausedAt, LocalDateTime.now()).toMinutes());
@@ -153,6 +338,8 @@ public class ServiceCase {
     void reopen() {
         resolution = null;
         resolvedAt = null;
+        resolutionCode = null;
+        outcome = null;
         status = owner == null ? OPEN : IN_PROGRESS;
     }
 

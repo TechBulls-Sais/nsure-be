@@ -50,7 +50,7 @@ public class DocumentCustody {
     }
 
     /** Refuses a file whose bytes no longer match the hash recorded when it was stored. Older rows have no hash. */
-    void verify(String expectedSha256, String storagePath, String what) {
+    public void verify(String expectedSha256, String storagePath, String what) {
         if (expectedSha256 == null) {
             return;
         }
@@ -61,7 +61,7 @@ public class DocumentCustody {
     }
 
     /** Logs one download. */
-    void logAccess(String kind, Long documentId, String ownerRef, String fileName, String username, String channel) {
+    public void logAccess(String kind, Long documentId, String ownerRef, String fileName, String username, String channel) {
         em.persist(new DocumentAccess(kind, documentId, ownerRef, fileName, username, channel));
         // Opening a document is sensitive access (NS-SH11-005).
         evidence.record(username, "Downloaded " + kind + " document", kind, ownerRef, fileName + " via " + channel);

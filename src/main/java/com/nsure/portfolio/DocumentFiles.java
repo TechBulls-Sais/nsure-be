@@ -37,7 +37,7 @@ public class DocumentFiles {
         return storagePath;
     }
 
-    Resource read(String storagePath, String what) {
+    public Resource read(String storagePath, String what) {
         Path path = resolve(storagePath);
         if (!Files.isRegularFile(path)) {
             throw new NotFoundException("The file for " + what + " is missing from storage.");

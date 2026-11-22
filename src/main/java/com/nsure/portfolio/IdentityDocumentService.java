@@ -5,11 +5,10 @@ import com.nsure.common.exception.NotFoundException;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.service.PlatformSecurityContext;
 import jakarta.persistence.EntityManager;
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -28,8 +27,12 @@ public class IdentityDocumentService {
     /** Uploads a customer may have on file; enough for front, back and proof of address several times over. */
     static final int MAX_FILES = 10;
 
+    /**
+     * One identity document. {@code state} is CURRENT for a released document of record, or QUARANTINED / REJECTED
+     * for an upload still being checked or refused (no id: it cannot be opened), with {@code note} saying why.
+     */
     public record IdentityDocumentView(Long id, String documentType, String fileName, String contentType, long size,
-            String uploadedBy, LocalDateTime uploadedAt, String sha256) {
+            String uploadedBy, LocalDateTime uploadedAt, String sha256, String state, String note) {
     }
 
     private final EntityManager em;
@@ -39,9 +42,12 @@ public class IdentityDocumentService {
     private final DocumentCustody custody;
     private final WorkflowHistory history;
     private final PartyRegister parties;
+    private final DocumentQuarantine quarantine;
 
     public IdentityDocumentService(EntityManager em, PlatformSecurityContext security, PortfolioService portfolio,
-            DocumentFiles files, DocumentCustody custody, WorkflowHistory history, PartyRegister parties) {
+            DocumentFiles files, DocumentCustody custody, WorkflowHistory history, PartyRegister parties,
+            DocumentQuarantine quarantine) {
+        this.quarantine = quarantine;
         this.em = em;
         this.security = security;
         this.portfolio = portfolio;
@@ -75,17 +81,10 @@ public class IdentityDocumentService {
             throw new IllegalArgumentException("You have already sent " + MAX_FILES + " documents. Our team will"
                     + " contact you if anything else is needed.");
         }
-        Upload upload = read(file);
-        String storagePath = files.write("identity/" + customer.getRef(), upload.extension(), upload.bytes());
-        IdentityDocument document = new IdentityDocument(customer.getRef(), documentType, upload.fileName(),
-                upload.contentType(), upload.bytes().length, storagePath, DocumentCustody.sha256(upload.bytes()), actor);
-        try {
-            em.persist(document);
-            em.flush();
-        } catch (RuntimeException e) {
-            files.deleteQuietly(storagePath);
-            throw e;
-        }
+        // NS-SH09A-004: identity evidence waits in quarantine until someone other than the uploader releases it.
+        DocumentIntake.Upload upload = DocumentIntake.read(file);
+        quarantine.receiveEvidence(DocumentQuarantine.IDENTITY, customer.getId(), customer.getRef(), customer.getName(),
+                upload, documentType, actor, DocumentCustody.PORTAL);
         String previous = customer.getKycStatus();
         if ("FAILED".equals(previous)) {
             // New evidence after a rejection: the review opens again; the rejection stays in the history.
@@ -95,8 +94,22 @@ public class IdentityDocumentService {
             parties.kycChanged(customer, "KYC", previous, "PENDING", actor);
         }
         // The review log (and with it the audit chain) shows what arrived, for the reviewer.
-        history.record(WorkflowHistory.KYC_REVIEW, customer.getRef(), customer.getName(), "Evidence uploaded",
-                previous, customer.getKycStatus(), documentType + ": " + upload.fileName(), actor);
+        return list(customer.getRef());
+    }
+
+    /** Staff upload identity evidence the customer handed in (branch, email): quarantined like a portal upload. */
+    @Transactional
+    public List<IdentityDocumentView> staffUpload(String customerRef, MultipartFile file, String type) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("UPDATE_CUSTOMER");
+        CustomerAccount customer = customer(customerRef);
+        String documentType = type == null || type.isBlank() ? null : type.trim();
+        if (documentType == null || !TYPES.contains(documentType)) {
+            throw new IllegalArgumentException("Document type must be one of: " + String.join(", ", TYPES) + ".");
+        }
+        DocumentIntake.Upload upload = DocumentIntake.read(file);
+        quarantine.receiveEvidence(DocumentQuarantine.IDENTITY, customer.getId(), customer.getRef(), customer.getName(),
+                upload, documentType, user.getUsername(), DocumentCustody.STAFF);
         return list(customer.getRef());
     }
 
@@ -128,12 +141,19 @@ public class IdentityDocumentService {
     // ── internals ────────────────────────────────────────────────────────────────────────────────
 
     private List<IdentityDocumentView> list(String customerRef) {
-        return em.createQuery("select d from IdentityDocument d where d.customerRef = :ref order by d.id desc",
+        List<IdentityDocumentView> out = new java.util.ArrayList<>();
+        for (Map<String, Object> h : quarantine.held(DocumentQuarantine.IDENTITY, customerRef)) {
+            out.add(new IdentityDocumentView(null, (String) h.get("documentType"), (String) h.get("fileName"), null, 0,
+                    (String) h.get("uploadedBy"), LocalDateTime.parse((String) h.get("uploadedAt")), null,
+                    (String) h.get("state"), (String) h.get("note")));
+        }
+        em.createQuery("select d from IdentityDocument d where d.customerRef = :ref order by d.id desc",
                         IdentityDocument.class)
                 .setParameter("ref", customerRef).getResultStream()
                 .map(d -> new IdentityDocumentView(d.getId(), d.getDocumentType(), d.getFileName(), d.getContentType(),
-                        d.getSizeBytes(), d.getUploadedBy(), d.getUploadedAt(), d.getSha256()))
-                .toList();
+                        d.getSizeBytes(), d.getUploadedBy(), d.getUploadedAt(), d.getSha256(), "CURRENT", ""))
+                .forEach(out::add);
+        return out;
     }
 
     private CustomerAccount customer(String ref) {
@@ -141,59 +161,5 @@ public class IdentityDocumentService {
                 .setParameter("ref", ref == null ? "" : ref.trim().toUpperCase(Locale.ROOT))
                 .getResultStream().findFirst()
                 .orElseThrow(() -> new NotFoundException("Customer " + ref + " not found"));
-    }
-
-    private record Upload(byte[] bytes, String fileName, String extension, String contentType) {
-    }
-
-    /** Only PDF, JPG and PNG, told by the file's first bytes; the browser's type and the name are not trusted. */
-    private static Upload read(MultipartFile file) {
-        if (file == null || file.isEmpty()) {
-            throw new IllegalArgumentException("Choose a file to upload.");
-        }
-        if (file.getSize() > MAX_BYTES) {
-            throw new IllegalArgumentException("Files can be at most 10 MB.");
-        }
-        byte[] bytes;
-        try {
-            bytes = file.getBytes();
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-        String name = file.getOriginalFilename() == null ? "" : file.getOriginalFilename();
-        name = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1)
-                .replaceAll("[\\p{Cntrl}\"]", "").trim();
-        if (name.length() > 255) {
-            name = name.substring(name.length() - 255);
-        }
-        if (name.isEmpty()) {
-            name = "document";
-        }
-        int dot = name.lastIndexOf('.');
-        String extension = dot < 0 ? "" : name.substring(dot + 1).toLowerCase(Locale.ROOT);
-        String type = startsWith(bytes, '%', 'P', 'D', 'F', '-') ? "application/pdf"
-                : startsWith(bytes, 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A) ? "image/png"
-                : startsWith(bytes, 0xFF, 0xD8, 0xFF) ? "image/jpeg" : null;
-        boolean matches = type != null && switch (type) {
-            case "application/pdf" -> extension.equals("pdf");
-            case "image/png" -> extension.equals("png");
-            default -> extension.equals("jpg") || extension.equals("jpeg");
-        };
-        if (!matches) {
-            throw new IllegalArgumentException("Only PDF, JPG and PNG files can be uploaded.");
-        }
-        return new Upload(bytes, name, extension.equals("jpeg") ? "jpg" : extension, type);
-    }
-
-    private static boolean startsWith(byte[] bytes, int... prefix) {
-        if (bytes.length < prefix.length) {
-            return false;
-        }
-        for (int i = 0; i < prefix.length; i++) {
-            if ((bytes[i] & 0xFF) != prefix[i]) {
-                return false;
-            }
-        }
-        return true;
     }
 }

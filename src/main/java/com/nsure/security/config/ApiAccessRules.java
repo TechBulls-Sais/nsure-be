@@ -101,6 +101,7 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/customers/*/edd", anyOf("EDD_CUSTOMER")),
             // KYC evidence the customer uploaded (NS-SH01-004): staff who read customers see and open it.
             rule(GET, "/portfolio/customers/*/identity-documents", anyOf("READ_CUSTOMER")),
+            rule(POST, "/portfolio/customers/*/identity-documents", anyOf("UPDATE_CUSTOMER")),
             rule(GET, "/portfolio/customers/*/identity-documents/*", anyOf("READ_CUSTOMER")),
             // SH01 party master (work package e): duplicates and steward-approved merges, KYC screening and
             // verification, contacts with independent approval, relationships and delegations, the customer view.
@@ -189,7 +190,7 @@ public final class ApiAccessRules {
             rule(POST, "/portfolio/claims/*/documents/summary", anyOf("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM")),
             rule(GET, "/portfolio/claims/*/document-access", anyOf("READ_AUDIT")),
             // The upload quarantine (AT-SH09A-02): the queue for claim staff, decisions for the document reviewer.
-            rule(GET, "/portfolio/document-quarantine", anyOf("READ_CLAIM")),
+            rule(GET, "/portfolio/document-quarantine", anyOf("READ_CLAIM", "READ_CUSTOMER", "READ_SERVICE_CASE")),
             rule(GET, "/portfolio/document-quarantine/*/file", anyOf("RELEASE_DOCUMENT")),
             rule(POST, "/portfolio/document-quarantine/*/release", anyOf("RELEASE_DOCUMENT")),
             rule(POST, "/portfolio/document-quarantine/*/reject", anyOf("RELEASE_DOCUMENT")),
@@ -443,10 +444,17 @@ public final class ApiAccessRules {
             // ── service desk and complaints SH10 (Service Agent) ───────────────────────────────────────
             rule(GET, "/service/cases", anyOf("READ_SERVICE_CASE")),
             rule(GET, "/service/cases/*", anyOf("READ_SERVICE_CASE")),
+            // SH10 reference data, escalation check and case evidence (work package e).
+            rule(GET, "/service/cases/*/documents", anyOf("READ_SERVICE_CASE")),
+            rule(GET, "/service/cases/*/documents/*", anyOf("READ_SERVICE_CASE")),
+            rule(GET, "/service/reference", anyOf("READ_SERVICE_CASE")),
+            rule(POST, "/service/escalations/run", anyOf("ASSIGN_WORK")),
             rule(POST, "/service/cases", anyOf("MANAGE_SERVICE_CASE")),
             rule(POST, "/service/cases/*/*", anyOf("MANAGE_SERVICE_CASE")),
             rule(GET, "/portfolio/shop/cases", customer()),
             rule(POST, "/portfolio/shop/cases", customer()),
+            rule(GET, "/portfolio/shop/cases/*/documents", customer()),
+            rule(POST, "/portfolio/shop/cases/*/documents", customer()),
 
             // ── collections SH04: billing accounts for anyone who reads policies or finance; changes by Finance ──
             rule(GET, "/collections/policies/*", anyOf("READ_POLICY", "READ_FINANCE")),

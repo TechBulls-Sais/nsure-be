@@ -49,11 +49,29 @@ public class ServiceDeskService {
     private final PortfolioService portfolio;
     private final int serviceRequestHours;
     private final int complaintHours;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+    private final com.nsure.controls.StaffAlertService alerts;
+    private final com.nsure.portfolio.DocumentQuarantine quarantine;
+    private final com.nsure.portfolio.DocumentCustody custody;
+    private final com.nsure.portfolio.DocumentFiles files;
+    private final int unownedAlertHours;
+
+    /** Complaint outcomes recorded with the resolution (NS-SH10-004). */
+    static final Set<String> OUTCOMES = Set.of("UPHELD", "PARTIALLY_UPHELD", "NOT_UPHELD");
 
     public ServiceDeskService(EntityManager em, PlatformSecurityContext security, WorkflowHistory history,
-            Outbox outbox, PortfolioService portfolio,
+            Outbox outbox, PortfolioService portfolio, org.springframework.jdbc.core.JdbcTemplate jdbc,
+            com.nsure.controls.StaffAlertService alerts, com.nsure.portfolio.DocumentQuarantine quarantine,
+            com.nsure.portfolio.DocumentCustody custody, com.nsure.portfolio.DocumentFiles files,
             @Value("${nsure.service-desk.sla.service-request-hours:72}") int serviceRequestHours,
-            @Value("${nsure.service-desk.sla.complaint-hours:120}") int complaintHours) {
+            @Value("${nsure.service-desk.sla.complaint-hours:120}") int complaintHours,
+            @Value("${nsure.service-desk.unowned-alert-hours:4}") int unownedAlertHours) {
+        this.jdbc = jdbc;
+        this.alerts = alerts;
+        this.quarantine = quarantine;
+        this.custody = custody;
+        this.files = files;
+        this.unownedAlertHours = unownedAlertHours;
         this.em = em;
         this.security = security;
         this.history = history;
@@ -100,8 +118,9 @@ public class ServiceDeskService {
             query.setParameter("owner", user.getUsername());
         }
         LocalDateTime now = LocalDateTime.now();
+        Map<String, Object> calendar = calendar();
         return query.setMaxResults(500).getResultList().stream()
-                .map(c -> ServiceDeskViews.CaseView.of(c, now)).toList();
+                .map(c -> ServiceDeskViews.CaseView.of(c, now, calendar)).toList();
     }
 
     @Transactional(readOnly = true)
@@ -168,28 +187,81 @@ public class ServiceDeskService {
                         + (assignee.equals(actor) ? "" : " (assigned by " + actor + ")"), actor);
                 taskAssigned(c, assignee, actor);
             }
-            case "pause" -> {
-                if (!ServiceCase.OPEN.equals(previous) && !ServiceCase.IN_PROGRESS.equals(previous)) {
-                    throw illegal(c, "paused");
+            case "pause" -> pause(c, previous, body, actor);
+            case "approve-pause", "decline-pause" -> {
+                user.validateHasPermissionTo("ASSIGN_WORK");
+                if (c.getPauseRequestedBy() == null || ServiceCase.PAUSED.equals(previous)) {
+                    throw new IllegalArgumentException(c.getRef() + " has no pause waiting for approval.");
                 }
-                String reason = required(body, "reason", "Give the reason for pausing the SLA clock.", 500);
-                c.pause(reason);
-                record(c, "Paused", previous, reason, actor);
+                if (actor.equalsIgnoreCase(c.getPauseRequestedBy())) {
+                    throw new com.nsure.security.exception.NoAuthorizationException(
+                            "You asked for this pause, so another supervisor approves it.");
+                }
+                Map<String, Object> reason = pauseReason(c.getPauseCode());
+                if ("approve-pause".equals(verb)) {
+                    c.approvePause((String) reason.get("label"), actor);
+                    record(c, "Paused", previous, reason.get("label") + " · approved by " + actor + " · asked by "
+                            + c.getPauseRequestedBy() + " · evidence: " + c.getPauseEvidence() + " · resume by "
+                            + c.getPauseExpectedResume(), actor);
+                } else {
+                    String why = required(body, "reason", "Say why the pause is declined.", 500);
+                    record(c, "Pause declined", previous, reason.get("label") + ": " + why, actor);
+                    c.declinePause();
+                }
             }
             case "resume" -> {
                 if (!ServiceCase.PAUSED.equals(previous)) {
                     throw illegal(c, "resumed");
                 }
-                long minutes = c.resume();
-                record(c, "Resumed", previous, "Clock stopped for " + minutes + " min; due " + c.getDueAt(), actor);
+                LocalDateTime pausedAt = c.getPausedAt();
+                Map<String, Object> calendar = calendar();
+                long working = calendar == null ? 0
+                        : com.nsure.ops.OpsService.workingMinutesBetween(pausedAt, LocalDateTime.now(), calendar);
+                LocalDateTime due = "WORKING_HOURS".equals(c.getSlaBasis()) && calendar != null
+                        ? com.nsure.ops.OpsService.addWorkingMinutes(c.getDueAt(), working, calendar)
+                        : c.getDueAt().plusMinutes(java.time.Duration.between(pausedAt, LocalDateTime.now()).toMinutes());
+                long minutes = c.resumeWorking(due, working);
+                record(c, "Resumed", previous, "Clock stopped for " + minutes + " min (" + working
+                        + " working min); due " + c.getDueAt(), actor);
             }
             case "resolve" -> {
                 if (!ServiceCase.OPEN.equals(previous) && !ServiceCase.IN_PROGRESS.equals(previous)) {
                     throw illegal(c, "resolved");
                 }
                 String resolution = required(body, "resolution", "Record the resolution given to the customer.", 1000);
-                c.resolve(resolution);
-                record(c, "Resolved", previous, resolution, actor);
+                // NS-SH10-004: a coded resolution reason, and for a complaint its outcome.
+                String code = upper(text(body, "resolutionCode"));
+                if (code == null || !resolutionCodes(c.getCaseType()).contains(code)) {
+                    throw new IllegalArgumentException("Choose the resolution reason: "
+                            + String.join(", ", resolutionCodes(c.getCaseType())) + ".");
+                }
+                String outcome = upper(text(body, "outcome"));
+                if (ServiceCase.COMPLAINT.equals(c.getCaseType()) && (outcome == null || !OUTCOMES.contains(outcome))) {
+                    throw new IllegalArgumentException("Record the complaint outcome: UPHELD, PARTIALLY_UPHELD or"
+                            + " NOT_UPHELD.");
+                }
+                c.resolveWith(resolution, code, ServiceCase.COMPLAINT.equals(c.getCaseType()) ? outcome : null);
+                record(c, "Resolved", previous, code + (outcome == null || !ServiceCase.COMPLAINT.equals(c.getCaseType())
+                        ? "" : " · " + outcome) + " · " + resolution, actor);
+            }
+            case "escalate" -> {
+                requireActive(c, "escalated");
+                String reason = required(body, "reason", "Say why the case is escalated.", 500);
+                String reference = text(body, "externalReference");
+                boolean external = body != null && body.path("external").asBoolean(false);
+                if (external && !ServiceCase.COMPLAINT.equals(c.getCaseType())) {
+                    throw new IllegalArgumentException("Only a complaint is referred to an external body.");
+                }
+                if (external && reference == null) {
+                    throw new IllegalArgumentException("Give the external body's reference for the referral.");
+                }
+                int level = external ? Math.max(3, c.getEscalationLevel() + 1) : c.getEscalationLevel() + 1;
+                c.escalate(level, external ? reference : null);
+                record(c, "Escalated", previous, "Level " + level + (external ? " · referred externally ("
+                        + reference + ")" : "") + " · " + reason, actor);
+                alerts.raise("CASE_ESCALATED", "ASSIGN_WORK", c.getRef() + " escalated to level " + level,
+                        c.getCaseType().toLowerCase(Locale.ROOT).replace('_', ' ') + " for " + c.getCustomerName()
+                                + ": " + reason, "case-escalation:" + c.getRef() + ":" + level, actor);
             }
             case "reopen" -> {
                 if (!ServiceCase.RESOLVED.equals(previous)) {
@@ -214,8 +286,8 @@ public class ServiceDeskService {
                 event.put("closedBy", actor);
                 outbox.publish(Events.CASE_CLOSED, c.getRef(), event, actor);
             }
-            default -> throw new IllegalArgumentException(
-                    "Unknown action " + action + ". Use assign, pause, resume, resolve, reopen or close.");
+            default -> throw new IllegalArgumentException("Unknown action " + action + ". Use assign, pause,"
+                    + " approve-pause, decline-pause, resume, resolve, escalate, reopen or close.");
         }
         try {
             em.flush();
@@ -306,9 +378,29 @@ public class ServiceDeskService {
             throw new IllegalArgumentException(linkedRef + " is not a policy or claim of " + customer.getName() + ".");
         }
         boolean complaint = ServiceCase.COMPLAINT.equals(caseType);
+        String remedy = text(body, "requestedRemedy");
+        if (remedy != null && remedy.length() > 300) {
+            throw new IllegalArgumentException("Keep the requested remedy to 300 characters.");
+        }
+        // NS-SH10-001: the case keeps the workflow version and SLA it was opened under; NS-SH10-005: the SLA is
+        // counted in working hours of the business calendar.
+        List<Map<String, Object>> definition = jdbc.queryForList("select sla_hours, version_no from wf_definition"
+                + " where code = ?", caseType);
+        int hours = definition.isEmpty() ? (complaint ? complaintHours : serviceRequestHours)
+                : ((Number) value(definition.get(0), "sla_hours")).intValue();
+        Integer workflowVersion = definition.isEmpty() ? null
+                : ((Number) value(definition.get(0), "version_no")).intValue();
         ServiceCase c = new ServiceCase(nextRef(complaint ? "CMP-" : "SR-", caseType), caseType, category,
                 customer.getRef(), customer.getName(), linkedRef, subject, description, channel, priority, actor,
-                complaint ? complaintHours : serviceRequestHours);
+                hours);
+        Map<String, Object> calendar = calendar();
+        if (calendar != null) {
+            c.sla(workflowVersion, hours, com.nsure.ops.OpsService.addWorkingHours(c.getOpenedAt(), hours, calendar),
+                    "WORKING_HOURS");
+        } else {
+            c.sla(workflowVersion, hours, c.getDueAt(), "ELAPSED");
+        }
+        c.remedy(remedy);
         em.persist(c);
         history.record(ENTITY, c.getRef(), customer.getName(), "Opened", null, ServiceCase.OPEN,
                 (complaint ? "Complaint" : "Service request") + " · " + category + " · via " + channel
@@ -408,8 +500,286 @@ public class ServiceDeskService {
     }
 
     private ServiceDeskViews.CaseDetail detailOf(ServiceCase c) {
-        return new ServiceDeskViews.CaseDetail(ServiceDeskViews.CaseView.of(c, LocalDateTime.now()),
+        return new ServiceDeskViews.CaseDetail(ServiceDeskViews.CaseView.of(c, LocalDateTime.now(), calendar()),
                 history.of(ENTITY, c.getRef()));
+    }
+
+    // ── pauses, escalation, reference data (NS-SH10-004/005, work package e) ─────────────────────────
+
+    /**
+     * {code, evidence, expectedResume, reason?}: pauses the SLA clock for an approved reason only. A reason that
+     * needs evidence needs it; the expected resume date must fall within the reason's limit. A reason that needs
+     * approval waits for a supervisor (ASSIGN_WORK) who is someone else, and the clock runs until then.
+     */
+    private void pause(ServiceCase c, String previous, JsonNode body, String actor) {
+        if (!ServiceCase.OPEN.equals(previous) && !ServiceCase.IN_PROGRESS.equals(previous)) {
+            throw illegal(c, "paused");
+        }
+        if (c.getPauseRequestedBy() != null) {
+            throw new ConflictException("A pause of " + c.getRef() + " is already waiting for approval.");
+        }
+        String code = upper(text(body, "code"));
+        Map<String, Object> reason = code == null ? null : pauseReason(code);
+        if (reason == null || !"Y".equals(reason.get("active"))) {
+            throw new IllegalArgumentException("Pause only for an approved reason: " + String.join(", ",
+                    jdbc.queryForList("select code from svc_pause_reason where active = 'Y' order by code",
+                            String.class)) + ".");
+        }
+        String evidence = text(body, "evidence");
+        if ("Y".equals(reason.get("requires_evidence")) && (evidence == null || evidence.length() < 5)) {
+            throw new IllegalArgumentException("Record the evidence for this pause (what was requested, from whom and"
+                    + " when), at least 5 characters.");
+        }
+        if (evidence != null && evidence.length() > 300) {
+            throw new IllegalArgumentException("Keep the evidence to 300 characters.");
+        }
+        int maxDays = ((Number) reason.get("max_days")).intValue();
+        String date = text(body, "expectedResume");
+        java.time.LocalDate resume;
+        try {
+            resume = date == null ? null : java.time.LocalDate.parse(date);
+        } catch (java.time.format.DateTimeParseException e) {
+            resume = null;
+        }
+        java.time.LocalDate today = java.time.LocalDate.now();
+        if (resume == null || resume.isBefore(today) || resume.isAfter(today.plusDays(maxDays))) {
+            throw new IllegalArgumentException("Give the date the case should resume, within " + maxDays
+                    + " days for this reason.");
+        }
+        boolean approval = "Y".equals(reason.get("requires_approval"));
+        String label = (String) reason.get("label");
+        String note = text(body, "reason");
+        c.requestPause(code, label + (note == null ? "" : ": " + note), evidence, resume, actor, approval);
+        record(c, approval ? "Pause requested" : "Paused", previous, label + (note == null ? "" : ": " + note)
+                + (evidence == null ? "" : " · evidence: " + evidence) + " · resume by " + resume
+                + (approval ? " · waiting for a supervisor's approval; the clock keeps running" : ""), actor);
+        if (approval) {
+            alerts.raise("PAUSE_APPROVAL", "ASSIGN_WORK", "Pause of " + c.getRef() + " needs approval",
+                    label + " asked by " + actor, "case-pause:" + c.getRef() + ":" + c.getVersion(), actor);
+        }
+    }
+
+    private Map<String, Object> pauseReason(String code) {
+        List<Map<String, Object>> rows = jdbc.queryForList("select * from svc_pause_reason where code = ?", code);
+        if (rows.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        rows.get(0).forEach((k, v) -> out.put(k.toLowerCase(Locale.ROOT), v));
+        return out;
+    }
+
+    private List<String> resolutionCodes(String caseType) {
+        return jdbc.queryForList("select code from svc_resolution_code where active = 'Y' and case_type in ('ALL', ?)"
+                + " order by code", String.class, caseType);
+    }
+
+    /** Pause reasons, resolution codes, complaint outcomes and escalation levels, for the case screens. */
+    @Transactional(readOnly = true)
+    public Map<String, Object> reference() {
+        user("READ_SERVICE_CASE");
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("pauseReasons", lower(jdbc.queryForList("select * from svc_pause_reason where active = 'Y' order by"
+                + " code")));
+        out.put("resolutionCodes", lower(jdbc.queryForList("select * from svc_resolution_code where active = 'Y' order"
+                + " by case_type, code")));
+        out.put("escalationRules", lower(jdbc.queryForList("select case_type, level_no, label, after_percent,"
+                + " notify_permission from svc_escalation_rule order by case_type, level_no")));
+        out.put("outcomes", List.of("UPHELD", "PARTIALLY_UPHELD", "NOT_UPHELD"));
+        return out;
+    }
+
+    /**
+     * NS-SH10-004/005: escalates open cases (not paused ones) whose working-time age has reached an escalation level
+     * of their type, and alerts supervisors once about cases nobody has taken within
+     * {@code nsure.service-desk.unowned-alert-hours} working hours. Runs every ten minutes, or on demand.
+     */
+    @org.springframework.scheduling.annotation.Scheduled(cron = "${nsure.service-desk.escalation-cron:0 */10 * * * *}")
+    @Transactional
+    public int escalateOverdue() {
+        Map<String, Object> calendar = calendar();
+        LocalDateTime now = LocalDateTime.now();
+        List<Map<String, Object>> rules = lower(jdbc.queryForList("select * from svc_escalation_rule order by level_no"));
+        int changed = 0;
+        for (ServiceCase c : em.createQuery("select c from ServiceCase c where c.status in :active", ServiceCase.class)
+                .setParameter("active", List.of(ServiceCase.OPEN, ServiceCase.IN_PROGRESS)).getResultList()) {
+            ServiceDeskViews.CaseView view = ServiceDeskViews.CaseView.of(c, now, calendar);
+            int sla = (c.getSlaHours() == null ? 72 : c.getSlaHours()) * 60;
+            long used = view.workingMinutes();
+            for (Map<String, Object> rule : rules) {
+                int level = ((Number) rule.get("level_no")).intValue();
+                int percent = ((Number) rule.get("after_percent")).intValue();
+                if (!c.getCaseType().equals(rule.get("case_type")) || level <= c.getEscalationLevel()
+                        || used * 100 < (long) sla * percent) {
+                    continue;
+                }
+                c.escalate(level, null);
+                record(c, "Escalated", c.getStatus(), "Level " + level + " · " + rule.get("label") + " · " + used
+                        + " of " + sla + " working minutes used", WorkflowHistory.SYSTEM);
+                alerts.raise("CASE_ESCALATED", (String) rule.get("notify_permission"), c.getRef() + ": "
+                        + rule.get("label"), c.getCaseType().toLowerCase(Locale.ROOT).replace('_', ' ') + " for "
+                        + c.getCustomerName() + " has used " + percent + "% of its time",
+                        "case-escalation:" + c.getRef() + ":" + level, "system");
+                changed++;
+            }
+            long unowned = calendar == null ? java.time.Duration.between(c.getOpenedAt(), now).toMinutes()
+                    : com.nsure.ops.OpsService.workingMinutesBetween(c.getOpenedAt(), now, calendar);
+            if (c.getOwner() == null && c.getUnownedAlertedAt() == null && unowned >= unownedAlertHours * 60L) {
+                c.unownedAlerted();
+                record(c, "Unowned alert", c.getStatus(), "Nobody has taken the case after " + unownedAlertHours
+                        + " working hours; supervisors alerted", WorkflowHistory.SYSTEM);
+                alerts.raise("CASE_UNOWNED", "ASSIGN_WORK", c.getRef() + " has no owner", "Opened "
+                        + c.getOpenedAt().withNano(0) + " for " + c.getCustomerName(), "case-unowned:" + c.getRef(),
+                        "system");
+                changed++;
+            }
+        }
+        return changed;
+    }
+
+    /** A supervisor runs the escalation check now (the timer does it every ten minutes). */
+    @Transactional
+    public Map<String, Object> runEscalations() {
+        user("ASSIGN_WORK");
+        return Map.of("changed", escalateOverdue());
+    }
+
+    // ── case evidence (NS-SH10-004 with NS-SH09A-004) ───────────────────────────────────────────────
+
+    /** Staff attach evidence to a case: it waits in quarantine until someone else releases it. */
+    @Transactional
+    public Map<String, Object> attach(String ref, org.springframework.web.multipart.MultipartFile file, String type) {
+        AppUser user = user("MANAGE_SERVICE_CASE");
+        ServiceCase c = find(ref);
+        requireActive(c, "given evidence");
+        return receive(c, file, type, user.getUsername(), "STAFF");
+    }
+
+    /** The customer attaches evidence to their own case from the portal. */
+    @Transactional
+    public Map<String, Object> customerAttach(String ref, org.springframework.web.multipart.MultipartFile file,
+            String type) {
+        CustomerAccount customer = portfolio.customerForLogin();
+        ServiceCase c = ownCase(ref, customer);
+        requireActive(c, "given evidence");
+        return receive(c, file, type, security.authenticatedUser().getUsername(), "PORTAL");
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> documents(String ref) {
+        user("READ_SERVICE_CASE");
+        return documentsOf(find(ref));
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> customerDocuments(String ref) {
+        return documentsOf(ownCase(ref, portfolio.customerForLogin()));
+    }
+
+    /** Opens a released case document: its hash is checked and the access is logged. */
+    @Transactional
+    public com.nsure.portfolio.ClaimDocumentService.StoredFile document(String ref, Long id) {
+        AppUser user = user("READ_SERVICE_CASE");
+        ServiceCase c = find(ref);
+        List<Map<String, Object>> rows = lower(jdbc.queryForList("select * from svc_case_document where id = ? and"
+                + " case_ref = ?", id, c.getRef()));
+        if (rows.isEmpty()) {
+            throw new NotFoundException("Document " + id + " not found on " + c.getRef());
+        }
+        Map<String, Object> d = rows.get(0);
+        custody.verify((String) d.get("sha256"), (String) d.get("storage_path"), "case document " + id);
+        custody.logAccess("CASE", id, c.getRef(), (String) d.get("file_name"), user.getUsername(), "STAFF");
+        return new com.nsure.portfolio.ClaimDocumentService.StoredFile((String) d.get("file_name"),
+                (String) d.get("content_type"), ((Number) d.get("size_bytes")).longValue(),
+                files.read((String) d.get("storage_path"), "case document " + id));
+    }
+
+    private Map<String, Object> receive(ServiceCase c, org.springframework.web.multipart.MultipartFile file,
+            String type, String actor, String channel) {
+        String documentType = type == null || type.isBlank() ? "Supporting evidence" : type.trim();
+        if (documentType.length() > 60) {
+            throw new IllegalArgumentException("Keep the document type to 60 characters.");
+        }
+        com.nsure.portfolio.DocumentIntake.Upload upload = com.nsure.portfolio.DocumentIntake.read(file);
+        quarantine.receiveEvidence(com.nsure.portfolio.DocumentQuarantine.SERVICE_CASE, c.getId(), c.getRef(),
+                c.getCustomerName(), upload, documentType, actor, channel);
+        return documentsOf(c);
+    }
+
+    private Map<String, Object> documentsOf(ServiceCase c) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("caseRef", c.getRef());
+        out.put("documents", jdbc.queryForList("select id, document_type, file_name, content_type, size_bytes,"
+                + " uploaded_by, uploaded_at, channel, released_by from svc_case_document where case_ref = ? order by"
+                + " id desc", c.getRef()).stream().map(ServiceDeskService::camel).toList());
+        out.put("held", quarantine.held(com.nsure.portfolio.DocumentQuarantine.SERVICE_CASE, c.getRef()));
+        return out;
+    }
+
+    private ServiceCase ownCase(String ref, CustomerAccount customer) {
+        ServiceCase c = em.createQuery("select c from ServiceCase c where c.ref = :ref and c.customerRef = :customer",
+                        ServiceCase.class)
+                .setParameter("ref", ref == null ? "" : ref.toUpperCase(Locale.ROOT))
+                .setParameter("customer", customer.getRef())
+                .getResultStream().findFirst().orElse(null);
+        if (c == null) {
+            throw new NotFoundException("Case " + ref + " not found");
+        }
+        return c;
+    }
+
+    /** The business calendar SLA times are counted in (Operations > Workflow), or null when none is set up. */
+    private Map<String, Object> calendar() {
+        List<Map<String, Object>> rows = jdbc.queryForList("select work_start_hour, work_end_hour, working_days,"
+                + " holidays from wf_calendar where id = 1");
+        if (rows.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> r = lower(rows).get(0);
+        Map<String, Object> calendar = new LinkedHashMap<>();
+        calendar.put("workStartHour", ((Number) r.get("work_start_hour")).intValue());
+        calendar.put("workEndHour", ((Number) r.get("work_end_hour")).intValue());
+        calendar.put("workingDays", r.get("working_days"));
+        calendar.put("holidays", r.get("holidays"));
+        return calendar;
+    }
+
+    private static Object value(Map<String, Object> row, String column) {
+        for (Map.Entry<String, Object> e : row.entrySet()) {
+            if (e.getKey().equalsIgnoreCase(column)) {
+                return e.getValue();
+            }
+        }
+        return null;
+    }
+
+    private static List<Map<String, Object>> lower(List<Map<String, Object>> rows) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            row.forEach((k, v) -> m.put(k.toLowerCase(Locale.ROOT), v instanceof java.sql.Timestamp t
+                    ? t.toLocalDateTime() : v instanceof java.sql.Date d ? d.toLocalDate() : v));
+            out.add(m);
+        }
+        return out;
+    }
+
+    private static Map<String, Object> camel(Map<String, Object> row) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        row.forEach((k, v) -> {
+            StringBuilder name = new StringBuilder();
+            boolean up = false;
+            for (char ch : k.toLowerCase(Locale.ROOT).toCharArray()) {
+                if (ch == '_') {
+                    up = true;
+                } else {
+                    name.append(up ? Character.toUpperCase(ch) : ch);
+                    up = false;
+                }
+            }
+            out.put(name.toString(), v instanceof java.sql.Timestamp t ? t.toLocalDateTime().toString() : v);
+        });
+        return out;
     }
 
     private void record(ServiceCase c, String action, String previous, String details, String actor) {

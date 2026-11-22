@@ -311,3 +311,6 @@ databaseChangeLog:
   - include:
       file: changes/196-party-master.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/197-service-cases-and-evidence.yaml
+      relativeToChangelogFile: true

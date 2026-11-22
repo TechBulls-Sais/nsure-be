@@ -1,6 +1,10 @@
 package com.nsure.portfolio;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.util.Locale;
 import java.util.Set;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * How a document came to be on record, and the labels the register and document lists show for it (SH09A records:
@@ -28,6 +32,8 @@ public final class DocumentIntake {
     public static final String UPLOAD = "UPLOAD";
 
     private static final Set<String> HEALTH = Set.of("Medical report", "Hospital bill", "Death certificate");
+    private static final Set<String> IDENTITY = Set.of("Identity document", "Omang", "Passport", "Proof of address");
+    public static final long MAX_BYTES = 10L * 1024 * 1024;
 
     private DocumentIntake() {
     }
@@ -61,9 +67,67 @@ public final class DocumentIntake {
         if (documentType != null && HEALTH.contains(documentType)) {
             return "Sensitive: health";
         }
-        if ("Identity document".equals(documentType)) {
+        if (documentType != null && IDENTITY.contains(documentType)) {
             return "Sensitive: identity";
         }
         return "Confidential";
+    }
+
+    /** A validated upload: its bytes, a safe file name, the extension and the content type its first bytes show. */
+    public record Upload(byte[] bytes, String fileName, String extension, String contentType) {
+    }
+
+    /**
+     * Reads an uploaded file for evidence (NS-SH09A-004): at most 10 MB, and only PDF, JPG or PNG, told by the file's
+     * first bytes, which must agree with the name; the browser's content type is not trusted.
+     */
+    public static Upload read(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("Choose a file to upload.");
+        }
+        if (file.getSize() > MAX_BYTES) {
+            throw new IllegalArgumentException("Files can be at most 10 MB.");
+        }
+        byte[] bytes;
+        try {
+            bytes = file.getBytes();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        String name = file.getOriginalFilename() == null ? "" : file.getOriginalFilename();
+        name = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1)
+                .replaceAll("[\\p{Cntrl}\"]", "").trim();
+        if (name.length() > 255) {
+            name = name.substring(name.length() - 255);
+        }
+        if (name.isEmpty()) {
+            name = "document";
+        }
+        int dot = name.lastIndexOf('.');
+        String extension = dot < 0 ? "" : name.substring(dot + 1).toLowerCase(Locale.ROOT);
+        String type = startsWith(bytes, '%', 'P', 'D', 'F', '-') ? "application/pdf"
+                : startsWith(bytes, 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A) ? "image/png"
+                : startsWith(bytes, 0xFF, 0xD8, 0xFF) ? "image/jpeg" : null;
+        boolean matches = type != null && switch (type) {
+            case "application/pdf" -> extension.equals("pdf");
+            case "image/png" -> extension.equals("png");
+            default -> extension.equals("jpg") || extension.equals("jpeg");
+        };
+        if (!matches) {
+            throw new IllegalArgumentException("Only PDF, JPG and PNG files can be uploaded.");
+        }
+        return new Upload(bytes, name, extension.equals("jpeg") ? "jpg" : extension, type);
+    }
+
+    private static boolean startsWith(byte[] bytes, int... prefix) {
+        if (bytes.length < prefix.length) {
+            return false;
+        }
+        for (int i = 0; i < prefix.length; i++) {
+            if ((bytes[i] & 0xFF) != prefix[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 }

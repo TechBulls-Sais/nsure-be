@@ -167,7 +167,7 @@ class WorkQueueApiTest {
         assertThat(call(post("/service/cases/" + sr + "/assign"), "service", "{\"to\":\"admin\"}").getStatus())
                 .isEqualTo(403);
         ok(post("/service/cases/" + sr + "/assign"), "admin", "{\"to\":\"admin\"}");
-        ok(post("/service/cases/" + sr + "/resolve"), "admin", "{\"resolution\":\"Changed\"}");
+        ok(post("/service/cases/" + sr + "/resolve"), "admin", "{\"resolution\":\"Changed\",\"resolutionCode\":\"DONE_AS_REQUESTED\"}");
         ok(post("/service/cases/" + sr + "/close"), "admin", "{}");
         assertThat(events("CaseClosed", sr)).isEqualTo(1);
     }
