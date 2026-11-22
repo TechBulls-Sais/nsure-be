@@ -190,6 +190,10 @@ public final class ApiAccessRules {
             rule(GET, "/portfolio/product-configs/*/versions", anyOf("READ_PRODUCT")),
             // SH02 release: checklist, lifecycle, golden cases (actuarial approval) and signed packages.
             rule(GET, "/portfolio/product-rules", anyOf("READ_PRODUCT")),
+            rule(GET, "/portfolio/products/*/migrations", anyOf("READ_PRODUCT")),
+            rule(POST, "/portfolio/products/*/migrations", anyOf("UPDATE_PRODUCT")),
+            rule(POST, "/portfolio/products/*/migrations/*/approve", anyOf("ACTIVATE_PRODUCT")),
+            rule(POST, "/portfolio/products/*/migrations/*/reject", anyOf("ACTIVATE_PRODUCT")),
             rule(GET, "/portfolio/product-configs/*/checklist", anyOf("READ_PRODUCT")),
             rule(GET, "/portfolio/product-configs/*/package", anyOf("READ_PRODUCT")),
             rule(POST, "/portfolio/product-configs/import", anyOf("CREATE_PRODUCT")),

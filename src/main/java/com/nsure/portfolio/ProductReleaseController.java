@@ -19,9 +19,29 @@ import org.springframework.web.bind.annotation.RestController;
 public class ProductReleaseController {
 
     private final ProductRelease release;
+    private final ProductTermsMigration migrations;
 
-    public ProductReleaseController(ProductRelease release) {
+    public ProductReleaseController(ProductRelease release, ProductTermsMigration migrations) {
         this.release = release;
+        this.migrations = migrations;
+    }
+
+    /** NS-SH02-004: approved migrations of in-force policies to the terms version in force. */
+    @GetMapping("/products/{product}/migrations")
+    public List<ProductTermsMigration.MigrationView> migrations(@PathVariable String product) {
+        return migrations.migrations(product);
+    }
+
+    /** {toVersion, fromVersion?, reason}. */
+    @PostMapping("/products/{product}/migrations")
+    public ProductTermsMigration.MigrationView proposeMigration(@PathVariable String product, @RequestBody JsonNode body) {
+        return migrations.propose(product, body);
+    }
+
+    @PostMapping("/products/{product}/migrations/{id}/{decision:approve|reject}")
+    public ProductTermsMigration.MigrationView decideMigration(@PathVariable String product, @PathVariable long id,
+            @PathVariable String decision, @RequestBody(required = false) JsonNode body) {
+        return migrations.decide(product, id, "approve".equals(decision), text(body, "reason"));
     }
 
     /** The typed rule catalogue: each rule's type, unit, range or values, and owner. */

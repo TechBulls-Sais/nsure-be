@@ -281,7 +281,51 @@ class ProductReleaseApiTest {
                 .andExpect(status().isOk());
     }
 
-    // ── helpers ──────────────────────────────────────────────────────────────────────────────────
+    @Test
+    void inForcePoliciesMoveToNewTermsOnlyThroughAnApprovedMigration() throws Exception {
+        String customer = customer("Lesedi Migrate", LocalDate.now().minusYears(40));
+        mockMvc.perform(post("/portfolio/customers/" + customer + "/kyc").with(signedIn("admin", "password")))
+                .andExpect(status().isOk());
+        String body = mockMvc.perform(json(post("/portfolio/policies"), "admin",
+                        "{\"customerRef\":\"" + customer + "\",\"product\":\"Whole of Life\",\"amount\":100000,\"premium\":90}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String policy = JsonPath.read(body, "$.id");
+        mockMvc.perform(json(post("/portfolio/policies/" + policy + "/payments"), "admin", "{\"method\":\"Bank EFT\"}"))
+                .andExpect(status().isOk());
+        String path = "/portfolio/products/{p}/versions";
+        mockMvc.perform(json(post(path, "Whole of Life"), "configurator",
+                        "{\"reason\":\"Longer grace period\",\"gracePeriodDays\":45}"))
+                .andExpect(status().isOk());
+        String proposed = mockMvc.perform(get(path, "Whole of Life").with(signedIn("admin", "password")))
+                .andReturn().getResponse().getContentAsString();
+        int next = JsonPath.read(proposed, "$[0].version");
+        mockMvc.perform(post(path + "/" + next + "/approve", "Whole of Life").with(signedIn("admin", "password")))
+                .andExpect(status().isOk());
+        // NS-SH02-004: the issued policy keeps its terms until an approved migration moves it.
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/terms").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.version").value(next - 1));
+        String migrations = "/portfolio/products/{p}/migrations";
+        mockMvc.perform(json(post(migrations, "Whole of Life"), "configurator", "{\"toVersion\":" + next + ",\"reason\":\"x\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        String created = mockMvc.perform(json(post(migrations, "Whole of Life"), "configurator",
+                        "{\"toVersion\":" + next + ",\"reason\":\"Regulator asked for the longer grace on all policies\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PROPOSED"))
+                .andExpect(jsonPath("$.policiesExpected").value(Matchers.greaterThanOrEqualTo(1)))
+                .andReturn().getResponse().getContentAsString();
+        long id = ((Number) JsonPath.read(created, "$.id")).longValue();
+        mockMvc.perform(post(migrations + "/" + id + "/approve", "Whole of Life").with(signedIn("configurator", "password")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post(migrations + "/" + id + "/approve", "Whole of Life").with(signedIn("admin", "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPLIED"));
+        mockMvc.perform(get("/portfolio/policies/" + policy + "/terms").with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.version").value(next))
+                .andExpect(jsonPath("$.gracePeriodDays").value(45));
+        assertThat(events("ProductTermsMigrated", "Whole of Life")).isEqualTo(1);
+    }
+
+        // ── helpers ──────────────────────────────────────────────────────────────────────────────────
 
     private String create(String name, String code, String rules, int premium) throws Exception {
         String created = mockMvc.perform(json(post("/portfolio/product-configs"), "configurator",

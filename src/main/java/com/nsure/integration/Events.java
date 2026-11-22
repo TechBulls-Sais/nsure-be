@@ -177,6 +177,8 @@ public final class Events {
     public static final String CLAIM_PAYMENT_RETURNED = "ClaimPaymentReturned";
     /** policyRef, eventRef, months, waivedFrom, waivedTo. Premiums waived after a long Care Cash admission (section 07). */
     public static final String PREMIUM_WAIVED = "PremiumWaived";
+    /** product, toVersion, fromVersion, policies, approvedBy. In-force policies moved to newer terms by approval. */
+    public static final String PRODUCT_TERMS_MIGRATED = "ProductTermsMigrated";
     /** policyRef, eventRef, months, waivedFrom, waivedTo, reason. A premium waiver undone because its event was reversed. */
     public static final String PREMIUM_WAIVER_REVERSED = "PremiumWaiverReversed";
 
