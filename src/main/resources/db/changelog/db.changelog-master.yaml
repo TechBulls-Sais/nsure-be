@@ -317,3 +317,6 @@ databaseChangeLog:
   - include:
       file: changes/123-life-consent.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/124-credit-benefits.yaml
+      relativeToChangelogFile: true

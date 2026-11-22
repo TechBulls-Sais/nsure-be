@@ -17,7 +17,11 @@ public final class CreditViews {
     public record RuleView(Long id, String product, int minEntryAge, int maxExitAge, int exceptionExitAge,
             int minTermMonths, int maxTermMonths, BigDecimal ratePerMille, int waitingMonths, String permanentDisability,
             boolean temporaryDisabilityOffered, boolean criticalIllnessOffered, String coverBasis, int staleBalanceDays,
-            BigDecimal refundDeductionPercent, String updatedBy, LocalDateTime updatedAt) {
+            BigDecimal refundDeductionPercent, String updatedBy, LocalDateTime updatedAt,
+            // NS-IL05-002/003/005: entry age, benefit waiting periods, optional benefits, valuation and surplus payee.
+            int maxEntryAge, int pdWaitingMonths, int tdWaitingMonths, int ciWaitingMonths, BigDecimal tdRatePerMille,
+            BigDecimal ciRatePerMille, int tdBenefitMonths, BigDecimal ciBenefitPercent, String valuationBasis,
+            String surplusPayee) {
     }
 
     public record LoanView(
@@ -61,7 +65,22 @@ public final class CreditViews {
             Boolean claimAccidental,
             LocalDate claimEventDate,
             String payeeVerifiedBy,
-            LocalDateTime payeeVerifiedAt) {
+            LocalDateTime payeeVerifiedAt,
+            // NS-IL05-001: the cover basis and benefit waiting periods the loan was sold with.
+            String coverBasis,
+            Integer pdWaitingMonths,
+            Integer tdWaitingMonths,
+            Integer ciWaitingMonths,
+            // NS-IL05-005: the claim's payment state, valuation date, payees and payment.
+            String claimStatus,
+            String claimRecordedBy,
+            LocalDate valuationDate,
+            String lenderAccount,
+            String surplusPayeeName,
+            String surplusPayeeRelationship,
+            String claimPaidReference,
+            String claimPaidBy,
+            LocalDateTime claimPaidAt) {
     }
 
     public record BalanceView(Long id, String sourceReference, LocalDate effectiveDate, BigDecimal balance,
@@ -75,6 +94,10 @@ public final class CreditViews {
 
     /** Who a claim on the loan would pay, and whether the balance is current enough to say (NS-IL05-005). */
     public record ClaimAssessment(
+            // The benefit assessed (DEATH, PERMANENT_DISABILITY, TEMPORARY_DISABILITY, CRITICAL_ILLNESS).
+            String cause,
+            // The date whose balance the claim pays (event or notification date, by the product rule).
+            LocalDate valuationDate,
             LocalDate eventDate,
             boolean coverActiveAtEvent,
             boolean inWaitingPeriod,

@@ -52,6 +52,16 @@ class NewBusinessApiTest {
     }
 
     @Test
+    void aLenderLoanStillOpensItsCreditPolicyWithoutAnApplication() throws Exception {
+        // IL05: credit cover comes from the lender's loan submission under the credit product rule, not an application.
+        String borrower = customer("Kitso Borrower", "kitso.borrower", "+267 72 900 010", 35);
+        mockMvc.perform(json(post("/credit/loans"), "credit", "{\"lenderRef\":\"LND-0001\",\"lenderLoanId\":\"NB-1001\","
+                        + "\"customerRef\":\"" + borrower + "\",\"principal\":50000,\"termMonths\":24,\"premiumBasis\":\"REGULAR\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.policyRef").isNotEmpty());
+    }
+
+    @Test
     void aPortalPurchaseIsAnUnderwrittenApplicationAndAReferredOneWaitsForTheUnderwriter() throws Exception {
         String customer = customer("Lorato Portal", "lorato.portal", "+267 72 900 002", 36);
         // NS-IL01-003: the portal asks the product's questions; a purchase without them is refused.

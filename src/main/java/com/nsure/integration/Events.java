@@ -115,6 +115,8 @@ public final class Events {
     public static final String LOAN_BALANCE_UPDATED = "LoanBalanceUpdated";
     public static final String LOAN_SETTLED = "LoanSettled";
     public static final String CREDIT_COVER_TERMINATED = "CreditCoverTerminated";
+    /** A verified individual credit life claim paid to the lender and any surplus payee (IL05); references only. */
+    public static final String CREDIT_CLAIM_PAID = "CreditClaimPaid";
     // Group lifecycle.
     public static final String SCHEME_QUOTED = "SchemeQuoted";
     public static final String SCHEME_ACTIVATED = "SchemeActivated";

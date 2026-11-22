@@ -802,6 +802,24 @@ public class PortfolioService {
      */
     @Transactional
     public PortfolioViews.CoverView createPolicy(JsonNode body, String idempotencyKey) {
+        return issue(body, idempotencyKey, false);
+    }
+
+    /**
+     * IL05: a lender's loan submission opens its credit life policy (an offer until the first premium). It is
+     * assessed by the credit product rule (entry and cessation ages, term, benefits) instead of an application, and
+     * only for a product distributed through lenders.
+     */
+    @Transactional
+    public PortfolioViews.CoverView createLoanPolicy(JsonNode body, String idempotencyKey) {
+        String scope = capture.distributionProblem(text(body, "product"), "LENDER");
+        if (scope != null) {
+            throw new IllegalArgumentException(scope);
+        }
+        return issue(body, idempotencyKey, true);
+    }
+
+    private PortfolioViews.CoverView issue(JsonNode body, String idempotencyKey, boolean lenderLoan) {
         AppUser staff = security.authenticatedUser();
         String key = idempotencyKey == null || idempotencyKey.isBlank() ? null : idempotencyKey.trim();
         if (key != null) {
@@ -823,7 +841,7 @@ public class PortfolioService {
             // NS-TXN-001: issued from the application as the caller last saw it (If-Match), if they say which.
             com.nsure.common.ExpectedVersion.check("Application " + application.getRef(), application.getRowVersion());
         }
-        if (application == null && !directIssueEnabled) {
+        if (application == null && !directIssueEnabled && !lenderLoan) {
             // NS-IL01-005/006: every policy comes from an application the underwriting rules or an underwriter cleared.
             throw new IllegalArgumentException("Policies are issued from an application that underwriting has cleared."
                     + " Create and submit an application for this customer, then issue it when it is Ready to issue.");

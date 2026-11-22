@@ -152,6 +152,13 @@ public class ClaimWorkflow {
     @Transactional
     public InsuranceClaim lodge(Lodgement input, String actor) {
         InsurancePolicy policy = policies.policy(required(input.policyRef(), "policy"));
+        // NS-IL05-005: a credit life policy pays on its loan (balance, lender and surplus payee), never its sum assured
+        // through the general claims route.
+        if (!em.createQuery("select l.ref from Loan l where l.policyRef = :ref", String.class)
+                .setParameter("ref", policy.getRef()).getResultList().isEmpty()) {
+            throw new IllegalArgumentException(policy.getRef() + " is a credit life policy: claims are made on its loan"
+                    + " (Credit life > loan > Claim), which pays the outstanding balance to the lender.");
+        }
         String claimant = required(input.claimantName(), "claimantName");
         String mobile = required(input.claimantMobile(), "claimantMobile");
         String relationship = required(input.claimantRelationship(), "claimantRelationship");

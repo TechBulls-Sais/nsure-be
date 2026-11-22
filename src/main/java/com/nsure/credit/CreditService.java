@@ -158,6 +158,37 @@ public class CreditService {
         }
         r.temporaryDisabilityOffered = body.path("temporaryDisabilityOffered").asBoolean(r.temporaryDisabilityOffered);
         r.criticalIllnessOffered = body.path("criticalIllnessOffered").asBoolean(r.criticalIllnessOffered);
+        // NS-IL05-002/003/005: entry age, benefit waiting periods and amounts, loadings, valuation and surplus payee.
+        r.maxEntryAge = body.path("maxEntryAge").asInt(r.maxEntryAge);
+        r.pdWaitingMonths = body.path("pdWaitingMonths").asInt(r.pdWaitingMonths);
+        r.tdWaitingMonths = body.path("tdWaitingMonths").asInt(r.tdWaitingMonths);
+        r.ciWaitingMonths = body.path("ciWaitingMonths").asInt(r.ciWaitingMonths);
+        r.tdBenefitMonths = body.path("tdBenefitMonths").asInt(r.tdBenefitMonths);
+        if (optional(body, "tdRatePerMille") != null) {
+            r.tdRatePerMille = new BigDecimal(optional(body, "tdRatePerMille")).setScale(4, RoundingMode.HALF_UP);
+        }
+        if (optional(body, "ciRatePerMille") != null) {
+            r.ciRatePerMille = new BigDecimal(optional(body, "ciRatePerMille")).setScale(4, RoundingMode.HALF_UP);
+        }
+        if (optional(body, "ciBenefitPercent") != null) {
+            r.ciBenefitPercent = new BigDecimal(optional(body, "ciBenefitPercent")).setScale(2, RoundingMode.HALF_UP);
+        }
+        if (optional(body, "valuationBasis") != null) {
+            r.valuationBasis = optional(body, "valuationBasis").toUpperCase(Locale.ROOT);
+        }
+        if (optional(body, "surplusPayee") != null) {
+            r.surplusPayee = optional(body, "surplusPayee").toUpperCase(Locale.ROOT);
+        }
+        if (r.maxEntryAge < r.minEntryAge || r.maxEntryAge > r.exceptionExitAge || r.pdWaitingMonths < 0
+                || r.tdWaitingMonths < 0 || r.ciWaitingMonths < 0 || r.tdBenefitMonths < 1
+                || r.tdRatePerMille.signum() < 0 || r.ciRatePerMille.signum() < 0 || r.ciBenefitPercent.signum() <= 0
+                || r.ciBenefitPercent.compareTo(HUNDRED) > 0
+                || !Set.of("EVENT_DATE", "NOTIFICATION_DATE").contains(r.valuationBasis)
+                || !Set.of("ESTATE", "NOMINATED_BENEFICIARY").contains(r.surplusPayee)) {
+            throw new IllegalArgumentException("The benefit rules are not consistent: check the maximum entry age,"
+                    + " waiting periods, loadings, critical illness percent, valuation basis (EVENT_DATE or"
+                    + " NOTIFICATION_DATE) and surplus payee (ESTATE or NOMINATED_BENEFICIARY).");
+        }
         if (r.minEntryAge < 0 || r.minEntryAge > r.maxExitAge || r.maxExitAge > r.exceptionExitAge
                 || r.exceptionExitAge > 120 || r.minTermMonths < 1 || r.minTermMonths > r.maxTermMonths
                 || r.ratePerMille.signum() <= 0 || r.waitingMonths < 0 || r.staleBalanceDays < 1
@@ -228,9 +259,10 @@ public class CreditService {
         int entryAge = Period.between(borrower.getDateOfBirth(), today).getYears();
         int exitAge = Period.between(borrower.getDateOfBirth(), today.plusMonths(term)).getYears();
         int exitLimit = secured || pensioner ? rule.exceptionExitAge : rule.maxExitAge;
-        if (entryAge < rule.minEntryAge || entryAge > exitLimit) {
+        // NS-IL05-002: entry is limited separately from cessation; the secured/pensioner exception extends cessation only.
+        if (entryAge < rule.minEntryAge || entryAge > Math.min(rule.maxEntryAge, exitLimit)) {
             throw new IllegalArgumentException(borrower.getName() + " is " + entryAge + "; entry age for "
-                    + rule.product + " is " + rule.minEntryAge + "–" + exitLimit + ".");
+                    + rule.product + " is " + rule.minEntryAge + "–" + Math.min(rule.maxEntryAge, exitLimit) + ".");
         }
         if (exitAge > exitLimit) {
             throw new IllegalArgumentException("Cover would run until age " + exitAge + ", past the cessation age of "
@@ -250,7 +282,10 @@ public class CreditService {
         if (ci && !rule.criticalIllnessOffered) {
             throw new IllegalArgumentException(rule.product + " does not offer the critical illness benefit.");
         }
-        BigDecimal monthly = principal.multiply(rule.ratePerMille).divide(THOUSAND, 2, RoundingMode.HALF_UP);
+        // NS-IL05-003: the optional temporary disability and critical illness benefits carry their own loadings.
+        BigDecimal rate = rule.ratePerMille.add(td ? rule.tdRatePerMille : BigDecimal.ZERO)
+                .add(ci ? rule.ciRatePerMille : BigDecimal.ZERO);
+        BigDecimal monthly = principal.multiply(rate).divide(THOUSAND, 2, RoundingMode.HALF_UP);
         BigDecimal single = "SINGLE".equals(basis) ? Money.of(monthly.multiply(BigDecimal.valueOf(term))) : null;
 
         Loan l = new Loan();
@@ -273,6 +308,11 @@ public class CreditService {
         l.temporaryDisability = td;
         l.criticalIllness = ci;
         l.waitingMonths = rule.waitingMonths;
+        // NS-IL05-001: the loan keeps the cover basis and benefit waiting periods it was sold with.
+        l.coverBasis = rule.coverBasis;
+        l.pdWaitingMonths = rule.pdWaitingMonths;
+        l.tdWaitingMonths = td ? rule.tdWaitingMonths : null;
+        l.ciWaitingMonths = ci ? rule.ciWaitingMonths : null;
         l.status = OPEN;
         l.balance = principal;
         l.refinancedFrom = optional(body, "refinancedFrom");
@@ -285,7 +325,7 @@ public class CreditService {
         policy.put("product", rule.product);
         policy.put("amount", principal);
         policy.put("premium", single == null ? monthly : single);
-        l.policyRef = portfolio.createPolicy(policy, "LOAN:" + lender.ref + ":" + lenderLoanId).id();
+        l.policyRef = portfolio.createLoanPolicy(policy, "LOAN:" + lender.ref + ":" + lenderLoanId).id();
         if (single != null) {
             workflow.policy(l.policyRef).setPremiumFrequency("SINGLE");
         }
@@ -450,19 +490,84 @@ public class CreditService {
 
     @Transactional(readOnly = true)
     public CreditViews.ClaimAssessment assessClaim(String ref, LocalDate eventDate) {
+        return assessClaim(ref, eventDate, null);
+    }
+
+    /** What a claim for {@code cause} (default death) on {@code eventDate} would pay, before anything is recorded. */
+    @Transactional(readOnly = true)
+    public CreditViews.ClaimAssessment assessClaim(String ref, LocalDate eventDate, String cause) {
         user("READ_CREDIT");
         Loan l = loan(ref);
-        return assess(l, policyOf(l), productRule(), eventDate == null ? LocalDate.now() : eventDate);
+        return assess(l, policyOf(l), productRule(), eventDate == null ? LocalDate.now() : eventDate,
+                cause == null || cause.isBlank() ? "DEATH" : cause.trim().toUpperCase(Locale.ROOT));
+    }
+
+    private static final String STALE_PREFIX = "no current lender balance: ";
+
+    /**
+     * A lender's settlement file (AT-IL05-02): {fileReference, rows: [{lenderLoanId, settlementReference,
+     * settlementDate}]}. Each row closes its loan once with at most one refund; the same file sent again closes
+     * nothing more. Rows are answered one by one (SETTLED, DUPLICATE, CONFLICT, BLOCKED or UNKNOWN).
+     */
+    @Transactional
+    public CreditViews.BatchResult settlementFile(String lenderRef, JsonNode body) {
+        AppUser user = user("MANAGE_CREDIT");
+        Lender lender = lender(lenderRef);
+        String file = required(body, "fileReference", 60);
+        JsonNode rows = body.get("rows");
+        if (rows == null || !rows.isArray() || rows.isEmpty()) {
+            throw new IllegalArgumentException("A settlement file needs at least one row.");
+        }
+        List<CreditViews.BatchRow> results = new ArrayList<>();
+        int settled = 0;
+        int duplicates = 0;
+        int conflicts = 0;
+        int unknown = 0;
+        for (JsonNode row : rows) {
+            String id = required(row, "lenderLoanId", 60);
+            Loan l = em.createQuery("select l from Loan l where l.lenderRef = :lender and l.lenderLoanId = :id", Loan.class)
+                    .setParameter("lender", lender.ref).setParameter("id", id).getResultStream().findFirst().orElse(null);
+            if (l == null) {
+                unknown++;
+                results.add(new CreditViews.BatchRow(id, "UNKNOWN", "No loan " + id + " is registered for " + lender.name));
+                continue;
+            }
+            String reference = required(row, "settlementReference", 80);
+            if (SETTLED.equals(l.status) && reference.equals(l.settlementReference)) {
+                duplicates++;
+                results.add(new CreditViews.BatchRow(id, "DUPLICATE", "Already settled under " + reference));
+                continue;
+            }
+            try {
+                closeBySettlement(l, reference, LocalDate.parse(required(row, "settlementDate", 10)), user);
+                settled++;
+                results.add(new CreditViews.BatchRow(id, "SETTLED", "Closed " + l.ref + " (" + file + ")"));
+            } catch (ConflictException ex) {
+                conflicts++;
+                results.add(new CreditViews.BatchRow(id, "CONFLICT", ex.getMessage()));
+            } catch (IllegalArgumentException ex) {
+                conflicts++;
+                results.add(new CreditViews.BatchRow(id, "BLOCKED", ex.getMessage()));
+            }
+        }
+        audit.record(user.getUsername(), "Lender settlement file", "Lender", lender.ref, file + ": " + settled
+                + " settled, " + duplicates + " duplicate, " + conflicts + " blocked or conflicting, " + unknown + " unknown");
+        return new CreditViews.BatchResult(file, rows.size(), settled, duplicates, conflicts, unknown, results);
     }
 
     /** Benefits a credit claim can be for; the loan must carry the one claimed (NS-IL05-003). */
     static final List<String> CLAIM_CAUSES = List.of("DEATH", "PERMANENT_DISABILITY", "TEMPORARY_DISABILITY",
             "CRITICAL_ILLNESS");
 
+    static final String CLAIM_PENDING_VERIFICATION = "PENDING_VERIFICATION";
+    static final String CLAIM_VERIFIED = "VERIFIED";
+    static final String CLAIM_PAID = "PAID";
+
     /**
-     * {eventDate, claimRef, payeeVerified, cause?, accidental?}: fixes who the claim pays and closes the credit policy.
-     * Refused without a current balance, for a benefit the loan does not carry, and within the product's waiting
-     * period unless the event was accidental (the product rule: only accidental events are covered while waiting).
+     * {eventDate, claimRef?, cause?, accidental?, lenderAccount, surplusPayeeName?, surplusPayeeRelationship?}: fixes
+     * who the claim pays and closes the credit policy. Refused without a current balance, for a benefit the loan does
+     * not carry, and within that benefit's waiting period unless the event was accidental (critical illness is never
+     * accidental). The lender's payment details are then verified by a second person before payment (NS-IL05-005).
      */
     @Transactional(noRollbackFor = CreditManualResolutionException.class)
     public CreditViews.LoanDetail recordClaim(String ref, JsonNode body) {
@@ -470,7 +575,14 @@ public class CreditService {
         Loan l = loan(ref);
         requireOpen(l);
         LocalDate eventDate = LocalDate.parse(required(body, "eventDate", 10));
-        CreditViews.ClaimAssessment a = assess(l, policyOf(l), productRule(), eventDate);
+        String cause = optional(body, "cause") == null ? "DEATH" : optional(body, "cause").toUpperCase(Locale.ROOT);
+        if (!CLAIM_CAUSES.contains(cause) || !carries(l, cause)) {
+            throw new IllegalArgumentException(ref + " does not cover " + causeLabel(cause) + ". It covers "
+                    + CLAIM_CAUSES.stream().filter(c -> carries(l, c)).map(CreditService::causeLabel)
+                            .collect(java.util.stream.Collectors.joining(", ")) + ".");
+        }
+        Rule rule = productRule();
+        CreditViews.ClaimAssessment a = assess(l, policyOf(l), rule, eventDate, cause);
         if (!a.coverActiveAtEvent()) {
             throw new IllegalArgumentException(ref + " had no active cover on " + eventDate + ": " + a.notes().get(0));
         }
@@ -482,26 +594,45 @@ public class CreditService {
             throw new CreditManualResolutionException(ref + " cannot be settled automatically: " + why
                     + " It has been routed for manual resolution.");
         }
-        String cause = optional(body, "cause") == null ? "DEATH" : optional(body, "cause").toUpperCase(Locale.ROOT);
-        if (!CLAIM_CAUSES.contains(cause) || !carries(l, cause)) {
-            throw new IllegalArgumentException(ref + " does not cover " + causeLabel(cause) + ". It covers "
-                    + CLAIM_CAUSES.stream().filter(c -> carries(l, c)).map(CreditService::causeLabel)
-                            .collect(java.util.stream.Collectors.joining(", ")) + ".");
+        boolean accidental = body.path("accidental").asBoolean(false);
+        if (a.inWaitingPeriod() && (!accidental || "CRITICAL_ILLNESS".equals(cause))) {
+            throw new IllegalArgumentException("The event on " + eventDate + " is within the " + waitingFor(l, cause)
+                    + "-month waiting period for " + causeLabel(cause) + (("CRITICAL_ILLNESS".equals(cause))
+                            ? ", which an accident does not shorten." : ", when only accidental events are covered."
+                            + " Confirm the event was accidental, or the claim is not covered."));
         }
-        if (a.inWaitingPeriod() && !body.path("accidental").asBoolean(false)) {
-            throw new IllegalArgumentException("The event on " + eventDate + " is within the " + l.waitingMonths
-                    + "-month waiting period, when only accidental events are covered. Confirm the event was"
-                    + " accidental, or the claim is not covered.");
+        String lenderAccount = optional(body, "lenderAccount");
+        if (lenderAccount == null) {
+            // The older contract asked only for a tick; the account is what a second person now verifies.
+            if (!body.path("payeeVerified").asBoolean(false)) {
+                throw new IllegalArgumentException("Give the lender's account the claim is paid to, for a second person"
+                        + " to verify.");
+            }
+            lenderAccount = l.lenderRef + " loan account " + l.lenderLoanId;
         }
-        if (!body.path("payeeVerified").asBoolean(false)) {
-            throw new IllegalArgumentException("Confirm the lender's payment details have been verified.");
+        String surplusName = optional(body, "surplusPayeeName");
+        if (a.estateAmount() != null && a.estateAmount().signum() > 0) {
+            if ("NOMINATED_BENEFICIARY".equals(rule.surplusPayee) && surplusName == null) {
+                throw new IllegalArgumentException("The surplus of " + Money.text(a.estateAmount()) + " goes to the"
+                        + " borrower's nominated beneficiary under the product rule: name them.");
+            }
+            if (surplusName == null) {
+                surplusName = "Estate of " + l.borrowerName;
+            }
         }
         l.claimRef = optional(body, "claimRef");
         l.claimEventDate = eventDate;
         l.claimCause = cause;
-        l.claimAccidental = body.path("accidental").asBoolean(false);
-        l.payeeVerifiedBy = user.getUsername();
-        l.payeeVerifiedAt = LocalDateTime.now().withNano(0);
+        l.claimAccidental = accidental;
+        l.valuationDate = a.valuationDate();
+        l.lenderAccount = clip(lenderAccount, 60);
+        l.surplusPayeeName = surplusName == null ? null : clip(surplusName, 150);
+        l.surplusPayeeRelationship = optional(body, "surplusPayeeRelationship") == null ? null
+                : clip(optional(body, "surplusPayeeRelationship"), 60);
+        l.claimStatus = CLAIM_PENDING_VERIFICATION;
+        l.claimRecordedBy = user.getUsername();
+        l.payeeVerifiedBy = null;
+        l.payeeVerifiedAt = null;
         l.lenderAmount = a.lenderAmount();
         l.estateAmount = a.estateAmount();
         l.status = CLAIMED;
@@ -522,7 +653,58 @@ public class CreditService {
                     + causeLabel(cause) + " on " + eventDate, eventDate, user.getUsername());
         }
         audit.record(user.getUsername(), "Credit claim allocated", "Loan", ref, "Lender " + Money.text(a.lenderAmount())
-                + ", estate " + Money.text(a.estateAmount()));
+                + ", " + (surplusName == null ? "no surplus" : surplusName + " " + Money.text(a.estateAmount()))
+                + "; payee to be verified by a second person");
+        return detail(l);
+    }
+
+    /** {note}: a second person confirms the lender's payment details and the surplus payee (NS-IL05-005). */
+    @Transactional
+    public CreditViews.LoanDetail verifyClaimPayee(String ref, JsonNode body) {
+        AppUser user = user("MANAGE_CREDIT");
+        Loan l = loan(ref);
+        if (!CLAIM_PENDING_VERIFICATION.equals(l.claimStatus)) {
+            throw new ConflictException(ref + " has no claim payee waiting for verification.");
+        }
+        if (user.getUsername().equalsIgnoreCase(l.claimRecordedBy)) {
+            throw new com.nsure.security.exception.NoAuthorizationException("You recorded this claim, so a second person"
+                    + " must verify its payee.");
+        }
+        String note = required(body, "note", 300);
+        if (note.length() < 5) {
+            throw new IllegalArgumentException("Say how the payment details were verified.");
+        }
+        l.claimStatus = CLAIM_VERIFIED;
+        l.payeeVerifiedBy = user.getUsername();
+        l.payeeVerifiedAt = LocalDateTime.now().withNano(0);
+        audit.record(user.getUsername(), "Credit claim payee verified", "Loan", ref, note);
+        return detail(l);
+    }
+
+    /** {paymentReference}: the verified claim is paid to the lender (and any surplus payee); CreditClaimPaid. */
+    @Transactional
+    public CreditViews.LoanDetail payClaim(String ref, JsonNode body) {
+        AppUser user = user("MANAGE_CREDIT");
+        Loan l = loan(ref);
+        if (CLAIM_PAID.equals(l.claimStatus)) {
+            throw new ConflictException(ref + "'s claim is already paid (" + l.claimPaidReference + ").");
+        }
+        if (!CLAIM_VERIFIED.equals(l.claimStatus)) {
+            throw new IllegalArgumentException(ref + "'s claim payee must be verified by a second person before payment.");
+        }
+        l.claimPaidReference = required(body, "paymentReference", 60);
+        l.claimPaidBy = user.getUsername();
+        l.claimPaidAt = LocalDateTime.now().withNano(0);
+        l.claimStatus = CLAIM_PAID;
+        Map<String, Object> data = base(l);
+        data.put("claimRef", l.claimRef == null ? "" : l.claimRef);
+        data.put("cause", l.claimCause);
+        data.put("lenderAmount", l.lenderAmount);
+        data.put("surplusAmount", l.estateAmount == null ? BigDecimal.ZERO : l.estateAmount);
+        data.put("paymentReference", l.claimPaidReference);
+        data.put("product", PRODUCT);
+        outbox.publish(Events.CREDIT_CLAIM_PAID, l.ref, data, user.getUsername());
+        audit.record(user.getUsername(), "Credit claim paid", "Loan", ref, l.claimPaidReference);
         return detail(l);
     }
 
@@ -536,11 +718,23 @@ public class CreditService {
         };
     }
 
+    /** The waiting period the loan was sold with for this benefit (NS-IL05-003). */
+    private static int waitingFor(Loan l, String cause) {
+        Integer months = switch (cause) {
+            case "PERMANENT_DISABILITY" -> l.pdWaitingMonths;
+            case "TEMPORARY_DISABILITY" -> l.tdWaitingMonths;
+            case "CRITICAL_ILLNESS" -> l.ciWaitingMonths;
+            default -> null;
+        };
+        return months == null ? l.waitingMonths : months;
+    }
+
     private static String causeLabel(String cause) {
         return cause.toLowerCase(Locale.ROOT).replace('_', ' ');
     }
 
-    private CreditViews.ClaimAssessment assess(Loan l, InsurancePolicy policy, Rule rule, LocalDate eventDate) {
+    private CreditViews.ClaimAssessment assess(Loan l, InsurancePolicy policy, Rule rule, LocalDate eventDate,
+            String cause) {
         List<String> notes = new ArrayList<>();
         LocalDate coverStart = coverStart(l, policy);
         boolean covered = coverStart != null && !eventDate.isBefore(coverStart)
@@ -551,23 +745,26 @@ public class CreditService {
         } else if (!covered) {
             notes.add("Cover ran from " + coverStart + " to " + coverStart.plusMonths(l.termMonths) + ".");
         }
-        boolean waiting = covered && eventDate.isBefore(coverStart.plusMonths(l.waitingMonths));
+        int waitingMonths = waitingFor(l, cause);
+        boolean waiting = covered && eventDate.isBefore(coverStart.plusMonths(waitingMonths));
         if (waiting) {
-            notes.add("Within the " + l.waitingMonths + "-month waiting period: only accidental events are covered.");
+            notes.add("Within the " + waitingMonths + "-month waiting period for " + causeLabel(cause)
+                    + ("CRITICAL_ILLNESS".equals(cause) ? "." : ": only accidental events are covered."));
         }
-        // The balance that applied on the event date: the latest applied message dated on or before it.
+        // NS-IL05-005: the balance at the product's valuation date (the event, or the day the claim is notified).
+        LocalDate valuation = "NOTIFICATION_DATE".equals(rule.valuationBasis) ? LocalDate.now() : eventDate;
         BalanceUpdate at = em.createQuery("select b from LoanBalanceUpdate b where b.loanRef = :ref and b.status = 'APPLIED'"
                         + " and b.effectiveDate <= :d order by b.effectiveDate desc, b.id desc", BalanceUpdate.class)
-                .setParameter("ref", l.ref).setParameter("d", eventDate).setMaxResults(1).getResultStream().findFirst()
+                .setParameter("ref", l.ref).setParameter("d", valuation).setMaxResults(1).getResultStream().findFirst()
                 .orElse(null);
         boolean manual = false;
         if (at == null) {
             manual = true;
-            notes.add("There is no lender balance dated on or before " + eventDate + ".");
-        } else if (ChronoUnit.DAYS.between(at.effectiveDate, eventDate) > rule.staleBalanceDays) {
+            notes.add("There is no lender balance dated on or before " + valuation + ".");
+        } else if (ChronoUnit.DAYS.between(at.effectiveDate, valuation) > rule.staleBalanceDays) {
             manual = true;
             notes.add("The latest lender balance is dated " + at.effectiveDate + ", more than "
-                    + rule.staleBalanceDays + " days before the event.");
+                    + rule.staleBalanceDays + " days before " + valuation + ".");
         }
         if (l.balanceException != null) {
             manual = true;
@@ -575,10 +772,33 @@ public class CreditService {
         }
         BigDecimal sumAssured = l.principal;
         BigDecimal balance = at == null ? null : at.balance;
-        BigDecimal lender = manual || balance == null ? null : balance.min(sumAssured);
-        BigDecimal estate = lender == null ? null : "ORIGINAL_PRINCIPAL".equals(rule.coverBasis)
-                ? sumAssured.subtract(lender) : Money.of(BigDecimal.ZERO);
-        return new CreditViews.ClaimAssessment(eventDate, covered, waiting, sumAssured, balance,
+        BigDecimal lender = null;
+        BigDecimal estate = null;
+        if (!manual && balance != null) {
+            String basis = l.coverBasis != null ? l.coverBasis : rule.coverBasis;
+            switch (cause) {
+                case "TEMPORARY_DISABILITY" -> {
+                    // The lender receives level instalments for the benefit period, never more than is owed.
+                    BigDecimal instalment = l.principal.divide(BigDecimal.valueOf(l.termMonths), 2, RoundingMode.HALF_UP);
+                    lender = instalment.multiply(BigDecimal.valueOf(rule.tdBenefitMonths)).min(balance);
+                    estate = Money.of(BigDecimal.ZERO);
+                    notes.add("Temporary disability: " + rule.tdBenefitMonths + " instalments of " + Money.text(instalment)
+                            + ", at most the balance.");
+                }
+                case "CRITICAL_ILLNESS" -> {
+                    lender = balance.multiply(rule.ciBenefitPercent).divide(HUNDRED, 2, RoundingMode.HALF_UP)
+                            .min(sumAssured);
+                    estate = Money.of(BigDecimal.ZERO);
+                    notes.add("Critical illness: " + rule.ciBenefitPercent.stripTrailingZeros().toPlainString()
+                            + "% of the balance.");
+                }
+                default -> {
+                    lender = balance.min(sumAssured);
+                    estate = "ORIGINAL_PRINCIPAL".equals(basis) ? sumAssured.subtract(lender) : Money.of(BigDecimal.ZERO);
+                }
+            }
+        }
+        return new CreditViews.ClaimAssessment(cause, valuation, eventDate, covered, waiting, sumAssured, balance,
                 at == null ? null : at.effectiveDate, manual, lender, estate, notes);
     }
 
@@ -657,7 +877,7 @@ public class CreditService {
      * {settlementReference, settlementDate}: closes the loan and its cover and raises the refund. The same reference
      * sent again returns the first result: one closure and at most one refund (AT-IL05-02).
      */
-    @Transactional
+    @Transactional(noRollbackFor = CreditManualResolutionException.class)
     public CreditViews.LoanDetail settle(String ref, JsonNode body) {
         AppUser user = user("MANAGE_CREDIT");
         Loan l = loan(ref);
@@ -677,6 +897,14 @@ public class CreditService {
         requireOpen(l);
         InsurancePolicy policy = policyOf(l);
         CreditViews.SettlementPreview p = settlement(l, policy, productRule(), date);
+        if (p.blocked() && p.blockedBecause().startsWith(STALE_PREFIX)) {
+            // NS-IL05-004: a stale balance is an exception for someone to resolve, not a silent refusal.
+            l.balanceException = clip("Settlement " + reference + " on " + date + " needs a current balance: "
+                    + p.blockedBecause(), 500);
+            audit.record(user.getUsername(), "Settlement routed to manual resolution", "Loan", l.ref, p.blockedBecause());
+            throw new CreditManualResolutionException(l.ref + " cannot be settled automatically: " + p.blockedBecause()
+                    + " A balance exception has been raised.");
+        }
         if (p.blocked()) {
             throw new IllegalArgumentException(l.ref + " cannot be settled automatically: " + p.blockedBecause());
         }
@@ -724,7 +952,10 @@ public class CreditService {
     public CreditViews.LoanView refinance(String ref, JsonNode body) {
         AppUser user = user("MANAGE_CREDIT");
         Loan old = loan(ref);
-        closeBySettlement(old, required(body, "settlementReference", 80), LocalDate.now(), user);
+        // NS-IL05-006: the old loan settles on the date the lender gives (today when none is given).
+        LocalDate settledOn = optional(body, "settlementDate") == null ? LocalDate.now()
+                : LocalDate.parse(optional(body, "settlementDate"));
+        closeBySettlement(old, required(body, "settlementReference", 80), settledOn, user);
         ObjectNode next = mapper.createObjectNode();
         next.put("lenderRef", old.lenderRef);
         next.put("lenderLoanId", required(body, "newLenderLoanId", 60));
@@ -753,6 +984,17 @@ public class CreditService {
         } else if (l.balanceException != null) {
             // NS-IL05-004: a stale or conflicting balance blocks automatic settlement.
             blocked = "a balance exception is open (" + l.balanceException + ").";
+        } else {
+            // NS-IL05-004: an out-of-date balance blocks it too (it is then raised as an exception on settlement).
+            BalanceUpdate latest = em.createQuery("select b from LoanBalanceUpdate b where b.loanRef = :ref"
+                            + " and b.status = 'APPLIED' and b.effectiveDate <= :d order by b.effectiveDate desc, b.id desc",
+                            BalanceUpdate.class)
+                    .setParameter("ref", l.ref).setParameter("d", date).setMaxResults(1).getResultStream().findFirst()
+                    .orElse(null);
+            if (latest == null || ChronoUnit.DAYS.between(latest.effectiveDate, date) > rule.staleBalanceDays) {
+                blocked = STALE_PREFIX + (latest == null ? "none is on file" : "the latest is dated "
+                        + latest.effectiveDate) + ", more than " + rule.staleBalanceDays + " days before " + date + ".";
+            }
         }
         long elapsed = coverStart == null || date.isBefore(coverStart) ? 0 : ChronoUnit.MONTHS.between(coverStart, date);
         // A month of cover that has started is earned.
@@ -861,7 +1103,7 @@ public class CreditService {
                                 b.status, b.note, b.receivedBy, b.receivedAt))
                         .toList(),
                 refund == null ? null : refundView(refund),
-                open ? assess(l, policy, rule, LocalDate.now()) : null,
+                open ? assess(l, policy, rule, LocalDate.now(), "DEATH") : null,
                 open ? settlement(l, policy, rule, LocalDate.now()) : null);
     }
 
@@ -913,7 +1155,9 @@ public class CreditService {
                 start, start == null ? null : start.plusMonths(l.termMonths), statusOf(l, policy), l.balance,
                 l.balanceAsOf, stale, l.balanceException, l.settledOn, l.settlementReference, l.claimRef, l.lenderAmount,
                 l.estateAmount, l.refinancedFrom, l.createdAt, l.claimCause, l.claimAccidental, l.claimEventDate,
-                l.payeeVerifiedBy, l.payeeVerifiedAt);
+                l.payeeVerifiedBy, l.payeeVerifiedAt, l.coverBasis, l.pdWaitingMonths, l.tdWaitingMonths,
+                l.ciWaitingMonths, l.claimStatus, l.claimRecordedBy, l.valuationDate, l.lenderAccount,
+                l.surplusPayeeName, l.surplusPayeeRelationship, l.claimPaidReference, l.claimPaidBy, l.claimPaidAt);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────
@@ -968,7 +1212,9 @@ public class CreditService {
         return new CreditViews.RuleView(r.id, r.product, r.minEntryAge, r.maxExitAge, r.exceptionExitAge,
                 r.minTermMonths, r.maxTermMonths, r.ratePerMille, r.waitingMonths, r.permanentDisability,
                 r.temporaryDisabilityOffered, r.criticalIllnessOffered, r.coverBasis, r.staleBalanceDays,
-                r.refundDeductionPercent, r.updatedBy, r.updatedAt);
+                r.refundDeductionPercent, r.updatedBy, r.updatedAt, r.maxEntryAge, r.pdWaitingMonths,
+                r.tdWaitingMonths, r.ciWaitingMonths, r.tdRatePerMille, r.ciRatePerMille, r.tdBenefitMonths,
+                r.ciBenefitPercent, r.valuationBasis, r.surplusPayee);
     }
 
     private CreditViews.RefundView refundView(Refund r) {

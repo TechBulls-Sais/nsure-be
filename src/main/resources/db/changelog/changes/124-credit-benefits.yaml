@@ -1,0 +1,44 @@
+# IL05 individual credit life benefits and claims (Nsure Life NS-IL05-001/002/003/004/005, AT-IL05-02, section 06
+# Individual Credit). Benefit-specific waiting periods, temporary disability and critical illness amounts and premium
+# loadings, a separate maximum entry age, the balance valuation date and the surplus payee are product rule values;
+# the seeded figures are DEMO DEFAULTS pending D02/D03/D07 (Credit life > Rule). A loan keeps the cover basis and
+# waiting periods it was sold with; a claim's payee is verified by a second person before it is paid.
+databaseChangeLog:
+  - changeSet:
+      id: 124-credit-benefits-schema
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: crd_product_rule
+            columns:
+              - column: {name: max_entry_age, type: int, defaultValueNumeric: 65, constraints: {nullable: false}}
+              - column: {name: pd_waiting_months, type: int, defaultValueNumeric: 3, constraints: {nullable: false}}
+              - column: {name: td_waiting_months, type: int, defaultValueNumeric: 6, constraints: {nullable: false}}
+              - column: {name: ci_waiting_months, type: int, defaultValueNumeric: 6, constraints: {nullable: false}}
+              - column: {name: td_rate_per_mille, type: 'decimal(9,4)', defaultValueNumeric: 0.15, constraints: {nullable: false}}
+              - column: {name: ci_rate_per_mille, type: 'decimal(9,4)', defaultValueNumeric: 0.20, constraints: {nullable: false}}
+              # Temporary disability pays this many level instalments of the loan; critical illness this % of the balance.
+              - column: {name: td_benefit_months, type: int, defaultValueNumeric: 6, constraints: {nullable: false}}
+              - column: {name: ci_benefit_percent, type: 'decimal(7,2)', defaultValueNumeric: 50, constraints: {nullable: false}}
+              # EVENT_DATE or NOTIFICATION_DATE: which date's balance a claim pays.
+              - column: {name: valuation_basis, type: varchar(20), defaultValue: EVENT_DATE, constraints: {nullable: false}}
+              # ESTATE or NOMINATED_BENEFICIARY: who receives a surplus over the outstanding balance.
+              - column: {name: surplus_payee, type: varchar(30), defaultValue: ESTATE, constraints: {nullable: false}}
+        - addColumn:
+            tableName: crd_loan
+            columns:
+              # What the loan was sold with (NS-IL05-001): the cover basis and each benefit's waiting period.
+              - column: {name: cover_basis, type: varchar(30)}
+              - column: {name: pd_waiting_months, type: int}
+              - column: {name: td_waiting_months, type: int}
+              - column: {name: ci_waiting_months, type: int}
+              # PENDING_VERIFICATION, VERIFIED or PAID (NS-IL05-005).
+              - column: {name: claim_status, type: varchar(30)}
+              - column: {name: claim_recorded_by, type: varchar(100)}
+              - column: {name: valuation_date, type: date}
+              - column: {name: lender_account, type: varchar(60)}
+              - column: {name: surplus_payee_name, type: varchar(150)}
+              - column: {name: surplus_payee_relationship, type: varchar(60)}
+              - column: {name: claim_paid_reference, type: varchar(60)}
+              - column: {name: claim_paid_by, type: varchar(100)}
+              - column: {name: claim_paid_at, type: timestamp(6)}
