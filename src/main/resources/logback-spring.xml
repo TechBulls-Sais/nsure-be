@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- NS-SH11-004: Spring Boot's default console and file logging, with personal identifiers masked in every message
+     (RedactingMessageConverter replaces the %m, %msg and %message conversion words). -->
+<configuration>
+    <conversionRule conversionWord="m" class="com.nsure.security.logging.RedactingMessageConverter"/>
+    <conversionRule conversionWord="msg" class="com.nsure.security.logging.RedactingMessageConverter"/>
+    <conversionRule conversionWord="message" class="com.nsure.security.logging.RedactingMessageConverter"/>
+    <include resource="org/springframework/boot/logging/logback/base.xml"/>
+</configuration>

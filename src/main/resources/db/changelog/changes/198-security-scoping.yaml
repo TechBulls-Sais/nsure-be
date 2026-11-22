@@ -1,0 +1,18 @@
+databaseChangeLog:
+  # SH11 (work package e): record sensitivity for health evidence. Staff who may read a claim open its medical reports,
+  # hospital bills and death certificates only with READ_HEALTH_EVIDENCE: the Super Admin, the Claims Assessor and the
+  # Underwriter (demo defaults, D15). Customer Support and Compliance keep reading the claim without its health files.
+  - changeSet:
+      id: 198-health-evidence-permission
+      author: nsure
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO app_permission (permission_group, code, entity_name, action_name, can_maker_checker, function_name)
+              SELECT 'documents', 'READ_HEALTH_EVIDENCE', 'HEALTH_EVIDENCE', 'READ', FALSE, 'Open health evidence (medical reports, hospital bills, death certificates)'
+              WHERE NOT EXISTS (SELECT 1 FROM app_permission x WHERE x.code = 'READ_HEALTH_EVIDENCE');
+
+              INSERT INTO app_role_permission (role_id, permission_id)
+              SELECT r.id, p.id FROM app_role r JOIN app_permission p ON p.code = 'READ_HEALTH_EVIDENCE'
+              WHERE r.name IN ('Super Admin', 'Claims Assessor', 'Underwriter')
+                AND NOT EXISTS (SELECT 1 FROM app_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);

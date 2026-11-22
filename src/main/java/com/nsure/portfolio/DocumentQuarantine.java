@@ -280,6 +280,7 @@ public class DocumentQuarantine {
         user.validateHasPermissionTo(RELEASE);
         QuarantinedUpload upload = upload(id);
         mayRead(user, upload);
+        custody.requireSensitiveAccess(upload.getDocumentType(), user, DocumentCustody.STAFF);
         custody.verify(upload.getSha256(), upload.getStoragePath(), "upload " + id);
         custody.logAccess("UPLOAD", id, upload.getOwnerRef(), upload.getFileName(), user.getUsername(),
                 DocumentCustody.STAFF);

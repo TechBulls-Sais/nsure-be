@@ -48,6 +48,12 @@ public class OpsController {
         return ops.portalAccounts();
     }
 
+    @org.springframework.web.bind.annotation.DeleteMapping("/portal-accounts/{username}")
+    public List<Map<String, Object>> removePortalAccount(@PathVariable String username,
+            @RequestBody(required = false) JsonNode body) {
+        return ops.removePortalAccount(username, body);
+    }
+
     @PutMapping("/portal-accounts")
     public List<Map<String, Object>> savePortalAccount(@RequestBody JsonNode body) {
         return ops.savePortalAccount(body);

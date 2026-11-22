@@ -46,6 +46,9 @@ public final class ApiAccessRules {
             // Customer self sign-up: creates a Pending KYC customer once the one-time code matches.
             rule(POST, "/public/signup/otp", publicAccess()),
             rule(POST, "/public/signup", publicAccess()),
+            // NS-SH11-001 customer account recovery with a code to the registered mobile (work package e).
+            rule(POST, "/public/password-reset/otp", publicAccess()),
+            rule(POST, "/public/password-reset", publicAccess()),
             // Payment settlement triggers (spec 13 §6): each only names a transaction to verify server-side, never a
             // verdict. The simulator stands in for the provider's hosted page until DPO credentials exist.
             rule(GET, "/payment/return", publicAccess()),
@@ -395,6 +398,7 @@ public final class ApiAccessRules {
             rule(POST, "/ops/portal/requests", anyOf("USE_PARTNER_PORTAL")),
             rule(GET, "/ops/portal-accounts", anyOf("READ_USER")),
             rule(PUT, "/ops/portal-accounts", anyOf("UPDATE_USER")),
+            rule(DELETE, "/ops/portal-accounts/*", anyOf("UPDATE_USER")),
             rule(GET, "/ops/portal-requests", staff()),
             rule(POST, "/ops/portal-requests/*/close", staff()),
             rule(GET, "/ops/workflow", staff()),

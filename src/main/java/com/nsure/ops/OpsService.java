@@ -66,13 +66,9 @@ public class OpsService {
     @Transactional(readOnly = true)
     public Map<String, Object> portal() {
         AppUser user = user("USE_PARTNER_PORTAL");
-        List<Map<String, Object>> account = jdbc.query("select portal_type, scope_ref from portal_account where username = ?",
-                ROW, user.getUsername());
-        if (account.isEmpty()) {
-            throw new NoAuthorizationException("This login is not linked to an agent, employer or lender.");
-        }
-        String type = (String) account.get(0).get("portalType");
-        String scope = (String) account.get(0).get("scopeRef");
+        Map<String, Object> link = partnerAccount(user);
+        String type = (String) link.get("portalType");
+        String scope = (String) link.get("scopeRef");
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("portalType", type);
         out.put("scopeRef", scope);
@@ -121,15 +117,59 @@ public class OpsService {
         return out;
     }
 
+    /**
+     * The partner a login may act for, checked on every request (AT-SH11-02, AT-SH01-03, NS-SH11-002): the portal link
+     * must not have passed its end date, and the partner itself must still be in good standing: an intermediary
+     * ACTIVE with a current appointment, a scheme not closed, a lender active. Suspending the partner closes the
+     * portal at once, for sessions already open as well.
+     */
+    public Map<String, Object> partnerAccount(AppUser user) {
+        Map<String, Object> account = first("select portal_type, scope_ref, valid_until from portal_account where"
+                + " username = ?", user.getUsername());
+        if (account == null) {
+            throw new NoAuthorizationException("This login is not linked to an agent, employer or lender.");
+        }
+        Object until = account.get("validUntil");
+        if (until instanceof LocalDate end && end.isBefore(LocalDate.now())) {
+            throw new NoAuthorizationException("Your portal access ended on " + end + ".");
+        }
+        String scope = (String) account.get("scopeRef");
+        switch (String.valueOf(account.get("portalType"))) {
+            case "AGENT" -> {
+                Map<String, Object> i = first("select status, appointment_expiry from dist_intermediary where record_ref"
+                        + " = ?", scope);
+                if (i == null || !"ACTIVE".equals(i.get("status"))) {
+                    throw new NoAuthorizationException("Intermediary " + scope + " is "
+                            + (i == null ? "not on record" : i.get("status")) + ", so its portal access is closed.");
+                }
+                if (i.get("appointmentExpiry") instanceof LocalDate expiry && expiry.isBefore(LocalDate.now())) {
+                    throw new NoAuthorizationException("Intermediary " + scope + "'s appointment expired on " + expiry
+                            + ", so its portal access is closed.");
+                }
+            }
+            case "EMPLOYER" -> {
+                Map<String, Object> scheme = first("select scheme_status from ins_scheme where record_ref = ?", scope);
+                if (scheme == null || "CLOSED".equals(scheme.get("schemeStatus"))) {
+                    throw new NoAuthorizationException("Scheme " + scope + " is closed, so its portal access is closed.");
+                }
+            }
+            default -> {
+                Map<String, Object> lender = first("select active from crd_lender where record_ref = ?", scope);
+                Object active = lender == null ? null : lender.get("active");
+                if (lender == null || Boolean.FALSE.equals(active) || Integer.valueOf(0).equals(active)) {
+                    throw new NoAuthorizationException("Lender " + scope + " is not active, so its portal access is"
+                            + " closed.");
+                }
+            }
+        }
+        return account;
+    }
+
     /** {requestType, detail}: a partner's request, acknowledged with a reference (NS-UX-005). */
     @Transactional
     public Map<String, Object> portalRequest(JsonNode body) {
         AppUser user = user("USE_PARTNER_PORTAL");
-        Map<String, Object> account = first("select portal_type, scope_ref from portal_account where username = ?",
-                user.getUsername());
-        if (account == null) {
-            throw new NoAuthorizationException("This login is not linked to an agent, employer or lender.");
-        }
+        Map<String, Object> account = partnerAccount(user);
         String type = required(body, "requestType").toUpperCase(Locale.ROOT);
         String detail = required(body, "detail");
         Integer n = jdbc.queryForObject("select count(*) from portal_request", Integer.class);
@@ -172,10 +212,32 @@ public class OpsService {
         if (!Set.of("AGENT", "EMPLOYER", "LENDER").contains(type)) {
             throw new IllegalArgumentException("portalType must be AGENT, EMPLOYER or LENDER.");
         }
+        String until = textOr(body, "validUntil", null);
+        LocalDate end = null;
+        if (until != null) {
+            try {
+                end = LocalDate.parse(until);
+            } catch (java.time.format.DateTimeParseException e) {
+                throw new IllegalArgumentException("validUntil is a date like 2027-12-31.");
+            }
+        }
         jdbc.update("delete from portal_account where username = ?", username);
-        jdbc.update("insert into portal_account (username, portal_type, scope_ref) values (?, ?, ?)", username, type,
-                required(body, "scopeRef"));
-        audit.record(user.getUsername(), "Portal access set", "User", username, type + " " + required(body, "scopeRef"));
+        jdbc.update("insert into portal_account (username, portal_type, scope_ref, valid_until) values (?, ?, ?, ?)",
+                username, type, required(body, "scopeRef"), end);
+        audit.record(user.getUsername(), "Portal access set", "User", username, type + " " + required(body, "scopeRef")
+                + (end == null ? "" : " until " + end));
+        return jdbc.query("select * from portal_account order by username", ROW);
+    }
+
+    /** {reason}: removes a login's portal link; it takes effect on the login's next request (AT-SH11-02). */
+    @Transactional
+    public List<Map<String, Object>> removePortalAccount(String username, JsonNode body) {
+        AppUser user = user("UPDATE_USER");
+        String reason = required(body, "reason");
+        if (jdbc.update("delete from portal_account where username = ?", username) == 0) {
+            throw new NotFoundException("No portal access for " + username);
+        }
+        audit.record(user.getUsername(), "Portal access removed", "User", username, reason);
         return jdbc.query("select * from portal_account order by username", ROW);
     }
 

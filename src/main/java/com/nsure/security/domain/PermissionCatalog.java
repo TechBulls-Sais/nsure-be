@@ -131,6 +131,8 @@ public enum PermissionCatalog {
     APPROVE_TEMPLATE(null),
     // Releases or rejects an upload held in quarantine (SH09A AT-SH09A-02).
     RELEASE_DOCUMENT(null),
+    // NS-SH11-002 record sensitivity: open health evidence (medical reports, hospital bills, death certificates).
+    READ_HEALTH_EVIDENCE(null),
     READ_SERVICE_CASE(null),
     MANAGE_SERVICE_CASE(null),
     READ_INTEGRATION(null),

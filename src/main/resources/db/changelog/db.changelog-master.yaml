@@ -314,3 +314,6 @@ databaseChangeLog:
   - include:
       file: changes/197-service-cases-and-evidence.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/198-security-scoping.yaml
+      relativeToChangelogFile: true
