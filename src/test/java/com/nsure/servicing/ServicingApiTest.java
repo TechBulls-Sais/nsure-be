@@ -263,9 +263,19 @@ class ServicingApiTest {
         // A paid claim already used part of the spouse's limit.
         jdbc.update("insert into clm_limit_entry (policy_ref, life_key, claim_ref, entry, amount, created_by, created_at)"
                 + " values (?, ?, 'CLM-TEST', 'CONSUMED', 4000, 'test', CURRENT_TIMESTAMP)", policy, "LIFE-" + spouse);
-        mockMvc.perform(json(post(base + "/endorsements"), "admin", "{\"type\":\"REMOVE_LIFE\",\"lifeId\":" + spouse
-                        + ",\"reason\":\"Moved out of the household\"}"))
-                .andExpect(jsonPath("$.status").value("APPLIED"));
+        String removal = JsonPath.read(mockMvc.perform(json(post(base + "/endorsements"), "admin",
+                        "{\"type\":\"REMOVE_LIFE\",\"lifeId\":" + spouse + ",\"reason\":\"Moved out of the household\"}"))
+                .andExpect(jsonPath("$.status").value("APPLIED"))
+                .andReturn().getResponse().getContentAsString(), "$.ref");
+        // NS-IL03-003: the applied endorsement reissues the policy schedule; the one it replaces is kept, superseded.
+        dispatcher.dispatch();
+        dispatcher.dispatch();
+        assertThat(jdbc.queryForList("select superseded_reason from ins_policy_document d join ins_policy p on d.policy_id = p.id"
+                + " where p.record_ref = ? and d.status = 'SUPERSEDED'", String.class, policy))
+                .containsExactly("Endorsement " + removal + " applied");
+        dispatcher.dispatch();
+        assertThat(jdbc.queryForObject("select count(*) from ins_policy_document d join ins_policy p on d.policy_id = p.id"
+                + " where p.record_ref = ?", Long.class, policy)).isEqualTo(2);
         String again = JsonPath.read(mockMvc.perform(json(post(base + "/endorsements"), "admin", "{\"type\":\"ADD_LIFE\","
                         + "\"fullName\":\"Neo Continuity\",\"relationship\":\"Spouse\",\"dateOfBirth\":\""
                         + LocalDate.now().minusYears(33) + "\",\"dobEvidence\":\"Omang 123456789\",\"reason\":\"Moved back\"}"))
