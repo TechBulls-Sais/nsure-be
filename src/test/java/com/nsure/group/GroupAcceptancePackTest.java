@@ -33,8 +33,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * #categoryChangesAreProspective}), mid-period proration and sponsor short payment ({@code
  * #invoicesProRateMidMonthJoinersAndLeaversAndShortPaymentsLeaveABalance}), scheme override above the product maximum
  * and loan early-settlement refund ({@code GroupLifeApiTest}). Rules the insurer has not supplied (late-entry window,
- * income-benefit review interval) are tested as mechanisms with the values set in the test. CI survival boundary and
- * group treaty change have no mechanism yet.
+ * income-benefit review interval) are tested as mechanisms with the values set in the test. The CI survival boundary is
+ * in {@code GroupBenefitPacksApiTest}; group treaty change has no mechanism yet.
  */
 @SpringBootTest(properties = "spring.datasource.url=jdbc:h2:mem:nsure-group;DB_CLOSE_DELAY=-1")
 @AutoConfigureMockMvc
