@@ -82,6 +82,13 @@ public class OpsService {
                         + " dist_intermediary where record_ref = ?", scope));
                 out.put("applications", jdbc.query("select record_ref, customer_name, product, amount, premium, status"
                         + " from ins_application where intermediary_code = ? order by id desc", ROW, scope));
+                // NS-IL02-002, AT-IL02-03: the agent follows the evidence asked on their applications (what, status,
+                // due date); restricted clinical evidence is named only as such and no evidence detail is ever shown.
+                out.put("evidenceRequests", jdbc.query("select e.id, c.application_ref, case when e.restricted = TRUE then"
+                        + " 'Restricted medical evidence' else e.requirement end as requirement, e.restricted, e.status,"
+                        + " e.due_date, e.reminder_count from uw_evidence e join uw_case c on c.record_ref = e.case_ref"
+                        + " join ins_application a on a.record_ref = c.application_ref where a.intermediary_code = ?"
+                        + " order by e.due_date", ROW, scope));
                 // The agent's book: policies assigned to them, and policies issued from applications they sold.
                 out.put("policies", jdbc.query("select p.record_ref, p.customer_name, p.product, p.amount, p.premium,"
                         + " p.status from ins_policy p where p.record_ref in (select a.policy_ref from"

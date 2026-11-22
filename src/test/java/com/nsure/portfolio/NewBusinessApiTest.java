@@ -261,6 +261,7 @@ class NewBusinessApiTest {
         String customer = customer("Masego Evidence", "masego.evidence", "+267 72 900 007", 38);
         String app = JsonPath.read(mockMvc.perform(json(post("/portfolio/applications"), "admin", "{\"customerRef\":\""
                                 + customer + "\",\"product\":\"Term Life\",\"tier\":\"Bronze\",\"declarationAccepted\":true,"
+                                + "\"channel\":\"AGENT\",\"intermediaryCode\":\"INT-00001\","
                                 + "\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"YES\"}}"))
                         .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.id");
         // The underwriting case asked for a restricted doctor's report: listed with its due date.
@@ -279,6 +280,15 @@ class NewBusinessApiTest {
                 .andExpect(status().isForbidden());
         mockMvc.perform(get("/portfolio/applications/evidence-queue").with(signedIn("agent", "password")))
                 .andExpect(status().isForbidden());
+        // AT-IL02-03: the selling agent sees the evidence request and its status on their portal, never what the
+        // restricted medical evidence is or says.
+        String portal = mockMvc.perform(get("/ops/portal").with(signedIn("agent", "password")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(JsonPath.<java.util.List<String>>read(portal, "$.evidenceRequests[?(@.applicationRef == '" + app
+                + "')].requirement")).containsExactly("Restricted medical evidence");
+        assertThat(JsonPath.<java.util.List<String>>read(portal, "$.evidenceRequests[?(@.applicationRef == '" + app
+                + "')].status")).containsExactly("REQUESTED");
+        assertThat(portal).doesNotContain("Attending doctor");
     }
 
     private String customer(String name, String username, String phone, int age) throws Exception {
