@@ -272,3 +272,41 @@ how the sender was verified. The bus carries `CommunicationRequested`, `MessageD
 - **Spec-named events** added beside the older names: ClaimRegistered, ClaimAssessed, ClaimDeclined, ClaimPaymentSettled,
   ReceiptConfirmed, RefundSettled, CommissionReleased, ReinsuranceBordereauSubmitted, RecoveryReceived, JournalPosted,
   FinancialExceptionRaised, GlBatchAccepted and PeriodClosed.
+
+## Demo-round additions: party, documents, communications, service desk, security, partner portals (WP e)
+
+Values marked as demo defaults are starting points for the insurer's decisions, changeable where shown.
+
+- **Party master (SH01)**: `/portfolio/parties/*` duplicates (deterministic rules plus a Jaro-Winkler name match,
+  `nsure.party.match.name-similarity` 0.9) and merges requested by one person and approved by a data steward
+  (`APPROVE_PARTY_MERGE`, Super Admin and Compliance & Auditor) who is someone else; approval moves every
+  `customer_ref` table and the merged reference resolves to the survivor. KYC verification first screens the customer
+  with the **simulated** watchlist (`pty_watchlist`, demo rows): a hit needs an EDD review by someone other than the
+  screener, a provider error is never clearance; source, reference and expiry (`nsure.kyc.review-years` 5) are kept and
+  the periodic review is queued. Email/phone changes need a one-time code on the new contact and a second person;
+  addresses, alternative identifiers, dated relationships and delegations (an expired delegation gives no portal
+  access). `/portfolio/customers/{ref}/view` is the permission-filtered customer view. Events add PartyUpdated and
+  ContactVerified.
+- **Documents (SH09A)**: identity and service-case evidence join the upload quarantine (reviewer also needs the owning
+  record's permission); a simulated check rejects the EICAR test signature (`nsure.documents.simulated-scanner`).
+  Single-use links (`/portfolio/document-links`, `nsure.documents.link-minutes` 10) bound to their requester;
+  second-person disposal of documents past retention (`/ops/documents/disposals`); generation templates
+  (`/portfolio/document-templates`) validated and published by a second person with the sample's hash.
+- **Communications (SH09B)**: transient provider errors back off (`nsure.communications.retry-base-seconds` 30,
+  `retry-max-seconds` 900, `max-attempts` 3), permanent ones go straight to the failed queue; purpose rules
+  (`com_purpose_rule`) decide fallback to Email/SMS with consent and a verified contact, logged either way; the
+  event-to-recipient matrix (`com_recipient_rule`) covers customer, intermediary and lender; SMS channel; WhatsApp
+  templates also need the simulated provider's approval; purpose choices and marketing consent carry evidence.
+- **Service desk (SH10)**: SLA in working hours of the business calendar under the workflow version the case opened
+  with; pauses only for approved reasons (`svc_pause_reason`) with evidence and a resume date, some approved by a
+  supervisor; coded resolutions and complaint outcomes; escalation levels (`svc_escalation_rule`) and unowned alerts
+  (`nsure.service-desk.escalation-cron`, `unowned-alert-hours` 4); case evidence. Workflow definitions keep versions.
+  Claim approval authority can be delegated for at most `nsure.approval.max-delegation-days` (30).
+- **Security (SH11)**: partner portals close at once when the partner is suspended/lapsed/closed or the link's
+  `valid_until` passes; health evidence needs `READ_HEALTH_EVIDENCE`; identity numbers are masked for staff without
+  `KYC_CUSTOMER`; log messages are redacted (`logback-spring.xml`); customer password recovery
+  (`/public/password-reset`); the messaging webhook secret has no default outside dev/demo.
+- **Partner workspaces (spec 04)**: `/ops/portal/submissions` (agent application, employer census/joiner-leaver/
+  renewal data, lender loan with borrower consent and the credit-life purpose, balance file, credit claim) are checked
+  against the partner's scope and processed by staff through the owning module (`/ops/portal-requests/{ref}/process`);
+  agents quote for clients in their own book (`/ops/portal/quote`).
