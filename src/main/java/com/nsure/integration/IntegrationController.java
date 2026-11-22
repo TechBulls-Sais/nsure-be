@@ -23,10 +23,12 @@ public class IntegrationController {
     private final InterfaceCatalogue catalogue;
     private final PaymentCallbacks callbacks;
     private final ScreeningService screening;
+    private final CompensationTracker compensations;
 
     public IntegrationController(IntegrationService integration, PaymentNotifications payments,
             ProviderStatusClient providerStatus, InterfaceCatalogue catalogue, PaymentCallbacks callbacks,
-            ScreeningService screening) {
+            ScreeningService screening, CompensationTracker compensations) {
+        this.compensations = compensations;
         this.callbacks = callbacks;
         this.screening = screening;
         this.integration = integration;
@@ -92,6 +94,12 @@ public class IntegrationController {
     @GetMapping("/reconciliation")
     public List<Map<String, Object>> reconciliation() {
         return catalogue.reconciliation();
+    }
+
+    /** NS-TXN-004: compensating events with the legs each must correct and whether they did. */
+    @GetMapping("/compensations")
+    public List<Map<String, Object>> compensations() {
+        return compensations.compensations();
     }
 
     @GetMapping("/screening")
