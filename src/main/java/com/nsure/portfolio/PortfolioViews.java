@@ -167,7 +167,12 @@ public final class PortfolioViews {
             boolean rated,
             String rateTableVersion,
             List<LifeCoverView> lives,
-            BigDecimal premium
+            BigDecimal premium,
+            // NS-SH03-001: the explicit inputs it was priced on.
+            java.time.LocalDate effectiveDate,
+            String currency,
+            Integer productVersion,
+            String ageBasis
     ) {
     }
 

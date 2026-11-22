@@ -65,6 +65,8 @@ public class PortfolioService {
     private final OneTimeCodes codes;
     /** SH02: product configurations are released to the catalogue and constrain what a released plan sells. */
     private final ProductRelease productRelease;
+    /** NS-SH03-001: explicit effective date, currency and versions of a calculation. */
+    private final com.nsure.rating.RatingInputs ratingInputs;
 
     public PortfolioService(
             EntityManager em,
@@ -83,8 +85,9 @@ public class PortfolioService {
             com.fasterxml.jackson.databind.ObjectMapper mapper, com.nsure.integration.Outbox outbox,
             ApplicationCapture capture, ProductConfigHistory configHistory,
             org.springframework.beans.factory.ObjectProvider<com.nsure.underwriting.UnderwritingService> underwriting,
-            OneTimeCodes codes, ProductRelease productRelease) {
+            OneTimeCodes codes, ProductRelease productRelease, com.nsure.rating.RatingInputs ratingInputs) {
         this.productRelease = productRelease;
+        this.ratingInputs = ratingInputs;
         this.codes = codes;
         this.underwriting = underwriting;
         this.configHistory = configHistory;
@@ -1245,13 +1248,36 @@ public class PortfolioService {
     }
 
     private PortfolioViews.QuoteView quote(CustomerAccount customer, String product, String tierName, JsonNode body) {
+        // NS-SH03-001: priced on an explicit date, currency and versions; a mismatch is refused, never guessed.
+        com.nsure.rating.RatingInputs.Inputs inputs = ratingInputs.read(body);
+        if (product == null || product.isBlank()) {
+            throw new com.nsure.common.exception.InvalidFieldException("product", "product is required.");
+        }
+        if (tierName == null || tierName.isBlank()) {
+            throw new com.nsure.common.exception.InvalidFieldException("tier", "Choose a plan: a quote is never priced"
+                    + " on a fallback plan.");
+        }
         CoverTier tier = tier(product, tierName);
-        Optional<RateTableService.PolicyPrice> price = price(tier, customer, lives(body));
+        Optional<String> version = ratingInputs.rateVersionFor(tier, inputs.effectiveDate(), inputs.rateTableVersion());
+        Integer productVersion = ratingInputs.productVersionFor(product, inputs.effectiveDate(), inputs.productVersion());
+        List<RateTableService.LifeToPrice> others = lives(body);
+        List<RateTableService.LifeToPrice> lives = new ArrayList<>();
+        lives.add(new RateTableService.LifeToPrice(selfRelationship(), customer.getName(), customer.getDateOfBirth()));
+        lives.addAll(others);
+        productRelease.requireEligible(tier, lives, inputs.effectiveDate());
+        Optional<RateTableService.PolicyPrice> price = version.isEmpty() ? Optional.empty()
+                : rates.priceAtVersion(tier, lives, inputs.effectiveDate(), version.get());
+        if (price.isEmpty() && !others.isEmpty()) {
+            throw new IllegalArgumentException("The " + tier.getName() + " plan has a flat premium and covers the "
+                    + "main insured only, so lives cannot be added to it.");
+        }
         return new PortfolioViews.QuoteView(
                 product, tier.getName(), tier.getCoverAmount(), price.isPresent(),
                 price.map(RateTableService.PolicyPrice::rateTableVersion).orElse(""),
                 price.map(p -> p.lines().stream().map(PortfolioService::lifeView).toList()).orElse(List.of()),
-                price.map(RateTableService.PolicyPrice::monthlyTotal).orElse(BigDecimal.valueOf(tier.getPremium())));
+                price.map(RateTableService.PolicyPrice::monthlyTotal).orElse(BigDecimal.valueOf(tier.getPremium())),
+                inputs.effectiveDate(), inputs.currency(), productVersion,
+                price.isPresent() ? com.nsure.rating.RatingInputs.AGE_BASIS : "NOT_RATED (flat premium)");
     }
 
     /** KYC review: VERIFIED (the default) or FAILED with a reason the customer sees. */
@@ -1541,6 +1567,8 @@ public class PortfolioService {
             if (!others.isEmpty()) {
                 throw new IllegalArgumentException("Choose a tier before adding lives.");
             }
+            // NS-SH03-003: no plan means no calculation; refused for planned products unless manual premiums are on.
+            ratingInputs.requireManualPremiumAllowed(row.getProduct());
             return null;
         }
         CoverTier tier = tier(row.getProduct(), tierName);
