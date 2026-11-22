@@ -60,7 +60,15 @@ public final class ReinsuranceViews {
             BigDecimal cededShare,
             BigDecimal recoveryAmount,
             String status,
-            LocalDateTime createdAt
+            LocalDateTime createdAt,
+            BigDecimal receivedAmount,
+            BigDecimal outstanding,
+            java.time.LocalDate receivedOn,
+            String receiptRef,
+            String statusNote,
+            String proposedBy,
+            String updatedBy,
+            LocalDateTime updatedAt
     ) {
     }
 
@@ -75,7 +83,12 @@ public final class ReinsuranceViews {
             BigDecimal totalCededSum,
             String status,
             String createdBy,
-            LocalDateTime createdAt
+            LocalDateTime createdAt,
+            String reinsurerRef,
+            String settlementRef,
+            String statusNote,
+            String updatedBy,
+            LocalDateTime updatedAt
     ) {
     }
 }

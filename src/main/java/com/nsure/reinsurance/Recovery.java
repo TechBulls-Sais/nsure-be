@@ -23,6 +23,9 @@ public class Recovery {
 
     public static final String EXPECTED = "EXPECTED";
     public static final String RECEIVED = "RECEIVED";
+    public static final String DISPUTED = "DISPUTED";
+    public static final String WRITE_OFF_PENDING = "WRITE_OFF_PENDING";
+    public static final String WRITTEN_OFF = "WRITTEN_OFF";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -58,6 +61,27 @@ public class Recovery {
 
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
+
+    @Column(name = "received_amount", nullable = false, precision = 15, scale = 2)
+    private BigDecimal receivedAmount = BigDecimal.ZERO;
+
+    @Column(name = "received_on")
+    private java.time.LocalDate receivedOn;
+
+    @Column(name = "receipt_ref", length = 60)
+    private String receiptRef;
+
+    @Column(name = "status_note", length = 500)
+    private String statusNote;
+
+    @Column(name = "proposed_by", length = 100)
+    private String proposedBy;
+
+    @Column(name = "updated_by", length = 100)
+    private String updatedBy;
+
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
 
     protected Recovery() {
     }
@@ -122,5 +146,64 @@ public class Recovery {
 
     public LocalDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    public BigDecimal getReceivedAmount() {
+        return receivedAmount;
+    }
+
+    public BigDecimal outstanding() {
+        return recoveryAmount.subtract(receivedAmount);
+    }
+
+    public java.time.LocalDate getReceivedOn() {
+        return receivedOn;
+    }
+
+    public String getReceiptRef() {
+        return receiptRef;
+    }
+
+    public String getStatusNote() {
+        return statusNote;
+    }
+
+    public String getProposedBy() {
+        return proposedBy;
+    }
+
+    public String getUpdatedBy() {
+        return updatedBy;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    /** Cash from the reinsurer; the recovery is received once nothing is outstanding. */
+    void receive(BigDecimal amount, java.time.LocalDate on, String reference, String actor) {
+        this.receivedAmount = receivedAmount.add(amount);
+        this.receivedOn = on;
+        this.receiptRef = reference;
+        if (outstanding().signum() == 0) {
+            this.status = RECEIVED;
+        }
+        touch(actor);
+    }
+
+    void move(String status, String note, String actor) {
+        this.status = status;
+        this.statusNote = note;
+        touch(actor);
+    }
+
+    void proposeWriteOff(String reason, String actor) {
+        this.proposedBy = actor;
+        move(WRITE_OFF_PENDING, reason, actor);
+    }
+
+    private void touch(String actor) {
+        this.updatedBy = actor;
+        this.updatedAt = LocalDateTime.now();
     }
 }

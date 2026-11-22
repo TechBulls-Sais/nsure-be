@@ -42,6 +42,20 @@ public class ReinsuranceController {
         return reinsurance.cessions(treatyRef, policyRef);
     }
 
+    /** receive {amount, receivedOn?, reference}, dispute {reason}, resolve {note}, write-off {reason}, approve-write-off / reject-write-off {note}. */
+    @PostMapping("/recoveries/{ref}/{action:receive|dispute|resolve|write-off|approve-write-off|reject-write-off}")
+    public ReinsuranceViews.RecoveryView recoveryAction(@PathVariable String ref, @PathVariable String action,
+            @RequestBody(required = false) JsonNode body) {
+        return reinsurance.recoveryAction(ref, action, body);
+    }
+
+    /** acknowledge {reinsurerRef}, correction {note}, resubmit {note}, settle {settlementRef}. */
+    @PostMapping("/bordereaux/{ref}/{action:acknowledge|correction|resubmit|settle}")
+    public ReinsuranceViews.BordereauView bordereauAction(@PathVariable String ref, @PathVariable String action,
+            @RequestBody(required = false) JsonNode body) {
+        return reinsurance.bordereauAction(ref, action, body);
+    }
+
     @GetMapping("/recoveries")
     public List<ReinsuranceViews.RecoveryView> recoveries() {
         return reinsurance.recoveries();

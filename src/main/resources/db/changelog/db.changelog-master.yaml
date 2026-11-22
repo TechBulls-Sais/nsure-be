@@ -233,3 +233,6 @@ databaseChangeLog:
   - include:
       file: changes/079-demo-only-default-accounts.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/080-reinsurance-settlement.yaml
+      relativeToChangelogFile: true

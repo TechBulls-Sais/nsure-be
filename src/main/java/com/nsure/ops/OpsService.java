@@ -244,6 +244,8 @@ public class OpsService {
                 + " detail, requested_at as opened from grp_scheme_event where status = 'PENDING'");
         add(items, "GROUP_QUOTE", "scheme-lifecycle", "select record_ref as ref, sponsor_name as subject, benefits as"
                 + " detail, created_at as opened from grp_quote where status = 'SUBMITTED'");
+        add(items, "RI_RECOVERY", "reinsurance", "select r.record_ref as ref, r.claim_ref as subject, r.status as detail,"
+                + " r.created_at as opened from ri_recovery r where r.status in ('EXPECTED', 'DISPUTED', 'WRITE_OFF_PENDING')");
         add(items, "PORTAL_REQUEST", "work-queue", "select record_ref as ref, created_by as subject, request_type as"
                 + " detail, created_at as opened from portal_request where status = 'OPEN'");
         LocalDateTime now = LocalDateTime.now();

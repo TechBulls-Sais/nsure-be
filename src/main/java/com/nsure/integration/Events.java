@@ -88,6 +88,11 @@ public final class Events {
     public static final String RECEIPT_ALLOCATED = "ReceiptAllocated";
     public static final String PAYMENT_RETURNED = "PaymentReturned";
     public static final String BENEFIT_LIMIT_CONSUMED = "BenefitLimitConsumed";
+    // NS-SH07-004/005: reinsurance settlement.
+    public static final String RECOVERY_RECEIVED = "ReinsuranceRecoveryReceived";
+    public static final String RECOVERY_WRITTEN_OFF = "ReinsuranceRecoveryWrittenOff";
+    public static final String BORDEREAU_SUBMITTED = "ReinsuranceBordereauSubmitted";
+    public static final String BORDEREAU_SETTLED = "ReinsuranceBordereauSettled";
 
     private Events() {
     }

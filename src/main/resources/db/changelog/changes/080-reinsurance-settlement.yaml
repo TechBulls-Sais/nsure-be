@@ -1,0 +1,54 @@
+# NS-SH07-004/005/006: a bordereau's acknowledgement, correction and settlement; a recovery's receipt, dispute and
+# write-off (approved by a second person); open recoveries in the work queue.
+databaseChangeLog:
+  - changeSet:
+      id: 080-reinsurance-settlement
+      author: nsure
+      changes:
+        - addColumn:
+            tableName: ri_recovery
+            columns:
+              - column: {name: received_amount, type: 'decimal(15,2)', defaultValueNumeric: 0, constraints: {nullable: false}}
+              - column: {name: received_on, type: date}
+              - column: {name: receipt_ref, type: varchar(60)}
+              - column: {name: status_note, type: varchar(500)}
+              - column: {name: proposed_by, type: varchar(100)}
+              - column: {name: updated_by, type: varchar(100)}
+              - column: {name: updated_at, type: timestamp(6)}
+        - addColumn:
+            tableName: ri_bordereau
+            columns:
+              - column: {name: reinsurer_ref, type: varchar(60)}
+              - column: {name: settlement_ref, type: varchar(60)}
+              - column: {name: status_note, type: varchar(500)}
+              - column: {name: updated_by, type: varchar(100)}
+              - column: {name: updated_at, type: timestamp(6)}
+  - changeSet:
+      id: 080-reinsurance-settlement-seed
+      author: nsure
+      comment: Posting rules for recovery cash, recovery write-off and bordereau settlement; the recovery queue entry.
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO fin_posting_rule (event_type, debit_account, credit_account, amount_field, business_domain,
+                description, status, version, updated_by, updated_at, effective_from, approval_status, approved_by, approved_at)
+              SELECT 'ReinsuranceRecoveryReceived', '1000', '1200', 'amount', 'SHARED', 'Recovery cash received from the reinsurer',
+                'ACTIVE', 1, 'system', CURRENT_TIMESTAMP, DATE '2000-01-01', 'APPROVED', 'system', CURRENT_TIMESTAMP FROM DUAL
+              WHERE NOT EXISTS (SELECT 1 FROM fin_posting_rule x WHERE x.event_type = 'ReinsuranceRecoveryReceived');
+
+              INSERT INTO fin_posting_rule (event_type, debit_account, credit_account, amount_field, business_domain,
+                description, status, version, updated_by, updated_at, effective_from, approval_status, approved_by, approved_at)
+              SELECT 'ReinsuranceRecoveryWrittenOff', '4200', '1200', 'amount', 'SHARED', 'Recovery written off as not collectable',
+                'ACTIVE', 1, 'system', CURRENT_TIMESTAMP, DATE '2000-01-01', 'APPROVED', 'system', CURRENT_TIMESTAMP FROM DUAL
+              WHERE NOT EXISTS (SELECT 1 FROM fin_posting_rule x WHERE x.event_type = 'ReinsuranceRecoveryWrittenOff');
+
+              INSERT INTO fin_posting_rule (event_type, debit_account, credit_account, amount_field, business_domain,
+                description, status, version, updated_by, updated_at, effective_from, approval_status, approved_by, approved_at)
+              SELECT 'ReinsuranceBordereauSettled', '2200', '1000', 'amount', 'SHARED', 'Ceded premium paid to the reinsurer',
+                'ACTIVE', 1, 'system', CURRENT_TIMESTAMP, DATE '2000-01-01', 'APPROVED', 'system', CURRENT_TIMESTAMP FROM DUAL
+              WHERE NOT EXISTS (SELECT 1 FROM fin_posting_rule x WHERE x.event_type = 'ReinsuranceBordereauSettled');
+
+              INSERT INTO wf_definition (code, name, team, sla_hours, steps, version_no)
+              SELECT 'RI_RECOVERY', 'Reinsurance recovery due', 'Reinsurance', 160,
+                'Claim from the reinsurer > Record the cash, a dispute or a write-off proposal > Second person approves any write-off', 1
+              FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM wf_definition x WHERE x.code = 'RI_RECOVERY');

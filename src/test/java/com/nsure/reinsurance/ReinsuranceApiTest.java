@@ -257,6 +257,69 @@ class ReinsuranceApiTest {
     }
 
     @Test
+    void aRecoveryIsReceivedDisputedAndWrittenOffOnlyWithASecondPerson() throws Exception {
+        String ceded = pendingPolicy("Whole of Life", "Bronze");
+        pay(ceded);
+        dispatcher.dispatch();
+        String claim = "CLM-9" + SEQ.incrementAndGet();
+        claimPaid(claim, ceded, "40000.00");
+        dispatcher.dispatch();
+        dispatcher.dispatch();
+        String ref = (String) recoveries(claim).get(0).get("ref");
+        String base = "/reinsurance/recoveries/" + ref + "/";
+
+        // NS-SH07-005: part of the cash arrives; the rest stays receivable.
+        mockMvc.perform(json(post(base + "receive"), "reinsurance", "{\"amount\":\"20000\",\"reference\":\"HR-1\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post(base + "receive"), "reinsurance", "{\"amount\":\"4000\",\"reference\":\"HR-1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("EXPECTED"))
+                .andExpect(jsonPath("$.outstanding").value(6000.0));
+        assertThat(eventCount(Events.RECOVERY_RECEIVED, ceded)).isEqualTo(1);
+
+        mockMvc.perform(json(post(base + "dispute"), "reinsurance", "{\"reason\":\"Reinsurer queries the cause of death\"}"))
+                .andExpect(jsonPath("$.status").value("DISPUTED"));
+        mockMvc.perform(json(post(base + "write-off"), "reinsurance", "{\"reason\":\"Treaty exclusion confirmed\"}"))
+                .andExpect(jsonPath("$.status").value("WRITE_OFF_PENDING"))
+                .andExpect(jsonPath("$.proposedBy").value("reinsurance"));
+        // Four eyes: the proposer cannot decide it; a different approver can.
+        mockMvc.perform(json(post(base + "approve-write-off"), "reinsurance", "{\"note\":\"ok\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post(base + "approve-write-off"), "admin", "{\"note\":\"Exclusion applies\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("WRITTEN_OFF"));
+        assertThat(eventCount(Events.RECOVERY_WRITTEN_OFF, ceded)).isEqualTo(1);
+        mockMvc.perform(json(post(base + "receive"), "reinsurance", "{\"amount\":\"1\",\"reference\":\"HR-2\"}"))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void aBordereauIsAcknowledgedCorrectedAndSettledInOrder() throws Exception {
+        String policy = pendingPolicy("Whole of Life", "Bronze");
+        pay(policy);
+        dispatcher.dispatch();
+        String period = YearMonth.now().minusMonths(0).toString();
+        String ref = JsonPath.read(mockMvc.perform(json(post("/reinsurance/bordereaux"), "reinsurance",
+                        "{\"treatyRef\":\"TRT-00001\",\"period\":\"" + period + "\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), "$.ref");
+        String base = "/reinsurance/bordereaux/" + ref + "/";
+        mockMvc.perform(json(post(base + "settle"), "reinsurance", "{\"settlementRef\":\"EFT-1\"}"))
+                .andExpect(status().isConflict());
+        mockMvc.perform(json(post(base + "correction"), "reinsurance", "{\"note\":\"Missing date of birth column\"}"))
+                .andExpect(jsonPath("$.status").value("CORRECTION_REQUESTED"));
+        mockMvc.perform(json(post(base + "resubmit"), "reinsurance", "{\"note\":\"Date of birth added\"}"))
+                .andExpect(jsonPath("$.status").value("SUBMITTED"));
+        mockMvc.perform(json(post(base + "acknowledge"), "reinsurance", "{\"reinsurerRef\":\"HR-ACK-77\"}"))
+                .andExpect(jsonPath("$.status").value("ACKNOWLEDGED"))
+                .andExpect(jsonPath("$.reinsurerRef").value("HR-ACK-77"));
+        mockMvc.perform(json(post(base + "settle"), "finance", "{\"settlementRef\":\"EFT-1\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post(base + "settle"), "reinsurance", "{\"settlementRef\":\"EFT-1\"}"))
+                .andExpect(jsonPath("$.status").value("SETTLED"))
+                .andExpect(jsonPath("$.settlementRef").value("EFT-1"));
+    }
+
+    @Test
     void aBordereauReportsTheMonthsUnreportedCessionsOnceWithControlTotals() throws Exception {
         String policy = pendingPolicy("Whole of Life", "Bronze");
         pay(policy);

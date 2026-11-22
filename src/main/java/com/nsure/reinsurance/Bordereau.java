@@ -19,6 +19,9 @@ import java.util.UUID;
 public class Bordereau {
 
     public static final String SUBMITTED = "SUBMITTED";
+    public static final String ACKNOWLEDGED = "ACKNOWLEDGED";
+    public static final String CORRECTION_REQUESTED = "CORRECTION_REQUESTED";
+    public static final String SETTLED = "SETTLED";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -52,6 +55,21 @@ public class Bordereau {
 
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
+
+    @Column(name = "reinsurer_ref", length = 60)
+    private String reinsurerRef;
+
+    @Column(name = "settlement_ref", length = 60)
+    private String settlementRef;
+
+    @Column(name = "status_note", length = 500)
+    private String statusNote;
+
+    @Column(name = "updated_by", length = 100)
+    private String updatedBy;
+
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
 
     protected Bordereau() {
     }
@@ -111,5 +129,44 @@ public class Bordereau {
 
     public LocalDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    public String getReinsurerRef() {
+        return reinsurerRef;
+    }
+
+    public String getSettlementRef() {
+        return settlementRef;
+    }
+
+    public String getStatusNote() {
+        return statusNote;
+    }
+
+    public String getUpdatedBy() {
+        return updatedBy;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    void move(String status, String note, String actor) {
+        this.status = status;
+        if (note != null) {
+            this.statusNote = note;
+        }
+        this.updatedBy = actor;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    void acknowledged(String reinsurerRef, String actor) {
+        this.reinsurerRef = reinsurerRef;
+        move(ACKNOWLEDGED, null, actor);
+    }
+
+    void settled(String settlementRef, String actor) {
+        this.settlementRef = settlementRef;
+        move(SETTLED, null, actor);
     }
 }

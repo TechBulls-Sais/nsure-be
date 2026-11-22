@@ -32,10 +32,12 @@ public class ReinsuranceService {
 
     private final EntityManager em;
     private final PlatformSecurityContext security;
+    private final com.nsure.integration.Outbox outbox;
 
-    public ReinsuranceService(EntityManager em, PlatformSecurityContext security) {
+    public ReinsuranceService(EntityManager em, PlatformSecurityContext security, com.nsure.integration.Outbox outbox) {
         this.em = em;
         this.security = security;
+        this.outbox = outbox;
     }
 
     // ── treaties ──────────────────────────────────────────────────────────────────────────────────
@@ -215,10 +217,138 @@ public class ReinsuranceService {
         em.flush();
         bordereau.numbered();
         cessions.forEach(c -> c.reportedOn(bordereau));
+        submitted(bordereau, user.getUsername());
         return view(bordereau);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────
+
+    // ── recovery settlement (NS-SH07-005) and bordereau state (NS-SH07-004) ─────────────────────────
+
+    /**
+     * Acts on a recovery. {@code receive} {amount, receivedOn?, reference}: cash from the reinsurer, part or whole;
+     * {@code dispute} {reason}; {@code resolve} {note}: back to expected; {@code write-off} {reason}: proposes writing
+     * off what is outstanding; {@code approve-write-off} / {@code reject-write-off} {note}: decided by someone other
+     * than the proposer. The customer's claim payment is never touched (AT-SH07-03).
+     */
+    @Transactional
+    public ReinsuranceViews.RecoveryView recoveryAction(String ref, String action, JsonNode body) {
+        boolean decision = action.endsWith("-write-off") && !"write-off".equals(action);
+        AppUser user = user(decision ? "APPROVE_TREATY" : "MANAGE_REINSURANCE");
+        Recovery r = em.createQuery("select r from Recovery r join fetch r.treaty where r.ref = :ref", Recovery.class)
+                .setParameter("ref", ref).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Recovery " + ref + " not found"));
+        String status = r.getStatus();
+        switch (action) {
+            case "receive" -> {
+                requireStatus(r, Recovery.EXPECTED, Recovery.DISPUTED);
+                BigDecimal amount;
+                try {
+                    amount = new BigDecimal(required(body, "amount", 20)).setScale(2, java.math.RoundingMode.HALF_UP);
+                } catch (NumberFormatException ex) {
+                    throw new IllegalArgumentException("amount must be a number.");
+                }
+                if (amount.signum() <= 0 || amount.compareTo(r.outstanding()) > 0) {
+                    throw new IllegalArgumentException("The amount received must be more than zero and no more than the "
+                            + r.outstanding().toPlainString() + " outstanding.");
+                }
+                LocalDate on = body.hasNonNull("receivedOn") ? LocalDate.parse(body.get("receivedOn").asText()) : LocalDate.now();
+                if (on.isAfter(LocalDate.now())) {
+                    throw new IllegalArgumentException("A receipt cannot be dated in the future.");
+                }
+                r.receive(amount, on, required(body, "reference", 60), user.getUsername());
+                outbox.publish(com.nsure.integration.Events.RECOVERY_RECEIVED, r.getRef(), Map.of("amount",
+                        amount.toPlainString(), "claimRef", r.getClaimRef(), "policyRef", r.getPolicyRef(),
+                        "treatyRef", r.getTreaty().getRef(), "recoveryRef", r.getRef()), user.getUsername());
+            }
+            case "dispute" -> {
+                requireStatus(r, Recovery.EXPECTED);
+                r.move(Recovery.DISPUTED, required(body, "reason", 500), user.getUsername());
+            }
+            case "resolve" -> {
+                requireStatus(r, Recovery.DISPUTED);
+                r.move(Recovery.EXPECTED, required(body, "note", 500), user.getUsername());
+            }
+            case "write-off" -> {
+                requireStatus(r, Recovery.EXPECTED, Recovery.DISPUTED);
+                r.proposeWriteOff(required(body, "reason", 500), user.getUsername());
+            }
+            case "approve-write-off", "reject-write-off" -> {
+                requireStatus(r, Recovery.WRITE_OFF_PENDING);
+                if (user.getUsername().equalsIgnoreCase(r.getProposedBy())) {
+                    throw new NoAuthorizationException("You proposed this write-off; another user must decide it.");
+                }
+                String note = required(body, "note", 500);
+                if ("approve-write-off".equals(action)) {
+                    BigDecimal amount = r.outstanding();
+                    r.move(Recovery.WRITTEN_OFF, note, user.getUsername());
+                    outbox.publish(com.nsure.integration.Events.RECOVERY_WRITTEN_OFF, r.getRef(), Map.of("amount",
+                            amount.toPlainString(), "claimRef", r.getClaimRef(), "policyRef", r.getPolicyRef(),
+                            "treatyRef", r.getTreaty().getRef(), "recoveryRef", r.getRef()), user.getUsername());
+                } else {
+                    r.move(Recovery.EXPECTED, note, user.getUsername());
+                }
+            }
+            default -> throw new IllegalArgumentException("Unknown recovery action " + action + ".");
+        }
+        return view(r);
+    }
+
+    /**
+     * Moves a bordereau on. {@code acknowledge} {reinsurerRef}; {@code correction} {note}: the reinsurer asked for a
+     * correction; {@code resubmit} {note}: sent again once corrected; {@code settle} {settlementRef}: the ceded
+     * premium on it was paid to the reinsurer.
+     */
+    @Transactional
+    public ReinsuranceViews.BordereauView bordereauAction(String ref, String action, JsonNode body) {
+        AppUser user = user("MANAGE_REINSURANCE");
+        Bordereau b = em.createQuery("select b from Bordereau b join fetch b.treaty where b.ref = :ref", Bordereau.class)
+                .setParameter("ref", ref).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Bordereau " + ref + " not found"));
+        switch (action) {
+            case "acknowledge" -> {
+                requireStatus(b.getRef(), b.getStatus(), Bordereau.SUBMITTED);
+                b.acknowledged(required(body, "reinsurerRef", 60), user.getUsername());
+            }
+            case "correction" -> {
+                requireStatus(b.getRef(), b.getStatus(), Bordereau.SUBMITTED, Bordereau.ACKNOWLEDGED);
+                b.move(Bordereau.CORRECTION_REQUESTED, required(body, "note", 500), user.getUsername());
+            }
+            case "resubmit" -> {
+                requireStatus(b.getRef(), b.getStatus(), Bordereau.CORRECTION_REQUESTED);
+                b.move(Bordereau.SUBMITTED, required(body, "note", 500), user.getUsername());
+                submitted(b, user.getUsername());
+            }
+            case "settle" -> {
+                requireStatus(b.getRef(), b.getStatus(), Bordereau.ACKNOWLEDGED);
+                b.settled(required(body, "settlementRef", 60), user.getUsername());
+                if (b.getTotalCededPremium().signum() > 0) {
+                    outbox.publish(com.nsure.integration.Events.BORDEREAU_SETTLED, b.getRef(), Map.of("amount",
+                            b.getTotalCededPremium().toPlainString(), "treatyRef", b.getTreaty().getRef(),
+                            "period", b.getPeriod()), user.getUsername());
+                }
+            }
+            default -> throw new IllegalArgumentException("Unknown bordereau action " + action + ".");
+        }
+        return view(b);
+    }
+
+    private void submitted(Bordereau b, String actor) {
+        outbox.publish(com.nsure.integration.Events.BORDEREAU_SUBMITTED, b.getRef(), Map.of("treatyRef",
+                b.getTreaty().getRef(), "period", b.getPeriod(), "records", b.getRecordCount(),
+                "cededPremium", b.getTotalCededPremium().toPlainString()), actor);
+    }
+
+    private static void requireStatus(Recovery r, String... allowed) {
+        requireStatus(r.getRef(), r.getStatus(), allowed);
+    }
+
+    private static void requireStatus(String ref, String status, String... allowed) {
+        if (!java.util.Arrays.asList(allowed).contains(status)) {
+            throw new ConflictException(ref + " is " + status.toLowerCase(Locale.ROOT).replace('_', ' ')
+                    + "; that step does not apply.");
+        }
+    }
 
     private AppUser user(String permission) {
         AppUser user = security.authenticatedUser();
@@ -280,13 +410,16 @@ public class ReinsuranceService {
     private static ReinsuranceViews.RecoveryView view(Recovery r) {
         return new ReinsuranceViews.RecoveryView(r.getRef(), r.getTreaty().getRef(), r.getTreaty().getName(),
                 r.getTreaty().getReinsurer(), r.getClaimRef(), r.getPolicyRef(), r.getClaimAmount(), r.getCededShare(),
-                r.getRecoveryAmount(), r.getStatus(), r.getCreatedAt());
+                r.getRecoveryAmount(), r.getStatus(), r.getCreatedAt(), r.getReceivedAmount(), r.outstanding(),
+                r.getReceivedOn(), r.getReceiptRef(), r.getStatusNote(), r.getProposedBy(), r.getUpdatedBy(),
+                r.getUpdatedAt());
     }
 
     private static ReinsuranceViews.BordereauView view(Bordereau b) {
         return new ReinsuranceViews.BordereauView(b.getRef(), b.getTreaty().getRef(), b.getTreaty().getName(),
                 b.getTreaty().getReinsurer(), b.getPeriod(), b.getRecordCount(), b.getTotalCededPremium(),
-                b.getTotalCededSum(), b.getStatus(), b.getCreatedBy(), b.getCreatedAt());
+                b.getTotalCededSum(), b.getStatus(), b.getCreatedBy(), b.getCreatedAt(), b.getReinsurerRef(),
+                b.getSettlementRef(), b.getStatusNote(), b.getUpdatedBy(), b.getUpdatedAt());
     }
 
     private static String required(JsonNode body, String field, int max) {
