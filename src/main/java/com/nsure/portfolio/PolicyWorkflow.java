@@ -1,6 +1,7 @@
 package com.nsure.portfolio;
 
 import com.nsure.common.exception.NotFoundException;
+import com.nsure.common.lifecycle.Lifecycle;
 import com.nsure.controls.ControlKey;
 import com.nsure.controls.ControlService;
 import com.nsure.integration.Events;
@@ -24,21 +25,25 @@ import org.springframework.transaction.annotation.Transactional;
  * nsure_integrations/payments.activate_policy):
  *
  * <pre>
- *   buy ─▶ PENDING PAYMENT ──paid──▶ ACTIVE ──grace ends unpaid (daily)──▶ ACTIVE - NO COVER ──3 months──▶ LAPSED
- *               │      └──payment window passes (hourly, or on a payment attempt)──▶ EXPIRED    │
- *               └──cancel (with a reason)──▶ CANCELLED        premium collected: cover resumes ◀─┘
- *   ACTIVE / ACTIVE - NO COVER ──written request (cooling-off flagged within 30 days)──▶ CANCELLED
- *   ACTIVE ──death claim on the principal paid, no spouse covered (TC-24)──▶ CLAIMED   (spec 10 §1.3)
+ *   buy ─▶ PENDING PAYMENT ──paid──▶ ACTIVE ──premium overdue (daily)──▶ GRACE ──grace ends unpaid──▶ ACTIVE - NO COVER
+ *               │      └──payment window passes (hourly, or on a payment attempt)──▶ EXPIRED     paid ◀─┘   │ 3 months
+ *               └──cancel (with a reason)──▶ CANCELLED        premium collected: cover resumes ◀─┘      ▼
+ *                                                                                                     LAPSED
+ *   ACTIVE / GRACE / ACTIVE - NO COVER ──written request (cooling-off flagged within 30 days)──▶ CANCELLED
+ *   ACTIVE / GRACE ──death claim on the principal paid, no spouse covered (TC-24)──▶ CLAIMED   (spec 10 §1.3)
  * </pre>
  *
- * A premium paid on an ACTIVE policy moves its next due date and grace period on. Only this class writes a
- * policy's status once it exists.
+ * Grace is in cover (§09-POLICY: grace need not mean cover has ceased). A premium paid on an ACTIVE or GRACE policy
+ * moves its next due date and grace period on. Only this class writes a policy's status once it exists, and every
+ * write goes through {@link #LIFECYCLE}.
  */
 @Service
 public class PolicyWorkflow {
 
     public static final String PENDING_PAYMENT = "Pending Payment";
     public static final String ACTIVE = "Active";
+    /** §09-POLICY: the premium is overdue and the grace period has not ended; cover continues. */
+    public static final String GRACE = "Grace";
     public static final String EXPIRED = "Expired";
     public static final String CANCELLED = "Cancelled";
     public static final String LAPSED = "Lapsed";
@@ -50,6 +55,36 @@ public class PolicyWorkflow {
     /** A premium arrived while cover was off, on a product whose rules need the reinstatement approved (NS-IL03-004). */
     public static final String REINSTATEMENT_PENDING = "Reinstatement Pending";
     public static final String TERMINATED = "Terminated";
+
+    /** The policy covers its lives today: Active, or in grace with the premium overdue. */
+    public static final Set<String> IN_COVER = Set.of(ACTIVE, GRACE);
+    /** In force, with or without cover: the contract has not ended and has been paid for at least once. */
+    public static final Set<String> IN_FORCE = Set.of(ACTIVE, GRACE, ACTIVE_NO_COVER, REINSTATEMENT_PENDING);
+
+    /** The policy state machine (§09-POLICY). Each command checks its own authority before it moves the policy. */
+    public static final Lifecycle LIFECYCLE = Lifecycle.of("Policy")
+            .initial(PENDING_PAYMENT, ACTIVE)
+            .move("first-premium", ACTIVE, PENDING_PAYMENT)
+            .move("payment-window-passed", EXPIRED, PENDING_PAYMENT)
+            .move("premium-overdue", GRACE, ACTIVE)
+            .move("premium-received", ACTIVE, GRACE)
+            .move("grace-ended", ACTIVE_NO_COVER, ACTIVE, GRACE)
+            .move("cover-resumed", ACTIVE, ACTIVE_NO_COVER)
+            .move("reinstatement-held", REINSTATEMENT_PENDING, ACTIVE_NO_COVER)
+            .move("reinstatement-approved", ACTIVE, REINSTATEMENT_PENDING)
+            .move("reinstatement-declined", ACTIVE_NO_COVER, REINSTATEMENT_PENDING)
+            .move("lapse", LAPSED, ACTIVE_NO_COVER)
+            .move("cancel", CANCELLED, PENDING_PAYMENT, ACTIVE, GRACE, ACTIVE_NO_COVER)
+            .move("claimed", CLAIMED, ACTIVE, GRACE, ACTIVE_NO_COVER)
+            .move("terminate", TERMINATED, ACTIVE, GRACE, ACTIVE_NO_COVER, REINSTATEMENT_PENDING)
+            .build();
+
+    /** Every status write: refused (409) unless the policy lifecycle has the move. */
+    private static void move(InsurancePolicy policy, String to) {
+        LIFECYCLE.check(policy.getRef(), policy.getStatus(), to);
+        policy.setStatus(to);
+    }
+
     /** TC-18 / TC-20: months a policy stays in force without cover before it lapses. */
     static final int NO_COVER_MONTHS = 3;
     /** TC-23: cooling-off period after the policy start date. */
@@ -83,6 +118,8 @@ public class PolicyWorkflow {
 
     /** A customer's purchase: reserved, unpaid, and confers no cover until paid within the payment window. */
     void openPending(InsurancePolicy policy) {
+        // Whatever status the client sent, a new policy starts here.
+        LIFECYCLE.check(policy.getRef(), null, PENDING_PAYMENT);
         policy.setStatus(PENDING_PAYMENT);
         policy.setPaymentDueBy(LocalDateTime.now().plusHours(paymentWindowHours()));
         // The terms it is sold under today stay with it for life (NS-SH02-004, NS-IL03-001).
@@ -102,6 +139,7 @@ public class PolicyWorkflow {
 
     /** Staff-created cover needs no online payment and starts active today (demo server admin_create_policy). */
     void startActive(InsurancePolicy policy) {
+        LIFECYCLE.check(policy.getRef(), null, ACTIVE);
         policy.setStatus(ACTIVE);
         setCoverDates(policy, LocalDate.now());
     }
@@ -138,7 +176,7 @@ public class PolicyWorkflow {
         switch (previous) {
             case PENDING_PAYMENT -> {
                 setCoverDates(policy, today);
-                policy.setStatus(ACTIVE);
+                move(policy, ACTIVE);
                 policy.setPaymentDueBy(null);
                 policy.setRecordDate(today.format(DISPLAY));
                 CustomerAccount account = account(policy);
@@ -152,12 +190,17 @@ public class PolicyWorkflow {
                 details = "First premium " + bwp(policy.getPremium()) + " by " + paymentMethod
                         + " · cover from " + policy.getCoverStartDate() + ", next due " + policy.getNextPremiumDue();
             }
-            case ACTIVE -> {
+            case ACTIVE, GRACE -> {
                 LocalDate from = policy.getNextPremiumDue() == null ? today : policy.getNextPremiumDue();
                 LocalDate next = from.plusMonths(months(policy));
                 policy.setNextPremiumDue(next);
                 policy.setGracePeriodEnd(next.plusDays(terms(policy).getGracePeriodDays()));
-                details = "Premium " + bwp(policy.getPremium()) + " by " + paymentMethod + " · next due " + next;
+                // Still behind after this premium: the next one is already overdue, so the policy stays in grace.
+                move(policy, next.isBefore(today) ? GRACE : ACTIVE);
+                details = "Premium " + bwp(policy.getPremium()) + " by " + paymentMethod + " · next due " + next
+                        + (GRACE.equals(previous) && ACTIVE.equals(policy.getStatus()) ? " · out of grace" : "")
+                        + (GRACE.equals(policy.getStatus()) ? " · still in grace: the premium due " + next
+                                + " is overdue" : "");
             }
             case ACTIVE_NO_COVER -> {
                 // TC-18: cover resumes immediately; the original cover start stands, so no new waiting period.
@@ -165,7 +208,7 @@ public class PolicyWorkflow {
                 LocalDate next = today.plusMonths(months(policy));
                 // NS-IL03-004: a late premium restores cover by itself only where the product's rules allow it.
                 reinstatementHeld = reinstatementNeedsApproval(policy.getProduct());
-                policy.setStatus(reinstatementHeld ? REINSTATEMENT_PENDING : ACTIVE);
+                move(policy, reinstatementHeld ? REINSTATEMENT_PENDING : ACTIVE);
                 policy.setNextPremiumDue(next);
                 policy.setGracePeriodEnd(next.plusDays(terms(policy).getGracePeriodDays()));
                 details = "Premium " + bwp(policy.getPremium()) + " by " + paymentMethod + (reinstatementHeld
@@ -228,7 +271,7 @@ public class PolicyWorkflow {
         int months = months(policy);
         return switch (policy.getStatus()) {
             case PENDING_PAYMENT -> new Period(today, today.plusMonths(months).minusDays(1), "FIRST_PREMIUM");
-            case ACTIVE -> {
+            case ACTIVE, GRACE -> {
                 LocalDate start = policy.getNextPremiumDue() == null ? today : policy.getNextPremiumDue();
                 yield new Period(start, start.plusMonths(months).minusDays(1), "RENEWAL");
             }
@@ -282,13 +325,13 @@ public class PolicyWorkflow {
         }
         expireIfOverdue(policy);
         String previous = policy.getStatus();
-        if (!Set.of(PENDING_PAYMENT, ACTIVE, ACTIVE_NO_COVER).contains(previous)) {
+        if (LIFECYCLE.find("cancel", previous) == null) {
             throw new IllegalArgumentException("Policy " + ref + " is " + previous + " and can no longer be cancelled.");
         }
         int coolingOffDays = productRule(policy.getProduct(), "coolingOffDays", COOLING_OFF_DAYS);
         boolean coolingOff = !PENDING_PAYMENT.equals(previous) && policy.getCoverStartDate() != null
                 && !LocalDate.now().isAfter(policy.getCoverStartDate().plusDays(coolingOffDays));
-        policy.setStatus(CANCELLED);
+        move(policy, CANCELLED);
         policy.terminated("CANCELLATION", LocalDate.now().plusDays(1));
         policy.setPaymentDueBy(null);
         policy.review(actor, note);
@@ -319,28 +362,30 @@ public class PolicyWorkflow {
     }
 
     /**
-     * Daily sweep (spec 10 §7): Active with the grace period over and no premium → Active - No Cover (TC-18); then
-     * Active - No Cover for more than three months after cover ended → Lapsed (TC-20). Lapse is terminal: revival is
-     * a new policy. Returns the policies that moved.
+     * Daily sweep (spec 10 §7): Active with the premium overdue → Grace, still in cover (§09-POLICY); Active or Grace
+     * with the grace period over and no premium → Active - No Cover (TC-18); then Active - No Cover for more than
+     * three months after cover ended → Lapsed (TC-20). Lapse is terminal: revival is a new policy. Returns the
+     * policies that moved.
      */
     @Transactional
     public List<String> lapseOverdue() {
         LocalDate today = LocalDate.now();
+        List<String> moved = new java.util.ArrayList<>(enterGrace(today));
         List<InsurancePolicy> overdue = em.createQuery(
-                        "select p from InsurancePolicy p where p.status = :status and p.gracePeriodEnd is not null"
+                        "select p from InsurancePolicy p where p.status in :status and p.gracePeriodEnd is not null"
                                 + " and p.gracePeriodEnd < :today", InsurancePolicy.class)
-                .setParameter("status", ACTIVE)
+                .setParameter("status", IN_COVER)
                 .setParameter("today", today)
                 .getResultList();
-        List<String> moved = new java.util.ArrayList<>();
         for (InsurancePolicy policy : overdue) {
             // NS-SH04-004: money that may still arrive or be applied holds the cover decision.
             if (!billing.unresolvedPayments(policy.getRef()).isEmpty()) {
                 continue;
             }
-            policy.setStatus(ACTIVE_NO_COVER);
+            String previous = policy.getStatus();
+            move(policy, ACTIVE_NO_COVER);
             // Cover ended the day after grace ran out, whenever the sweep notices it (NS-DAT-002).
-            history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Cover Ended", ACTIVE,
+            history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Cover Ended", previous,
                     ACTIVE_NO_COVER, "Grace period ended " + policy.getGracePeriodEnd() + " with the premium due "
                             + policy.getNextPremiumDue() + " unpaid. The policy stays in force without cover for "
                             + productRule(policy.getProduct(), "noCoverMonths", NO_COVER_MONTHS) + " months; paying resumes cover with no new waiting period.",
@@ -365,7 +410,7 @@ public class PolicyWorkflow {
                     || !billing.unresolvedPayments(policy.getRef()).isEmpty()) {
                 continue;
             }
-            policy.setStatus(LAPSED);
+            move(policy, LAPSED);
             policy.setLapseDate(today);
             policy.terminated("LAPSE", today);
             publishTerminated(policy, "LAPSE", "No premium within " + noCoverMonths + " months of cover ending",
@@ -380,11 +425,41 @@ public class PolicyWorkflow {
     }
 
     /**
+     * Active policies whose premium fell due and is unpaid, with grace still running, enter Grace from the day after
+     * the due date (NS-DAT-002). Cover continues; PolicyGraceStarted lets reminders follow.
+     */
+    private List<String> enterGrace(LocalDate today) {
+        List<InsurancePolicy> due = em.createQuery("select p from InsurancePolicy p where p.status = :status"
+                        + " and p.nextPremiumDue is not null and p.nextPremiumDue < :today"
+                        + " and p.gracePeriodEnd is not null and p.gracePeriodEnd >= :today", InsurancePolicy.class)
+                .setParameter("status", ACTIVE)
+                .setParameter("today", today)
+                .getResultList();
+        List<String> moved = new java.util.ArrayList<>();
+        for (InsurancePolicy policy : due) {
+            move(policy, GRACE);
+            history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Grace Started", ACTIVE,
+                    GRACE, "Premium due " + policy.getNextPremiumDue() + " unpaid · cover continues until the grace"
+                            + " period ends " + policy.getGracePeriodEnd(), WorkflowHistory.SYSTEM,
+                    policy.getNextPremiumDue().plusDays(1));
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("policyRef", policy.getRef());
+            data.put("customerName", policy.getCustomerName());
+            data.put("product", policy.getProduct());
+            data.put("premiumDue", policy.getNextPremiumDue().toString());
+            data.put("graceEnds", policy.getGracePeriodEnd().toString());
+            outbox.publish(Events.POLICY_GRACE_STARTED, policy.getRef(), data, WorkflowHistory.SYSTEM);
+            moved.add(policy.getRef());
+        }
+        return moved;
+    }
+
+    /**
      * Spec 10 W-7 / TC-24: a paid death claim on the principal ends the policy unless a spouse is covered (then it
      * survives and ownership transfers). A claim for the full sum assured is taken as the principal's death.
      */
     void terminateIfClaimEndsCover(InsurancePolicy policy, InsuranceClaim claim, String actor) {
-        if (!Set.of(ACTIVE, ACTIVE_NO_COVER).contains(policy.getStatus())
+        if (LIFECYCLE.find("claimed", policy.getStatus()) == null
                 || claim.getPayoutAmount() == null || claim.getPayoutAmount().compareTo(policy.getAmount()) < 0) {
             return;
         }
@@ -399,7 +474,7 @@ public class PolicyWorkflow {
             return;
         }
         String previous = policy.getStatus();
-        policy.setStatus(CLAIMED);
+        move(policy, CLAIMED);
         policy.terminated("DEATH", LocalDate.now());
         publishTerminated(policy, "DEATH", "Ended by claim " + claim.getRef(), actor);
         // The claim's event ended the cover: nothing after it is covered.
@@ -418,7 +493,7 @@ public class PolicyWorkflow {
                 || !policy.getPaymentDueBy().isBefore(LocalDateTime.now())) {
             return false;
         }
-        policy.setStatus(EXPIRED);
+        move(policy, EXPIRED);
         policy.terminated("EXPIRY", LocalDate.now());
         history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Expired", PENDING_PAYMENT,
                 EXPIRED, "Not paid by " + policy.getPaymentDueBy().withNano(0), WorkflowHistory.SYSTEM);
@@ -516,7 +591,7 @@ public class PolicyWorkflow {
         if (!REINSTATEMENT_PENDING.equals(policy.getStatus())) {
             throw new IllegalArgumentException("Policy " + ref + " has no reinstatement awaiting approval.");
         }
-        policy.setStatus(ACTIVE);
+        move(policy, ACTIVE);
         history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Reinstated", REINSTATEMENT_PENDING, ACTIVE,
                 "Reinstatement approved: " + note, actor, LocalDate.now());
         publishReinstated(policy, note, actor);
@@ -530,7 +605,7 @@ public class PolicyWorkflow {
         if (!REINSTATEMENT_PENDING.equals(policy.getStatus())) {
             throw new IllegalArgumentException("Policy " + ref + " has no reinstatement awaiting approval.");
         }
-        policy.setStatus(ACTIVE_NO_COVER);
+        move(policy, ACTIVE_NO_COVER);
         history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Reinstatement Declined",
                 REINSTATEMENT_PENDING, ACTIVE_NO_COVER, "Cover stays off; the premium received is refundable: " + note,
                 actor);
@@ -545,10 +620,10 @@ public class PolicyWorkflow {
     public InsurancePolicy terminate(String ref, String cause, String note, LocalDate on, String actor) {
         InsurancePolicy policy = policy(ref);
         String previous = policy.getStatus();
-        if (!Set.of(ACTIVE, ACTIVE_NO_COVER, REINSTATEMENT_PENDING).contains(previous)) {
+        if (LIFECYCLE.find("terminate", previous) == null) {
             throw new IllegalArgumentException("Policy " + ref + " is " + previous + " and cannot be terminated.");
         }
-        policy.setStatus(TERMINATED);
+        move(policy, TERMINATED);
         policy.terminated(cause, on);
         history.record(WorkflowHistory.POLICY, ref, policy.getCustomerName(), "Terminated", previous, TERMINATED,
                 cause.charAt(0) + cause.substring(1).toLowerCase(Locale.ROOT).replace('_', ' ') + ": " + note, actor, on);
@@ -769,12 +844,16 @@ public class PolicyWorkflow {
         String detail = reason + " · paid to " + unpaidFrom.minusDays(1) + "; grace ends " + graceEnd;
         LocalDate effective = LocalDate.now();
         boolean coverEnded = false;
-        if (ACTIVE.equals(previous) && graceEnd.isBefore(LocalDate.now())) {
-            policy.setStatus(ACTIVE_NO_COVER);
+        if (IN_COVER.contains(previous) && graceEnd.isBefore(LocalDate.now())) {
+            move(policy, ACTIVE_NO_COVER);
             // The cover ended when that grace ran out, in the past; recorded now, effective then (NS-DAT-002).
             effective = graceEnd.plusDays(1);
             detail += " · grace was already over, so cover ended on " + graceEnd;
             coverEnded = true;
+        } else if (ACTIVE.equals(previous) && unpaidFrom.isBefore(LocalDate.now())) {
+            move(policy, GRACE);
+            effective = unpaidFrom.plusDays(1);
+            detail += " · the premium due " + unpaidFrom + " is now unpaid, so the policy is in grace";
         }
         history.record(WorkflowHistory.POLICY, policy.getRef(), policy.getCustomerName(), "Cover Review", previous,
                 policy.getStatus(), detail, actor, effective);

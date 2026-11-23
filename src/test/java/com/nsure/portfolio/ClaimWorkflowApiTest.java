@@ -772,13 +772,34 @@ class ClaimWorkflowApiTest {
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/close"), "onboarding", "{}"))
                 .andExpect(status().isForbidden());
         mockMvc.perform(get("/portfolio/claims").with(signedIn("admin", "password")))
-                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].status").value("Paid"))
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].status").value("Closed"))
                 .andExpect(jsonPath("$[?(@.id == '" + claim + "')].closedBy").value("assessor2"))
-                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].actions[0]").doesNotExist());
+                .andExpect(jsonPath("$[?(@.id == '" + claim + "')].actions[0]").value("reopen"));
         mockMvc.perform(json(post("/portfolio/claims/" + claim + "/close"), "admin", "{}"))
                 .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
-                .andExpect(jsonPath("$[?(@.action == 'Closed')].performedBy").value("assessor2"));
+                .andExpect(jsonPath("$[?(@.action == 'Closed')].performedBy").value("assessor2"))
+                .andExpect(jsonPath("$[?(@.action == 'Closed')].newState").value("Closed"));
+
+        // §09-CLAIM: a closed claim is reopened by a senior with a reason, back to Paid; the payment stands.
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reopen"), "onboarding",
+                        "{\"reason\":\"Recovery from the reinsurer still to chase\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reopen"), "admin", "{\"reason\":\"Short\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/reopen"), "admin",
+                        "{\"reason\":\"Recovery from the reinsurer still to chase\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Paid"))
+                .andExpect(jsonPath("$.payoutAmount").value(50000.0))
+                .andExpect(jsonPath("$.actions[0]").value("close"));
+        mockMvc.perform(get("/portfolio/history/claim/" + claim).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[-1].action").value("Reopened"))
+                .andExpect(jsonPath("$[-1].previousState").value("Closed"))
+                .andExpect(jsonPath("$[-1].newState").value("Paid"));
+        mockMvc.perform(json(post("/portfolio/claims/" + claim + "/close"), "assessor2", "{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Closed"));
     }
 
     @Test

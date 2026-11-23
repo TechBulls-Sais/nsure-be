@@ -38,7 +38,7 @@ final class ClaimSummaryPdf {
 
     static byte[] render(InsuranceClaim c, InsurancePolicy policy, Map<String, String> checks,
             List<PortfolioViews.DocumentView> documents, List<PortfolioViews.HistoryView> history, String issuedBy) {
-        boolean paid = ClaimWorkflow.PAID.equals(c.getStatus());
+        boolean paid = ClaimWorkflow.SETTLED.contains(c.getStatus());
         boolean rejected = ClaimWorkflow.REJECTED.equals(c.getStatus());
         boolean interim = !paid && !rejected;
         String decided = c.getResolvedAt() == null ? null : longDate(c.getResolvedAt().toString());

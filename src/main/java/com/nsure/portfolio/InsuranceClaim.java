@@ -552,6 +552,13 @@ public class InsuranceClaim extends CoverRecord {
         this.closeNote = null;
     }
 
+    /** A closed claim is reopened: the close is set aside (the history keeps it). */
+    void reopenClosed() {
+        this.closedAt = null;
+        this.closedBy = null;
+        this.closeNote = null;
+    }
+
     void close(String by, String note) {
         this.closedAt = LocalDateTime.now();
         this.closedBy = by;

@@ -64,6 +64,49 @@ class PolicyLifecycleTest {
                 .andExpect(jsonPath("$[?(@.action == 'Cover Ended')]").isNotEmpty());
     }
 
+    /** §09-POLICY: an overdue premium puts the policy in Grace, still in cover; paying ends grace, not paying ends cover. */
+    @Test
+    void anOverduePremiumPutsThePolicyInGraceWhichPaymentEnds() throws Exception {
+        String policy = activePolicy("Kagiso Grace");
+        LocalDate due = LocalDate.now().minusDays(5);
+        dates(policy, due.minusMonths(1), due, LocalDate.now().plusDays(25));
+
+        List<String> moved = tx.execute(s -> policies.lapseOverdue());
+        assertThat(moved).contains(policy);
+        assertThat(statusOf(policy)).isEqualTo(PolicyWorkflow.GRACE);
+        Long graceEvents = tx.execute(s -> em.createQuery("select count(e) from OutboxEvent e where e.aggregateRef = :ref"
+                + " and e.eventType = 'PolicyGraceStarted'", Long.class).setParameter("ref", policy).getSingleResult());
+        assertThat(graceEvents).isEqualTo(1L);
+        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.action == 'Grace Started')].newState").value("Grace"))
+                .andExpect(jsonPath("$[?(@.action == 'Grace Started')].effectiveDate").value(due.plusDays(1).toString()));
+        // A second sweep the same day moves nothing: the policy is already in grace, and grace has not ended.
+        List<String> again = tx.execute(s -> policies.lapseOverdue());
+        assertThat(again).doesNotContain(policy);
+
+        mockMvc.perform(json(post("/portfolio/policies/" + policy + "/payments"), "admin", "{\"method\":\"Orange Money\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Active"));
+        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[-1].previousState").value("Grace"))
+                .andExpect(jsonPath("$[-1].newState").value("Active"));
+    }
+
+    @Test
+    void graceThatRunsOutEndsCoverFromGrace() throws Exception {
+        String policy = activePolicy("Neo Grace");
+        LocalDate due = LocalDate.now().minusDays(5);
+        dates(policy, due.minusMonths(1), due, LocalDate.now().plusDays(1));
+        tx.execute(s -> policies.lapseOverdue());
+        assertThat(statusOf(policy)).isEqualTo(PolicyWorkflow.GRACE);
+
+        dates(policy, due.minusMonths(1), due, LocalDate.now().minusDays(1));
+        tx.execute(s -> policies.lapseOverdue());
+        assertThat(statusOf(policy)).isEqualTo(PolicyWorkflow.ACTIVE_NO_COVER);
+        mockMvc.perform(get("/portfolio/history/policy/" + policy).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$[?(@.action == 'Cover Ended')].previousState").value("Grace"));
+    }
+
     @Test
     void threeMonthsWithoutCoverLapsesThePolicyForGood() throws Exception {
         String policy = activePolicy("Gaone Kebonang");

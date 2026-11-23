@@ -165,6 +165,122 @@ public class CollectionsService {
                 done == null ? null : done.paidTo(), done == null ? null : done.policyStatus());
     }
 
+    // ── the instalment ledger and re-allocation ──────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public List<CollectionsViews.LedgerRowView> ledger(String status, String policyRef, int limit) {
+        security.authenticatedUser().validateHasPermissionTo("READ_FINANCE");
+        return billing.ledger(status, policyRef, limit);
+    }
+
+    /**
+     * Asks for money applied to one instalment to be moved to another instalment of the same policy: nothing changes
+     * until a different person approves it. An allocation can have one open request at a time.
+     */
+    @Transactional
+    public CollectionsViews.ReallocationRequestView requestReallocation(String allocationRef, JsonNode body) {
+        AppUser user = security.authenticatedUser();
+        user.validateHasPermissionTo("MANAGE_FINANCE");
+        Instalment to = billing.byRef(required(body, "toInstalment", 1, 20));
+        String reason = required(body, "reason", 10, 500);
+        Allocation allocation = billing.allocationByRef(allocationRef);
+        String refusal = billing.reallocationRefusal(allocation, to);
+        if (refusal != null) {
+            throw new IllegalArgumentException(refusal);
+        }
+        if (!em.createQuery("select r.id from ReallocationRequest r where r.allocationRef = :ref"
+                        + " and r.status = :pending", Long.class)
+                .setParameter("ref", allocationRef).setParameter("pending", ReallocationRequest.PENDING)
+                .setMaxResults(1).getResultList().isEmpty()) {
+            throw new ConflictException("A re-allocation of " + allocationRef + " is already waiting for approval.");
+        }
+        ReallocationRequest request = new ReallocationRequest(references.next("RAQ-", 6, () -> 0L), allocation, to,
+                reason, user.getUsername());
+        em.persist(request);
+        return view(request, null, null);
+    }
+
+    @Transactional(readOnly = true)
+    public List<CollectionsViews.ReallocationRequestView> reallocationRequests() {
+        security.authenticatedUser().validateHasPermissionTo("READ_FINANCE");
+        return em.createQuery("select r from ReallocationRequest r order by r.id desc", ReallocationRequest.class)
+                .setMaxResults(200).getResultStream().map(r -> view(r, null, null)).toList();
+    }
+
+    /**
+     * The finance checker approves a move someone else asked for. When it leaves an earlier period unpaid, the
+     * policy's paid-to and cover are reviewed the same way as after a reversal.
+     */
+    @Transactional
+    public CollectionsViews.ReallocationRequestView approveReallocation(String ref, JsonNode body) {
+        AppUser checker = security.authenticatedUser();
+        checker.validateHasPermissionTo("APPROVE_JOURNAL");
+        ReallocationRequest request = pendingReallocation(ref);
+        if (checker.getUsername().equalsIgnoreCase(request.getRequestedBy())) {
+            throw new com.nsure.security.exception.NoAuthorizationException("You asked for re-allocation " + ref
+                    + "; someone else must approve it.");
+        }
+        InsurancePolicy policy = policies.policy(request.getPolicyRef());
+        em.lock(policy, LockModeType.PESSIMISTIC_WRITE);
+        Allocation from = billing.allocationByRef(request.getAllocationRef());
+        Instalment to = billing.byRef(request.getToInstalmentRef());
+        Allocation moved = billing.reallocate(from, to, request.getRef(), checker.getUsername());
+        request.decide(ReallocationRequest.APPROVED, checker.getUsername(), optional(body, "note"), moved.getRef());
+
+        LocalDate unpaidFrom = billing.firstUnsettledStart(policy.getRef());
+        if (unpaidFrom != null && policy.getNextPremiumDue() != null
+                && unpaidFrom.isBefore(policy.getNextPremiumDue())) {
+            policies.reviewCoverAfterReversal(policy, unpaidFrom, "Re-allocation " + ref + " moved BWP "
+                    + request.getAmount().toPlainString() + " from " + request.getFromInstalmentRef() + " to "
+                    + request.getToInstalmentRef() + ": " + request.getReason(), clip(checker.getUsername(), 100));
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("requestRef", request.getRef());
+        data.put("policyRef", policy.getRef());
+        data.put("sourceRef", request.getSourceRef());
+        data.put("fromAllocationRef", from.getRef());
+        data.put("toAllocationRef", moved.getRef());
+        data.put("fromInstalmentRef", request.getFromInstalmentRef());
+        data.put("toInstalmentRef", request.getToInstalmentRef());
+        data.put("amount", request.getAmount().toPlainString());
+        data.put("requestedBy", request.getRequestedBy());
+        outbox.publish(Events.RECEIPT_REALLOCATED, policy.getRef(), data, clip(checker.getUsername(), 100));
+        return view(request, billing.account(policy).paidTo(), policy.getStatus());
+    }
+
+    @Transactional
+    public CollectionsViews.ReallocationRequestView rejectReallocation(String ref, JsonNode body) {
+        AppUser checker = security.authenticatedUser();
+        checker.validateHasPermissionTo("APPROVE_JOURNAL");
+        ReallocationRequest request = pendingReallocation(ref);
+        if (checker.getUsername().equalsIgnoreCase(request.getRequestedBy())) {
+            throw new com.nsure.security.exception.NoAuthorizationException("You asked for re-allocation " + ref
+                    + "; someone else must decide it.");
+        }
+        request.decide(ReallocationRequest.REJECTED, checker.getUsername(), required(body, "note", 5, 500), null);
+        return view(request, null, null);
+    }
+
+    private ReallocationRequest pendingReallocation(String ref) {
+        ReallocationRequest request = em.createQuery("select r from ReallocationRequest r where r.ref = :ref",
+                        ReallocationRequest.class)
+                .setParameter("ref", ref).getResultStream().findFirst()
+                .orElseThrow(() -> new NotFoundException("Re-allocation request " + ref + " not found"));
+        if (!ReallocationRequest.PENDING.equals(request.getStatus())) {
+            throw new ConflictException("Re-allocation request " + ref + " is already "
+                    + request.getStatus().toLowerCase(Locale.ROOT) + ".");
+        }
+        return request;
+    }
+
+    private static CollectionsViews.ReallocationRequestView view(ReallocationRequest r, LocalDate paidTo,
+            String policyStatus) {
+        return new CollectionsViews.ReallocationRequestView(r.getRef(), r.getAllocationRef(), r.getPolicyRef(),
+                r.getSourceRef(), r.getFromInstalmentRef(), r.getToInstalmentRef(), r.getAmount(), r.getReason(),
+                r.getStatus(), r.getRequestedBy(), r.getRequestedAt(), r.getDecidedBy(), r.getDecidedAt(),
+                r.getDecisionNote(), r.getNewAllocationRef(), paidTo, policyStatus);
+    }
+
     private static String optional(JsonNode body, String field) {
         if (body == null || !body.hasNonNull(field) || body.get(field).asText().isBlank()) {
             return null;
@@ -262,7 +378,8 @@ public class CollectionsService {
         List<String> issued = new ArrayList<>();
         for (InsurancePolicy policy : em.createQuery("select p from InsurancePolicy p where p.status in :statuses"
                         + " and p.nextPremiumDue is not null and p.nextPremiumDue <= :horizon", InsurancePolicy.class)
-                .setParameter("statuses", Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.ACTIVE_NO_COVER))
+                .setParameter("statuses", Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.GRACE,
+                        PolicyWorkflow.ACTIVE_NO_COVER))
                 .setParameter("horizon", horizon)
                 .getResultList()) {
             LocalDate start = policy.getNextPremiumDue();

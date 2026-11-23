@@ -114,8 +114,8 @@ public class OperationsReportSections {
             ReportFilter.Sql policies = f.policies(null);
             List<Object> graceArgs = new ArrayList<>(List.of(today, today));
             graceArgs.addAll(policies.args());
-            long inGrace = sql.count("select count(*) from ins_policy p where p.status = 'Active' and p.next_premium_due < ?"
-                    + " and p.grace_period_end >= ? and" + policies.where(), graceArgs.toArray());
+            long inGrace = sql.count("select count(*) from ins_policy p where (p.status = 'Grace' or (p.status = 'Active'"
+                    + " and p.next_premium_due < ?)) and p.grace_period_end >= ? and" + policies.where(), graceArgs.toArray());
             long noCover = sql.count("select count(*) from ins_policy p where p.status = 'Active - No Cover' and"
                     + policies.where(), policies.params());
             long suspense = sql.count("select count(*) from int_inbound_message where status = 'SUSPENSE'");
@@ -182,10 +182,10 @@ public class OperationsReportSections {
             String from = " from ins_policy p where p.cover_start_date >= ? and p.cover_start_date < ? and"
                     + policies.where();
             long issued = sql.count("select count(*)" + from, args.toArray());
-            long inForce = sql.count("select count(*)" + from + " and p.status = 'Active'", args.toArray());
+            long inForce = sql.count("select count(*)" + from + " and p.status in ('Active', 'Grace')", args.toArray());
             ReportFilter.Sql paid = f.viaPolicy("c.policy_ref", "c.paid_at");
             BigDecimal claims = sql.amount("select coalesce(sum(c.payout_amount), 0) from ins_claim c where"
-                    + " c.status = 'Paid' and" + paid.where(), paid.params());
+                    + " c.status in ('Paid', 'Closed') and" + paid.where(), paid.params());
             ReportFilter.Sql received = f.viaPolicy("pp.policy_ref", "pp.paid_at");
             BigDecimal premium = sql.amount("select coalesce(sum(pp.amount), 0) from premium_payment pp where"
                     + " pp.status = 'SUCCESSFUL' and" + received.where(), received.params());

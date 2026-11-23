@@ -141,6 +141,59 @@ public class BillingService {
         return touched;
     }
 
+    /**
+     * Why a live allocation cannot be moved to {@code to}, or null when it can: same policy, a different instalment
+     * that is still owed, with room for the whole amount.
+     */
+    String reallocationRefusal(Allocation allocation, Instalment to) {
+        if (!allocation.isLive()) {
+            return "Allocation " + allocation.getRef() + " was reversed (" + allocation.getReversalRef() + ").";
+        }
+        if (!allocation.getPolicyRef().equals(to.getPolicyRef())) {
+            return "Instalment " + to.getRef() + " belongs to policy " + to.getPolicyRef() + ", not "
+                    + allocation.getPolicyRef() + "; money moves only between instalments of one policy.";
+        }
+        if (allocation.getInstalment().getId().equals(to.getId())) {
+            return "Allocation " + allocation.getRef() + " is already on " + to.getRef() + ".";
+        }
+        if (Instalment.WAIVED.equals(to.getStatus())) {
+            return "Instalment " + to.getRef() + " is waived; nothing is owed on it.";
+        }
+        BigDecimal room = outstanding(to);
+        if (room.compareTo(allocation.getAmount()) < 0) {
+            return "Instalment " + to.getRef() + " has BWP " + room.toPlainString() + " outstanding, less than the BWP "
+                    + allocation.getAmount().toPlainString() + " being moved.";
+        }
+        return null;
+    }
+
+    /**
+     * Moves an approved allocation: the original is kept and marked reversed by the request, and a new allocation of
+     * the same amount from the same receipt is written on {@code to}. Both instalments are re-statused.
+     */
+    @Transactional(propagation = Propagation.MANDATORY, noRollbackFor = IllegalArgumentException.class)
+    public Allocation reallocate(Allocation allocation, Instalment to, String requestRef, String actor) {
+        String refusal = reallocationRefusal(allocation, to);
+        if (refusal != null) {
+            throw new com.nsure.common.exception.ConflictException(refusal);
+        }
+        Instalment from = allocation.getInstalment();
+        allocation.reverse(requestRef, actor);
+        Allocation moved = new Allocation(references.next("ALC-", 6, () -> 0L), to, allocation.getSourceType(),
+                allocation.getSourceRef(), allocation.getAmount(), actor);
+        em.persist(moved);
+        em.flush();
+        restatus(from);
+        restatus(to);
+        return moved;
+    }
+
+    Allocation allocationByRef(String ref) {
+        return em.createQuery("select a from Allocation a join fetch a.instalment where a.ref = :ref", Allocation.class)
+                .setParameter("ref", ref).getResultStream().findFirst()
+                .orElseThrow(() -> new com.nsure.common.exception.NotFoundException("Allocation " + ref + " not found"));
+    }
+
     /** The start of the earliest instalment still owed, or null when every issued instalment is settled or waived. */
     public LocalDate firstUnsettledStart(String policyRef) {
         return em.createQuery("select min(i.periodStart) from Instalment i where i.policyRef = :ref"
@@ -260,7 +313,8 @@ public class BillingService {
                 .toList();
         List<CollectionsViews.ScheduleView> schedule = new ArrayList<>();
         if (policy.getPremium() != null && policy.getPremium().signum() > 0 && policy.getNextPremiumDue() != null
-                && ("Active".equals(policy.getStatus()) || "Active - No Cover".equals(policy.getStatus()))) {
+                && ("Active".equals(policy.getStatus()) || "Grace".equals(policy.getStatus())
+                        || "Active - No Cover".equals(policy.getStatus()))) {
             // From the next premium due, after any instalment already issued for it or later.
             LocalDate start = policy.getNextPremiumDue();
             for (Instalment issued : instalments) {
@@ -279,6 +333,51 @@ public class BillingService {
         return new CollectionsViews.AccountView(policy.getRef(), policy.getStatus(), paidTo,
                 policy.getNextPremiumDue(), arrears, overdue, unresolvedPayments(policy.getRef()), views, receipts,
                 mandate, instructions, schedule);
+    }
+
+    /**
+     * Instalments across the book, earliest due first: all of them, only those still owed ({@code OPEN}), or one
+     * status; optionally for one policy.
+     */
+    @Transactional(readOnly = true)
+    public List<CollectionsViews.LedgerRowView> ledger(String status, String policyRef, int limit) {
+        StringBuilder jpql = new StringBuilder("select i,"
+                + " (select coalesce(sum(a.amount), 0) from Allocation a where a.instalment = i and a.reversedAt is null),"
+                + " (select coalesce(sum(d.amount), 0) from Adjustment d where d.instalment = i)"
+                + " from Instalment i where 1 = 1");
+        Set<String> statuses = status == null || status.isBlank() ? null
+                : "OPEN".equalsIgnoreCase(status) ? Set.of(Instalment.DUE, Instalment.PART_PAID)
+                : Set.of(status.trim().toUpperCase(java.util.Locale.ROOT));
+        if (statuses != null) {
+            jpql.append(" and i.status in :statuses");
+        }
+        if (policyRef != null && !policyRef.isBlank()) {
+            jpql.append(" and i.policyRef = :policy");
+        }
+        jpql.append(" order by i.dueDate, i.id");
+        var query = em.createQuery(jpql.toString(), Object[].class);
+        if (statuses != null) {
+            query.setParameter("statuses", statuses);
+        }
+        if (policyRef != null && !policyRef.isBlank()) {
+            query.setParameter("policy", policyRef.trim());
+        }
+        LocalDate today = LocalDate.now();
+        return query.setMaxResults(Math.max(1, Math.min(limit, 500))).getResultStream().map(row -> {
+            Instalment i = (Instalment) row[0];
+            BigDecimal allocated = money(row[1]);
+            BigDecimal adjustments = money(row[2]);
+            BigDecimal outstanding = i.getBilledAmount().add(adjustments).subtract(allocated);
+            return new CollectionsViews.LedgerRowView(i.getRef(), i.getPolicyRef(), i.getCustomerRef(),
+                    i.getPeriodStart(), i.getPeriodEnd(), i.getDueDate(), i.getBilledAmount(), adjustments, allocated,
+                    outstanding, i.getStatus(), outstanding.signum() > 0 && i.getDueDate().isBefore(today));
+        }).toList();
+    }
+
+    private static BigDecimal money(Object value) {
+        BigDecimal amount = value instanceof BigDecimal b ? b : value == null ? BigDecimal.ZERO
+                : new BigDecimal(value.toString());
+        return amount.setScale(2, RoundingMode.HALF_UP);
     }
 
     ReceiptReversal reversal(String receiptRef) {

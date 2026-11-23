@@ -646,8 +646,7 @@ public class CreditService {
         // The claim closes the credit policy too, so no further premium is due on it (test C-28). A death claim ends
         // it for DEATH; any other benefit claim ends it for OTHER, the benefit named in the note.
         InsurancePolicy policy = policyOf(l);
-        if (policy != null && Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.ACTIVE_NO_COVER,
-                PolicyWorkflow.REINSTATEMENT_PENDING).contains(policy.getStatus())) {
+        if (policy != null && PolicyWorkflow.IN_FORCE.contains(policy.getStatus())) {
             workflow.terminate(policy.getRef(), "DEATH".equals(cause) ? "DEATH" : "OTHER", "Credit claim"
                     + (l.claimRef == null ? "" : " " + l.claimRef) + " on loan " + l.lenderLoanId + " for "
                     + causeLabel(cause) + " on " + eventDate, eventDate, user.getUsername());
@@ -841,8 +840,7 @@ public class CreditService {
                 .setParameter("open", OPEN).getResultList()) {
             InsurancePolicy policy = policyOf(l);
             LocalDate start = coverStart(l, policy);
-            if (start == null || !Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.ACTIVE_NO_COVER,
-                    PolicyWorkflow.REINSTATEMENT_PENDING).contains(policy.getStatus())) {
+            if (start == null || !PolicyWorkflow.IN_FORCE.contains(policy.getStatus())) {
                 continue;
             }
             // Cover runs through the last day of the term (as the claim assessment reads it).
@@ -914,8 +912,7 @@ public class CreditService {
         balanceRow(l, reference, date, Money.of(BigDecimal.ZERO), APPLIED, "Settled early", user.getUsername());
         l.balance = Money.of(BigDecimal.ZERO);
         l.balanceAsOf = date;
-        if (policy != null && Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.ACTIVE_NO_COVER,
-                PolicyWorkflow.REINSTATEMENT_PENDING).contains(policy.getStatus())) {
+        if (policy != null && PolicyWorkflow.IN_FORCE.contains(policy.getStatus())) {
             workflow.terminate(policy.getRef(), "LOAN_SETTLED", "Loan " + l.lenderLoanId + " settled early ("
                     + reference + ")", date, user.getUsername());
         }
@@ -1120,7 +1117,7 @@ public class CreditService {
                 .contains(ps)) {
             return CANCELLED;
         }
-        boolean premium = PolicyWorkflow.ACTIVE.equals(ps);
+        boolean premium = PolicyWorkflow.IN_COVER.contains(ps);
         boolean everPaid = premium || Set.of(PolicyWorkflow.ACTIVE_NO_COVER, PolicyWorkflow.REINSTATEMENT_PENDING)
                 .contains(ps);
         if (l.disbursementDate == null) {

@@ -66,7 +66,7 @@ public class DocumentQuarantine {
     private static final String RELEASE = "RELEASE_DOCUMENT";
     private static final Set<String> STATES = Set.of(QuarantinedUpload.PENDING, QuarantinedUpload.RELEASED,
             QuarantinedUpload.REJECTED);
-    private static final Set<String> CLOSED = Set.of(ClaimWorkflow.PAID, ClaimWorkflow.REJECTED);
+    private static final Set<String> CLOSED = Set.of(ClaimWorkflow.PAID, ClaimWorkflow.CLOSED, ClaimWorkflow.REJECTED);
 
     private final EntityManager em;
     private final PlatformSecurityContext security;

@@ -103,6 +103,8 @@ public final class Events {
     public static final String OFFER_ANSWERED = "OfferAnswered";
     // IL03/IL04 policy servicing.
     public static final String POLICY_CHANGED = "PolicyChanged";
+    /** policyRef, customerName, product, premiumDue, graceEnds. The premium is overdue; cover continues in grace. */
+    public static final String POLICY_GRACE_STARTED = "PolicyGraceStarted";
     public static final String COVER_LAPSED = "CoverLapsed";
     public static final String POLICY_REINSTATED = "PolicyReinstated";
     public static final String POLICY_TERMINATED = "PolicyTerminated";
@@ -165,6 +167,11 @@ public final class Events {
     public static final String INVOICE_ISSUED = "InvoiceIssued";
     public static final String RECEIPT_ALLOCATED = "ReceiptAllocated";
     public static final String PAYMENT_RETURNED = "PaymentReturned";
+    /**
+     * requestRef, policyRef, sourceRef, fromAllocationRef, toAllocationRef, fromInstalmentRef, toInstalmentRef,
+     * amount. Approved move of applied money between instalments of one policy; the receivable total is unchanged.
+     */
+    public static final String RECEIPT_REALLOCATED = "ReceiptReallocated";
     /**
      * receiptRef, provider, providerRef, policyRef, amount, currency, method, source (CHECKOUT or NOTIFICATION). The
      * provider confirmed it holds the money; allocation to the policy follows as ReceiptAllocated (SH04).

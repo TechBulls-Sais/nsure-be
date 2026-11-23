@@ -34,7 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class ProductTermsMigration {
 
     /** States in which a policy's terms still matter going forward. */
-    static final List<String> IN_FORCE = List.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.ACTIVE_NO_COVER,
+    static final List<String> IN_FORCE = List.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.GRACE, PolicyWorkflow.ACTIVE_NO_COVER,
             PolicyWorkflow.PENDING_PAYMENT, PolicyWorkflow.LAPSED, PolicyWorkflow.REINSTATEMENT_PENDING);
 
     @Entity(name = "ProductTermsMigrationRecord")

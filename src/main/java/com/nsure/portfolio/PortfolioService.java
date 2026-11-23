@@ -2165,7 +2165,7 @@ public class PortfolioService {
                 policy == null || policy.getPaymentDueBy() == null ? "" : policy.getPaymentDueBy().withNano(0).toString(),
                 policy == null ? "" : date(policy.getLapseDate()),
                 policy == null ? "" : blank(policy.getPaymentMethod()),
-                policy != null && PolicyWorkflow.ACTIVE.equals(policy.getStatus()) && policy.getNextPremiumDue() != null
+                policy != null && PolicyWorkflow.IN_COVER.contains(policy.getStatus()) && policy.getNextPremiumDue() != null
                         && policy.getNextPremiumDue().isBefore(today) && policy.getGracePeriodEnd() != null
                         && !policy.getGracePeriodEnd().isBefore(today),
                 beneficiaries,

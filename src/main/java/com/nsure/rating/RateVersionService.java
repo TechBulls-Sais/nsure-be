@@ -208,7 +208,7 @@ public class RateVersionService {
         RateTableVersion version = version(table, versionNo);
         CoverTier tier = table.getTier();
         List<InsurancePolicy> book = em.createQuery("select p from InsurancePolicy p where p.product = :product"
-                        + " and p.tier = :tier and p.status in ('Active', 'Active - No Cover')", InsurancePolicy.class)
+                        + " and p.tier = :tier and p.status in ('Active', 'Grace', 'Active - No Cover')", InsurancePolicy.class)
                 .setParameter("product", table.getProduct().getName())
                 .setParameter("tier", tier.getName())
                 .getResultList();

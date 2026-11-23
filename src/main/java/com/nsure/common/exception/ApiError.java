@@ -35,6 +35,7 @@ public record ApiError(
     public static final String METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED";
     public static final String CONFLICT = "CONFLICT";
     public static final String STALE_VERSION = "STALE_VERSION";
+    public static final String ILLEGAL_TRANSITION = "ILLEGAL_TRANSITION";
     public static final String IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT";
     public static final String PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE";
     public static final String BUSINESS_RULE = "BUSINESS_RULE";

@@ -71,6 +71,13 @@ public class ApiExceptionHandler {
         return problem(HttpStatus.NOT_FOUND, ex.getMessage());
     }
 
+    @ExceptionHandler(com.nsure.common.lifecycle.IllegalTransitionException.class)
+    public ResponseEntity<ApiError> illegalTransition(com.nsure.common.lifecycle.IllegalTransitionException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(ApiError.of(409, ApiError.ILLEGAL_TRANSITION, ex.getMessage(), List.of()));
+    }
+
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<ApiError> conflict(ConflictException ex) {
         return problem(HttpStatus.CONFLICT, ex.getMessage());

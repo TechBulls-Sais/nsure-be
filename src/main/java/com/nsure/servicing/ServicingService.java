@@ -89,8 +89,7 @@ public class ServicingService {
 
     private static final Map<String, Integer> FREQUENCY_MONTHS = Map.of("MONTHLY", 1, "QUARTERLY", 3,
             "SEMI_ANNUAL", 6, "ANNUAL", 12);
-    private static final Set<String> IN_FORCE = Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.ACTIVE_NO_COVER,
-            PolicyWorkflow.REINSTATEMENT_PENDING);
+    private static final Set<String> IN_FORCE = PolicyWorkflow.IN_FORCE;
     /** Causes a reasoned termination may give (IL03 records and workspace). */
     static final List<String> TERMINATION_CAUSES = List.of("DEATH", "CANCELLATION", "EXPIRY", "MATURITY", "OTHER");
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
@@ -195,8 +194,7 @@ public class ServicingService {
         for (InsurancePolicy policy : em.createQuery("select p from InsurancePolicy p where p.coverEndDate is not null"
                         + " and p.coverEndDate < :today and p.status in :live", InsurancePolicy.class)
                 .setParameter("today", today)
-                .setParameter("live", Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.ACTIVE_NO_COVER,
-                        PolicyWorkflow.REINSTATEMENT_PENDING))
+                .setParameter("live", PolicyWorkflow.IN_FORCE)
                 .getResultList()) {
             workflow.terminate(policy.getRef(), "EXPIRY", "Cover ended on " + policy.getCoverEndDate()
                     + (policy.getTermYears() == null ? "" : ": the " + policy.getTermYears()
@@ -793,7 +791,7 @@ public class ServicingService {
      */
     private void billAdjustment(InsurancePolicy policy, Endorsement e, String actor) {
         if (e.premiumAdjustment == null || e.premiumAdjustment.signum() == 0 || policy.getNextPremiumDue() == null
-                || !PolicyWorkflow.ACTIVE.equals(policy.getStatus())) {
+                || !PolicyWorkflow.IN_COVER.contains(policy.getStatus())) {
             return;
         }
         PolicyWorkflow.Period period = workflow.nextPeriod(policy);
@@ -1108,9 +1106,9 @@ public class ServicingService {
     public ServicingViews.RunResult runBenefits(String actor) {
         LocalDate today = LocalDate.now();
         List<String> created = new ArrayList<>();
-        for (InsurancePolicy policy : em.createQuery("select p from InsurancePolicy p where p.status = :s"
+        for (InsurancePolicy policy : em.createQuery("select p from InsurancePolicy p where p.status in :s"
                 + " and p.coverStartDate is not null", InsurancePolicy.class)
-                .setParameter("s", PolicyWorkflow.ACTIVE).getResultList()) {
+                .setParameter("s", PolicyWorkflow.IN_COVER).getResultList()) {
             for (ServicingViews.ScheduledBenefit due : dueBenefits(policy, benefitRules(policy.getProduct()), today)) {
                 if (em.createQuery("select count(b) from BenefitEvent b where b.policyRef = :ref and b.benefitType = :type"
                                 + " and b.dueDate = :due", Long.class)
@@ -1574,7 +1572,7 @@ public class ServicingService {
     private Optional<InsuranceClaim> claimPaidSince(String policyRef, LocalDate effective) {
         return em.createQuery("select c from InsuranceClaim c where c.policyRef = :ref", InsuranceClaim.class)
                 .setParameter("ref", policyRef).getResultList().stream()
-                .filter(c -> "Paid".equals(c.getStatus()))
+                .filter(c -> com.nsure.portfolio.ClaimWorkflow.SETTLED.contains(c.getStatus()))
                 .filter(c -> {
                     try {
                         return !LocalDate.parse(c.getEventDate().trim()).isBefore(effective);
@@ -1682,6 +1680,7 @@ public class ServicingService {
         LocalDate today = LocalDate.now();
         String status = p.getStatus();
         String cover = PolicyWorkflow.ACTIVE.equals(status) ? "In cover"
+                : PolicyWorkflow.GRACE.equals(status) ? "In cover (grace)"
                 : Set.of(PolicyWorkflow.ACTIVE_NO_COVER, PolicyWorkflow.REINSTATEMENT_PENDING).contains(status)
                         ? "No cover" : PolicyWorkflow.PENDING_PAYMENT.equals(status) ? "Not started" : "Ended";
         String payment;

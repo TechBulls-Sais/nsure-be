@@ -1,0 +1,12 @@
+databaseChangeLog:
+  # §09-CLAIM: closing a settled claim now moves it to its own Closed state. Claims closed before that kept the status
+  # Paid with closed_at set; they take the Closed state here so the lifecycle table describes every stored row.
+  - changeSet:
+      id: 216-claim-closed-state
+      author: nsure
+      changes:
+        - update:
+            tableName: ins_claim
+            columns:
+              - column: {name: status, value: Closed}
+            where: "status = 'Paid' AND closed_at IS NOT NULL"

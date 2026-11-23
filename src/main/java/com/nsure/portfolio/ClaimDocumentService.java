@@ -39,7 +39,7 @@ public class ClaimDocumentService {
     /** A summary of an open claim so far; replaced by the next one, and by the final summary. */
     public static final String INTERIM_TYPE = "Interim claim summary";
     private static final DateTimeFormatter FILE_STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
-    private static final Set<String> CLOSED = Set.of(ClaimWorkflow.PAID, ClaimWorkflow.REJECTED);
+    private static final Set<String> CLOSED = Set.of(ClaimWorkflow.PAID, ClaimWorkflow.CLOSED, ClaimWorkflow.REJECTED);
 
     /** Who may upload on the staff side: anyone who can lodge, update or assess a claim. */
     private static final List<String> STAFF_UPLOAD = List.of("UPDATE_CLAIM", "CREATE_CLAIM", "ASSESS_CLAIM");

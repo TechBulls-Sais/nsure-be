@@ -29,9 +29,9 @@ import org.springframework.context.annotation.Configuration;
 public class CoreReportSections {
 
     static final String ACTIVE_LIVES_SQL = "select lc.full_name, lc.date_of_birth from ins_policy_life_cover lc join"
-            + " ins_policy p on p.id = lc.policy_id where p.status = 'Active' and lc.life_status = 'ACTIVE' and";
+            + " ins_policy p on p.id = lc.policy_id where p.status in ('Active', 'Grace') and lc.life_status = 'ACTIVE' and";
     static final String HOLDER_LIVES_SQL = "select c.name, c.date_of_birth from ins_policy p join ins_customer c on"
-            + " c.record_ref = p.customer_ref where p.status = 'Active' and not exists (select 1 from"
+            + " c.record_ref = p.customer_ref where p.status in ('Active', 'Grace') and not exists (select 1 from"
             + " ins_policy_life_cover lc where lc.policy_id = p.id) and";
     static final String GROUP_LIVES_SQL = "select concat(concat(m.first_name, ' '), m.last_name), m.date_of_birth"
             + " from grp_member m join ins_scheme s on s.id = m.scheme_id where m.member_status in ('ACTIVE',"
@@ -44,7 +44,7 @@ public class CoreReportSections {
             List<BreakdownRow> policies = sql.rows("select p.status, count(*), sum(p.premium) from ins_policy p where"
                     + stock.where() + " group by p.status order by p.status", stock.params());
             List<BreakdownRow> products = sql.rows("select p.product, count(*), sum(p.amount) from ins_policy p where"
-                    + " p.status = 'Active' and" + stock.where() + " group by p.product order by p.product",
+                    + " p.status in ('Active', 'Grace') and" + stock.where() + " group by p.product order by p.product",
                     stock.params());
             ReportFilter.Sql claimStock = f.viaPolicy("c.policy_ref", null);
             List<BreakdownRow> claims = sql.rows("select c.status, count(*), sum(c.payout_amount) from ins_claim c where"
@@ -54,10 +54,10 @@ public class CoreReportSections {
                     + issued.where(), issued.params());
             ReportFilter.Sql paid = f.viaPolicy("c.policy_ref", "c.paid_at");
             BigDecimal claimsPaid = sql.amount("select coalesce(sum(c.payout_amount), 0) from ins_claim c where"
-                    + " c.status = 'Paid' and" + paid.where(), paid.params());
+                    + " c.status in ('Paid', 'Closed') and" + paid.where(), paid.params());
             Set<String> lives = new HashSet<>(sql.persons(ACTIVE_LIVES_SQL + stock.where(), stock.params()));
             lives.addAll(sql.persons(HOLDER_LIVES_SQL + stock.where(), stock.params()));
-            long active = countOf(policies, "Active");
+            long active = countOf(policies, "Active") + countOf(policies, "Grace");
             long lapsed = countOf(policies, "Lapsed") + countOf(policies, "Active - No Cover");
             long openClaims = claims.stream()
                     .filter(r -> List.of("Initiated", "Under Review", "Recommended", "Approved", "Payout Sent",
@@ -70,7 +70,7 @@ public class CoreReportSections {
             metrics.add(Metric.bwp("Sum assured in force", products.stream()
                     .map(r -> r.amount() == null ? BigDecimal.ZERO : r.amount()).reduce(BigDecimal.ZERO,
                             BigDecimal::add)).defined("benefit_exposure", "policies.inforce"));
-            metrics.add(Metric.bwp("Monthly premium in force", amountOf(policies, "Active"))
+            metrics.add(Metric.bwp("Monthly premium in force", amountOf(policies, "Active").add(amountOf(policies, "Grace")))
                     .defined("premium_in_force", "policies.inforce"));
             metrics.add(Metric.count("New business issued", newBusiness)
                     .tone(null, f.hasPeriod() ? "In the period" : "All time").defined("new_business", "policies.issued"));
@@ -107,7 +107,7 @@ public class CoreReportSections {
                     + " where m.member_status in ('ACTIVE', 'PARTIALLY_ACCEPTED') and" + members.where(),
                     members.params());
             BigDecimal individualExposure = sql.amount("select coalesce(sum(p.amount), 0) from ins_policy p where"
-                    + " p.status = 'Active' and" + stock.where(), stock.params());
+                    + " p.status in ('Active', 'Grace') and" + stock.where(), stock.params());
             BigDecimal groupExposure = sql.amount("select coalesce(sum(m.accepted_cover), 0) from grp_member m join"
                     + " ins_scheme s on s.id = m.scheme_id where m.member_status in ('ACTIVE', 'PARTIALLY_ACCEPTED') and"
                     + members.where(), members.params());
@@ -143,7 +143,7 @@ public class CoreReportSections {
                             posted(sql, "4000", false), List.of("PremiumReceived", "PaymentReturned"),
                             "Premium receipts not reversed vs account 4000"),
                     line(sql, mapper, "Individual claims paid",
-                            sql.amount("select coalesce(sum(payout_amount), 0) from ins_claim where status = 'Paid'"),
+                            sql.amount("select coalesce(sum(payout_amount), 0) from ins_claim where status in ('Paid', 'Closed')"),
                             sql.amount("select coalesce(sum(l.debit - l.credit), 0) from fin_journal_line l join fin_journal j"
                                     + " on j.id = l.journal_id where l.account_code = '5000' and j.event_type = 'ClaimPaid'"),
                             List.of("ClaimPaid"), "Paid claims vs ClaimPaid postings to account 5000"),

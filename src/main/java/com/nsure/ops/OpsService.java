@@ -142,7 +142,7 @@ public class OpsService {
                     + " ins_policy p where (p.record_ref in (select a.policy_ref from dist_policy_assignment a join"
                     + " dist_intermediary i on i.id = a.intermediary_id where i.record_ref = ? and a.ended_on is null) or"
                     + " p.application_ref in (select ap.record_ref from ins_application ap where ap.intermediary_code ="
-                    + " ?)) and p.status not in ('Active', 'Cancelled', 'Terminated', 'Matured') order by p.id desc", ROW,
+                    + " ?)) and p.status not in ('Active', 'Grace', 'Cancelled', 'Terminated', 'Matured') order by p.id desc", ROW,
                     scope, scope));
         }
         return out;

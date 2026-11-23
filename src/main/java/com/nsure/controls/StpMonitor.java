@@ -46,7 +46,7 @@ public class StpMonitor {
             reasons.put((String) row[0], (Long) row[1]);
         }
         List<Bypass> register = em.createQuery("select c from com.nsure.portfolio.InsuranceClaim c"
-                        + " where c.status in ('Approved', 'Payout Sent', 'Payout Failed', 'Paid')"
+                        + " where c.status in ('Approved', 'Payout Sent', 'Payout Failed', 'Paid', 'Closed')"
                         + " and c.processingType = 'Manual Review'"
                         + " and (c.fourEyesApplied = false or c.fourEyesApplied is null) order by c.id desc",
                         com.nsure.portfolio.InsuranceClaim.class)

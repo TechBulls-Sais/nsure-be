@@ -58,6 +58,39 @@ public class CollectionsController {
         return collections.rejectReversal(ref, body);
     }
 
+    /** The instalment ledger across the book; status is OPEN (still owed), DUE, PART_PAID, PAID or WAIVED. */
+    @GetMapping("/instalments")
+    public List<CollectionsViews.LedgerRowView> ledger(@RequestParam(required = false) String status,
+            @RequestParam(required = false) String policyRef,
+            @RequestParam(defaultValue = "200") int limit) {
+        return collections.ledger(status, policyRef, limit);
+    }
+
+    /** {toInstalment, reason}: asks for the allocation to move to another instalment; a second person approves it. */
+    @PostMapping("/allocations/{ref}/reallocate")
+    public CollectionsViews.ReallocationRequestView reallocate(@PathVariable String ref, @RequestBody JsonNode body) {
+        return collections.requestReallocation(ref, body);
+    }
+
+    @GetMapping("/reallocation-requests")
+    public List<CollectionsViews.ReallocationRequestView> reallocationRequests() {
+        return collections.reallocationRequests();
+    }
+
+    /** {note?} */
+    @PostMapping("/reallocation-requests/{ref}/approve")
+    public CollectionsViews.ReallocationRequestView approveReallocation(@PathVariable String ref,
+            @RequestBody(required = false) JsonNode body) {
+        return collections.approveReallocation(ref, body);
+    }
+
+    /** {note} */
+    @PostMapping("/reallocation-requests/{ref}/reject")
+    public CollectionsViews.ReallocationRequestView rejectReallocation(@PathVariable String ref,
+            @RequestBody JsonNode body) {
+        return collections.rejectReallocation(ref, body);
+    }
+
     /** {amount (signed), reason}; send the instalment's version in If-Match. */
     @PostMapping("/instalments/{ref}/adjustments")
     public CollectionsViews.AccountView adjust(@PathVariable String ref, @RequestBody JsonNode body) {

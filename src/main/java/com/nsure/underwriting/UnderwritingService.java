@@ -83,7 +83,7 @@ public class UnderwritingService {
     static final String EV_WAIVED = "WAIVED";
 
     private static final String RULES_ACTOR = "rules";
-    private static final Set<String> IN_FORCE = Set.of("Active", "Pending Payment", "Active - No Cover");
+    private static final Set<String> IN_FORCE = Set.of("Active", "Grace", "Pending Payment", "Active - No Cover");
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
     private static final int EVIDENCE_DUE_DAYS = 14;
     /** Evidence due within this many days (or overdue) gets a reminder, at most once a week (NS-IL02-002). */

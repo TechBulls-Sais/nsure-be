@@ -1,0 +1,31 @@
+databaseChangeLog:
+  # SH04 workspace: money applied to the wrong instalment is moved by one Finance user and approved by another; the
+  # original allocation is kept (marked reversed) and a new one is written from the same receipt.
+  - changeSet:
+      id: 217-reallocation-requests
+      author: nsure
+      changes:
+        - createTable:
+            tableName: bil_reallocation_request
+            columns:
+              - column: {name: id, type: bigint, autoIncrement: true, constraints: {primaryKey: true, nullable: false, primaryKeyName: pk_bil_reallocation_request}}
+              - column: {name: record_ref, type: varchar(20), constraints: {nullable: false, unique: true, uniqueConstraintName: uk_bil_reallocation_request_ref}}
+              - column: {name: allocation_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: policy_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: source_ref, type: varchar(60), constraints: {nullable: false}}
+              - column: {name: from_instalment_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: to_instalment_ref, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: amount, type: 'decimal(19,2)', constraints: {nullable: false}}
+              - column: {name: reason, type: varchar(500), constraints: {nullable: false}}
+              - column: {name: status, type: varchar(20), constraints: {nullable: false}}
+              - column: {name: requested_by, type: varchar(100), constraints: {nullable: false}}
+              - column: {name: requested_at, type: datetime, constraints: {nullable: false}}
+              - column: {name: decided_by, type: varchar(100)}
+              - column: {name: decided_at, type: datetime}
+              - column: {name: decision_note, type: varchar(500)}
+              - column: {name: new_allocation_ref, type: varchar(20)}
+        - createIndex:
+            tableName: bil_reallocation_request
+            indexName: ix_bil_reallocation_request_allocation
+            columns:
+              - column: {name: allocation_ref}

@@ -159,6 +159,87 @@ class CollectionsApiTest {
     }
 
     @Test
+    void moneyOnTheWrongInstalmentIsMovedOnlyWhenASecondPersonApproves() throws Exception {
+        String policy = paidPolicy("Kabo Moved", "+267 71 500 006");
+        String other = paidPolicy("Kabo Elsewhere", "+267 71 500 007");
+        LocalDate next = LocalDate.now().plusDays(10);
+        tx.executeWithoutResult(s -> em.createQuery("update InsurancePolicy p set p.nextPremiumDue = :due"
+                + " where p.ref = :ref").setParameter("due", next).setParameter("ref", policy).executeUpdate());
+        mockMvc.perform(post("/collections/billing-run").with(signedIn("finance", "password")))
+                .andExpect(status().isOk());
+        String account = account(policy);
+        String receipt = JsonPath.read(account, "$.receipts[0].receiptRef");
+        String paidRef = JsonPath.read(account, "$.instalments[0].ref");
+        String allocation = JsonPath.read(account, "$.instalments[0].allocations[0].ref");
+        String dueRef = JsonPath.read(account, "$.instalments[1].ref");
+        String otherInstalment = JsonPath.read(account(other), "$.instalments[0].ref");
+        BigDecimal premium = amount(account, "$.instalments[0].allocated");
+
+        String body = "{\"toInstalment\":\"" + dueRef + "\",\"reason\":\"Customer paid for the next period\"}";
+        mockMvc.perform(json(post("/collections/allocations/" + allocation + "/reallocate"), "ops", body))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/collections/allocations/" + allocation + "/reallocate"), "finance",
+                        "{\"toInstalment\":\"" + dueRef + "\",\"reason\":\"short\"}"))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/collections/allocations/" + allocation + "/reallocate"), "finance",
+                        body.replace(dueRef, paidRef)))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(json(post("/collections/allocations/" + allocation + "/reallocate"), "finance",
+                        body.replace(dueRef, otherInstalment)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("one policy")));
+
+        String request = mockMvc.perform(json(post("/collections/allocations/" + allocation + "/reallocate"),
+                        "finance", body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING_APPROVAL"))
+                .andExpect(jsonPath("$.ref").value(org.hamcrest.Matchers.startsWith("RAQ-")))
+                .andReturn().getResponse().getContentAsString();
+        String requestRef = JsonPath.read(request, "$.ref");
+        mockMvc.perform(json(post("/collections/allocations/" + allocation + "/reallocate"), "finance", body))
+                .andExpect(status().isConflict());
+        assertThat((String) JsonPath.read(account(policy), "$.instalments[0].status")).isEqualTo("PAID");
+
+        mockMvc.perform(json(post("/collections/reallocation-requests/" + requestRef + "/approve"), "finance", "{}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(json(post("/collections/reallocation-requests/" + requestRef + "/approve"), "admin", "{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.decidedBy").value("admin"))
+                .andExpect(jsonPath("$.newAllocationRef").value(org.hamcrest.Matchers.startsWith("ALC-")));
+        mockMvc.perform(json(post("/collections/reallocation-requests/" + requestRef + "/approve"), "admin", "{}"))
+                .andExpect(status().isConflict());
+
+        account = account(policy);
+        assertThat((String) JsonPath.read(account, "$.instalments[0].status")).isEqualTo("DUE");
+        assertThat(amount(account, "$.instalments[0].outstanding")).isEqualByComparingTo(premium);
+        assertThat((String) JsonPath.read(account, "$.instalments[0].allocations[0].reversalRef")).isEqualTo(requestRef);
+        assertThat((String) JsonPath.read(account, "$.instalments[1].status")).isEqualTo("PAID");
+        assertThat((String) JsonPath.read(account, "$.instalments[1].allocations[0].sourceRef")).isEqualTo(receipt);
+        Long events = tx.execute(s -> em.createQuery("select count(e) from OutboxEvent e where e.aggregateRef = :ref"
+                + " and e.eventType = 'ReceiptReallocated'", Long.class).setParameter("ref", policy).getSingleResult());
+        assertThat(events).isEqualTo(1L);
+
+        String ledger = mockMvc.perform(get("/collections/instalments").param("status", "OPEN")
+                        .param("policyRef", policy).with(signedIn("finance", "password")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat((List<String>) JsonPath.read(ledger, "$[*].ref")).containsExactly(paidRef);
+        mockMvc.perform(get("/collections/instalments").with(signedIn("customer", "password")))
+                .andExpect(status().isForbidden());
+
+        // Moving it back is asked for and refused; nothing changes.
+        String moved = JsonPath.read(account, "$.instalments[1].allocations[0].ref");
+        String back = mockMvc.perform(json(post("/collections/allocations/" + moved + "/reallocate"), "finance",
+                        "{\"toInstalment\":\"" + paidRef + "\",\"reason\":\"It was for the first period after all\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        mockMvc.perform(json(post("/collections/reallocation-requests/" + JsonPath.read(back, "$.ref") + "/reject"),
+                        "admin", "{\"note\":\"The bank statement says next period\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("REJECTED"));
+        assertThat((String) JsonPath.read(account(policy), "$.instalments[1].status")).isEqualTo("PAID");
+    }
+
+    @Test
     void cashInSuspenseCanBeSplitAcrossPoliciesAndPartPayAnInstalment() throws Exception {
         String first = pendingPolicy("Kago Split", "+267 71 500 003");
         String second = pendingPolicy("Neo Split", "+267 71 500 004");

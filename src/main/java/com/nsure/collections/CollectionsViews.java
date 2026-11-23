@@ -67,6 +67,18 @@ public final class CollectionsViews {
             LocalDateTime decidedAt, String decisionNote, String reversalRef, LocalDate paidTo, String policyStatus) {
     }
 
+    public record ReallocationRequestView(String ref, String allocationRef, String policyRef, String sourceRef,
+            String fromInstalmentRef, String toInstalmentRef, BigDecimal amount, String reason, String status,
+            String requestedBy, LocalDateTime requestedAt, String decidedBy, LocalDateTime decidedAt,
+            String decisionNote, String newAllocationRef, LocalDate paidTo, String policyStatus) {
+    }
+
+    /** One instalment on the book-wide ledger (the Collections workbench). */
+    public record LedgerRowView(String ref, String policyRef, String customerRef, LocalDate periodStart,
+            LocalDate periodEnd, LocalDate dueDate, BigDecimal billed, BigDecimal adjustments, BigDecimal allocated,
+            BigDecimal outstanding, String status, boolean overdue) {
+    }
+
     public record BillingRunView(int issued, List<String> instalments) {
     }
 

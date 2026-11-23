@@ -180,7 +180,7 @@ public class CollectionRuns {
                 continue;
             }
             InsurancePolicy policy = policies.policy(instalment.getPolicyRef());
-            if (!PolicyWorkflow.ACTIVE.equals(policy.getStatus())) {
+            if (!PolicyWorkflow.IN_COVER.contains(policy.getStatus())) {
                 continue;
             }
             CollectionMandate mandate = activeMandate(policy, user.getUsername());
@@ -358,7 +358,7 @@ public class CollectionRuns {
         InsurancePolicy policy = policies.policy(instruction.getPolicyRef());
         Instalment instalment = billing.byRef(instruction.getInstalmentRef());
         String problem = null;
-        if (!PolicyWorkflow.ACTIVE.equals(policy.getStatus())) {
+        if (!PolicyWorkflow.IN_COVER.contains(policy.getStatus())) {
             problem = "policy is " + policy.getStatus();
         } else if (!Instalment.DUE.equals(instalment.getStatus())
                 || billing.outstandingOf(instalment).compareTo(instruction.getAmount()) != 0) {

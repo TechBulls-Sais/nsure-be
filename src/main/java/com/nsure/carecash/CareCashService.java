@@ -547,8 +547,8 @@ public class CareCashService {
     /** An approved accidental death ends that life's cover; for the main insured it ends the policy (cause DEATH). */
     private void lifeEnded(CareCashEvent e, InsurancePolicy p, String actor) {
         String principal = principalKey(p);
-        if (principal.equals(key(p, e)) && Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.ACTIVE_NO_COVER)
-                .contains(p.getStatus())) {
+        if (principal.equals(key(p, e)) && Set.of(PolicyWorkflow.ACTIVE, PolicyWorkflow.GRACE,
+                PolicyWorkflow.ACTIVE_NO_COVER).contains(p.getStatus())) {
             workflow.terminate(p.getRef(), "DEATH", "Accidental death of " + e.lifeName + " (" + e.ref + ")",
                     e.admitDate, actor);
         } else {

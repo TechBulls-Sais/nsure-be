@@ -443,3 +443,9 @@ databaseChangeLog:
   - include:
       file: changes/215-batch-manifests.yaml
       relativeToChangelogFile: true
+  - include:
+      file: changes/216-claim-closed-state.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: changes/217-receipt-reallocation-requests.yaml
+      relativeToChangelogFile: true

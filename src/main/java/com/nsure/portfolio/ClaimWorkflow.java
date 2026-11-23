@@ -1,6 +1,7 @@
 package com.nsure.portfolio;
 
 import com.nsure.common.Money;
+import com.nsure.common.lifecycle.Lifecycle;
 import com.nsure.common.exception.NotFoundException;
 import com.nsure.controls.ControlKey;
 import com.nsure.controls.ControlService;
@@ -42,8 +43,11 @@ import org.springframework.transaction.annotation.Transactional;
  *   PAID ──bank returns the settled payment──▶ PAYOUT FAILED (consumption reversed, amount reserved again)
  *   INITIATED / UNDER REVIEW / RECOMMENDED ──reject (reason required)──▶ REJECTED
  *   REJECTED / APPROVED (not yet sent) ──reopen (reason, senior)──▶ UNDER REVIEW
- *   PAID ──close (financial and recovery tasks resolved or retained)──▶ PAID, closed
+ *   PAID ──close (financial and recovery tasks resolved or retained)──▶ CLOSED
+ *   CLOSED ──reopen (reason, senior)──▶ PAID          CLOSED ──bank returns the payment──▶ PAYOUT FAILED
  * </pre>
+ *
+ * {@link #LIFECYCLE} is the whole table, person and system moves alike; every status write goes through it.
  *
  * A payout is Paid only when the provider or bank confirms it settled (NS-SH05-007, AT-SH05-03): sending the
  * instruction leaves it in flight, and a failed or returned payout waits for corrected, re-verified details. The
@@ -64,8 +68,12 @@ public class ClaimWorkflow {
     public static final String PAID = "Paid";
     public static final String PAYOUT_SENT = "Payout Sent";
     public static final String PAYOUT_FAILED = "Payout Failed";
+    /** §09: a settled claim whose financial and recovery tasks are resolved or retained apart from it. */
+    public static final String CLOSED = "Closed";
 
     public static final Set<String> OPEN_STATES = Set.of(INITIATED, UNDER_REVIEW, RECOMMENDED);
+    /** The payout settled: Paid, whether or not the claim has since been closed. */
+    public static final Set<String> SETTLED = Set.of(PAID, CLOSED);
 
     static final String STP = "STP";
     static final String MANUAL_REVIEW = "Manual Review";
@@ -73,24 +81,26 @@ public class ClaimWorkflow {
     static final String FAIL = "Fail";
     static final String SYSTEM_VERIFIER = "System (registered beneficiary)";
 
-    /** Person actions, the states each may start from, and the permission it needs. */
-    private static final Map<String, Transition> TRANSITIONS = new LinkedHashMap<>();
-
-    static {
-        TRANSITIONS.put("assess", new Transition(Set.of(INITIATED, UNDER_REVIEW), RECOMMENDED, "ASSESS_CLAIM"));
-        TRANSITIONS.put("approve", new Transition(Set.of(RECOMMENDED), APPROVED, "APPROVE_CLAIM"));
-        TRANSITIONS.put("reject", new Transition(Set.of(INITIATED, UNDER_REVIEW, RECOMMENDED), REJECTED, "REJECT_CLAIM"));
-        TRANSITIONS.put("pay", new Transition(Set.of(APPROVED, PAYOUT_FAILED), PAYOUT_SENT, "SETTLE_CLAIM"));
-        TRANSITIONS.put("confirm-payout", new Transition(Set.of(PAYOUT_SENT), PAID, "SETTLE_CLAIM"));
-        TRANSITIONS.put("payout-failed", new Transition(Set.of(PAYOUT_SENT), PAYOUT_FAILED, "SETTLE_CLAIM"));
-        // §09: a decision is reopened before anything is paid; a paid claim is corrected by a corrective transaction.
-        TRANSITIONS.put("reopen", new Transition(Set.of(REJECTED, APPROVED), UNDER_REVIEW, "APPROVE_CLAIM"));
-        // §09 / NS-SH05-007: a settled claim is closed once its financial and recovery tasks are done or retained.
-        TRANSITIONS.put("close", new Transition(Set.of(PAID), PAID, "SETTLE_CLAIM"));
-    }
-
-    private record Transition(Set<String> from, String to, String permission) {
-    }
+    /** The claim state machine (§09-CLAIM): person moves with the permission each needs, and system moves. */
+    public static final Lifecycle LIFECYCLE = Lifecycle.of("Claim")
+            .initial(INITIATED)
+            .system("auto-approve", APPROVED, INITIATED)
+            .system("route-to-review", UNDER_REVIEW, INITIATED)
+            .person("assess", "ASSESS_CLAIM", RECOMMENDED, INITIATED, UNDER_REVIEW)
+            .person("approve", "APPROVE_CLAIM", APPROVED, RECOMMENDED)
+            .person("reject", "REJECT_CLAIM", REJECTED, INITIATED, UNDER_REVIEW, RECOMMENDED)
+            .person("pay", "SETTLE_CLAIM", PAYOUT_SENT, APPROVED, PAYOUT_FAILED)
+            .person("confirm-payout", "SETTLE_CLAIM", PAID, PAYOUT_SENT)
+            .person("payout-failed", "SETTLE_CLAIM", PAYOUT_FAILED, PAYOUT_SENT)
+            .system("bank-settled", PAID, PAYOUT_SENT)
+            .system("bank-failed", PAYOUT_FAILED, PAYOUT_SENT)
+            .system("bank-returned", PAYOUT_FAILED, PAID, CLOSED)
+            // A decision is reopened before anything is paid; a paid claim is corrected by a corrective transaction.
+            .person("reopen", "APPROVE_CLAIM", UNDER_REVIEW, REJECTED, APPROVED)
+            // NS-SH05-007: closed once financial and recovery tasks are done or retained; reopened to finish them.
+            .person("close", "SETTLE_CLAIM", CLOSED, PAID)
+            .person("reopen", "APPROVE_CLAIM", PAID, CLOSED)
+            .build();
 
     private static final DateTimeFormatter DISPLAY = DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.ENGLISH);
 
@@ -126,19 +136,20 @@ public class ClaimWorkflow {
         this.outbox = outbox;
     }
 
-    /** Actions legal from `state`, ignoring who is acting. */
+    /** Actions a person may take from `state`, ignoring who is acting. */
     public static List<String> allowedActions(String state) {
-        return TRANSITIONS.entrySet().stream()
-                .filter(entry -> entry.getValue().from().contains(state))
-                .map(Map.Entry::getKey)
-                .toList();
+        return LIFECYCLE.personActionsFrom(state);
     }
 
-    /** Actions legal on this claim now: as {@link #allowedActions(String)}, without close once it is closed. */
+    /** Actions a person may take on this claim now. */
     public static List<String> allowedActions(InsuranceClaim claim) {
-        return allowedActions(claim.getStatus()).stream()
-                .filter(action -> !"close".equals(action) || claim.getClosedAt() == null)
-                .toList();
+        return allowedActions(claim.getStatus());
+    }
+
+    /** Every status write: refused (409) unless the claim lifecycle has the move. */
+    private static void move(InsuranceClaim claim, String to) {
+        LIFECYCLE.check(claim.getRef(), claim.getStatus(), to);
+        claim.setStatus(to);
     }
 
     /** What a claim is lodged with: who claims, what happened, and when. */
@@ -204,7 +215,7 @@ public class ClaimWorkflow {
         claim.setNotificationSource(channel);
         coveredLife(claim, policy, input.coveredLife());
         claim.setPremium(BigDecimal.ZERO);
-        claim.setStatus(INITIATED);
+        move(claim, INITIATED);
         claim.setRecordDate(LocalDate.now().format(DISPLAY));
         claim.setDisplayOrder(0);
         claim.setLodgedAt(LocalDateTime.now());
@@ -239,7 +250,7 @@ public class ClaimWorkflow {
         outbox.publish(Events.CLAIM_REGISTERED, claim.getRef(), registered, actor);
         if (stp == null) {
             claim.verifyPayout(SYSTEM_VERIFIER);
-            claim.setStatus(APPROVED);
+            move(claim, APPROVED);
             claim.setProcessingType(STP);
             ClaimFinancials.Calculation calc = financials.calculation(claim, policy);
             claim.setPayoutAmount(calc.mostPayable());
@@ -254,7 +265,7 @@ public class ClaimWorkflow {
                     trace(claim, calc, calc.mostPayable()));
             outbox.publish(Events.CLAIM_APPROVED, claim.getRef(), decisionPayload(claim, null), WorkflowHistory.SYSTEM);
         } else {
-            claim.setStatus(UNDER_REVIEW);
+            move(claim, UNDER_REVIEW);
             claim.setProcessingType(MANUAL_REVIEW);
             claim.setStpIneligibleReason(allPassed ? ineligible : null);
             history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Review", INITIATED,
@@ -428,7 +439,7 @@ public class ClaimWorkflow {
             claim.verifyPayout(actor.getUsername());
         }
         claim.recommend(actor.getUsername(), actor.getId());
-        claim.setStatus(RECOMMENDED);
+        move(claim, RECOMMENDED);
         // NS-SH05-003: outstanding mandatory evidence does not stop the recommendation, but it is on the record and
         // the approver must give a reason to approve without it.
         List<String> missing = financials.missingMandatory(claim);
@@ -557,7 +568,7 @@ public class ClaimWorkflow {
         financials.reserveLimit(claim, policy, payout, actor.getUsername());
         claim.setPayoutAmount(payout);
         financials.reserve(claim, payout, "Set to the approved payout", actor.getUsername());
-        claim.setStatus(APPROVED);
+        move(claim, APPROVED);
         claim.resolve(actor.getUsername());
         // NS-TXN-003: the payment instruction is created and approved with the decision, in this transaction.
         PayoutInstruction instruction = payouts.authorise(payoutRequest(claim), actor.getUsername());
@@ -610,7 +621,7 @@ public class ClaimWorkflow {
             throw new IllegalArgumentException("Keep the reason to 500 characters.");
         }
         claim.setRejectionReason(text);
-        claim.setStatus(REJECTED);
+        move(claim, REJECTED);
         claim.resolve(actor.getUsername());
         recordDecision(claim, ClaimDecision.REJECTED, text, null, actor.getUsername());
         financials.reserve(claim, BigDecimal.ZERO, "Released: claim rejected", actor.getUsername());
@@ -644,7 +655,7 @@ public class ClaimWorkflow {
         payouts.submit(instruction, actor.getUsername());
         String reference = instruction.getRef();
         claim.sendPayout(reference);
-        claim.setStatus(PAYOUT_SENT);
+        move(claim, PAYOUT_SENT);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(),
                 PAYOUT_FAILED.equals(previous) ? "Payout Resent" : "Payout Sent", previous, PAYOUT_SENT,
                 Money.display(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
@@ -670,6 +681,9 @@ public class ClaimWorkflow {
         if (text.length() > 500) {
             throw new IllegalArgumentException("Keep the reason to 500 characters.");
         }
+        if (CLOSED.equals(previous)) {
+            return reopenClosed(claim, text, actor);
+        }
         // The decision being set aside is kept in full (§09: reopening preserves the prior outcome), with the
         // reopening recorded against it, before the claim row is cleared for the new review.
         ClaimDecision setAside = decisions(ref).stream().filter(d -> d.getSupersededBy() == null)
@@ -685,7 +699,7 @@ public class ClaimWorkflow {
             payouts.cancelUnsent(PAYOUT_SOURCE, ref, "Approval set aside on reopening: " + text, actor.getUsername());
         }
         claim.reopen();
-        claim.setStatus(UNDER_REVIEW);
+        move(claim, UNDER_REVIEW);
         financials.reserve(claim, claim.getAmount(), "Re-established on reopening", actor.getUsername());
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Reopened", previous, UNDER_REVIEW,
                 "Reason: " + text + (setAside == null ? "" : " · setting aside the " + setAside.getDecision().toLowerCase(Locale.ROOT)
@@ -695,9 +709,23 @@ public class ClaimWorkflow {
     }
 
     /**
+     * §09-CLAIM: a closed claim is reopened to Paid so financial or recovery work can continue on it. The payment and
+     * the decision stand; the close and why it is set aside stay in the history.
+     */
+    private InsuranceClaim reopenClosed(InsuranceClaim claim, String reason, AppUser actor) {
+        String closed = (claim.getClosedAt() == null ? "" : " · closed " + claim.getClosedAt().toLocalDate()
+                + (claim.getClosedBy() == null ? "" : " by " + claim.getClosedBy()));
+        claim.reopenClosed();
+        move(claim, PAID);
+        history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Reopened", CLOSED, PAID,
+                "Reason: " + reason + closed + " · the payment and decision stand", actor.getUsername());
+        return claim;
+    }
+
+    /**
      * Closes a settled claim (§09, NS-SH05-007). It needs no case reserve or limit reservation left, and no
      * reinsurance recovery still expected unless {@code retainRecovery} keeps it open apart from the claim, with
-     * {@code note} saying why. The claim stays Paid; it is marked closed and drops out of the open work.
+     * {@code note} saying why. The claim moves to Closed and drops out of the open work.
      */
     @Transactional
     public InsuranceClaim close(String ref, String note, boolean retainRecovery, AppUser actor) {
@@ -735,7 +763,8 @@ public class ClaimWorkflow {
                     + " with a note saying why.");
         }
         claim.close(actor.getUsername(), text.isEmpty() ? null : text);
-        history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Closed", previous, previous,
+        move(claim, CLOSED);
+        history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Closed", previous, CLOSED,
                 "Financial tasks resolved" + (recoveries.isEmpty() ? "" : " · recovery " + String.join(", ", recoveries)
                         + " retained apart from the claim") + (text.isEmpty() ? "" : " · " + text),
                 actor.getUsername());
@@ -835,7 +864,7 @@ public class ClaimWorkflow {
         payouts.byReference(claim.getPayoutReference())
                 .ifPresent(instruction -> payouts.failManually(instruction, text, actor.getUsername()));
         claim.clearPayoutVerification();
-        claim.setStatus(PAYOUT_FAILED);
+        move(claim, PAYOUT_FAILED);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Payout Failed", previous, PAYOUT_FAILED,
                 claim.getPayoutReference() + " · " + text + " · payout details need verifying again",
                 actor.getUsername());
@@ -869,7 +898,7 @@ public class ClaimWorkflow {
         claim.confirmPayout();
         financials.consume(claim, actor);
         financials.reserve(claim, BigDecimal.ZERO, "Released: payout settled", actor);
-        claim.setStatus(PAID);
+        move(claim, PAID);
         history.record(WorkflowHistory.CLAIM, ref, claim.getCustomerName(), "Paid", previous, PAID,
                 Money.display(claim.getPayoutAmount()) + " to " + claim.getPayeeName() + " by "
                         + claim.getPayeePayoutMethod() + " " + mask(claim.getPayeeAccountRef()) + " · " + reference
@@ -912,7 +941,7 @@ public class ClaimWorkflow {
             return;
         }
         claim.clearPayoutVerification();
-        claim.setStatus(PAYOUT_FAILED);
+        move(claim, PAYOUT_FAILED);
         history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Payout Failed", PAYOUT_SENT,
                 PAYOUT_FAILED, instruction.getRef() + " · " + reason + " · payout details need verifying again", actor);
     }
@@ -925,17 +954,19 @@ public class ClaimWorkflow {
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
     public void returnedByRail(PayoutInstruction instruction, String reason, String actor) {
         InsuranceClaim claim = claim(instruction.getSourceRef());
-        if (!PAID.equals(claim.getStatus()) || !instruction.getRef().equals(claim.getPayoutReference())) {
+        if (!SETTLED.contains(claim.getStatus()) || !instruction.getRef().equals(claim.getPayoutReference())) {
             return;
         }
+        String previous = claim.getStatus();
         financials.reverseConsumption(claim, instruction.getRef(), actor);
         financials.reserve(claim, claim.getPayoutAmount(), "Re-established: payout " + instruction.getRef()
                 + " returned by the bank", actor);
         claim.payoutReturned();
         claim.clearPayoutVerification();
-        claim.setStatus(PAYOUT_FAILED);
-        history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Payout Returned", PAID,
-                PAYOUT_FAILED, instruction.getRef() + " returned after settlement · " + reason
+        move(claim, PAYOUT_FAILED);
+        history.record(WorkflowHistory.CLAIM, claim.getRef(), claim.getCustomerName(), "Payout Returned", previous,
+                PAYOUT_FAILED, instruction.getRef() + " returned after settlement" + (CLOSED.equals(previous)
+                        ? " (the claim is no longer closed)" : "") + " · " + reason
                         + " · limit consumption reversed; a new instruction to verified details is needed", actor);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("claimRef", claim.getRef());
@@ -990,10 +1021,10 @@ public class ClaimWorkflow {
 
     /** The guard order of the demo server's state machine: known action, legal from here, then permission. */
     private String guard(InsuranceClaim claim, String action, AppUser actor) {
-        Transition transition = TRANSITIONS.get(action);
         com.nsure.common.ExpectedVersion.check("Claim " + claim.getRef(), claim.getRowVersion());
         String state = claim.getStatus();
-        if (!transition.from().contains(state)) {
+        Lifecycle.Transition transition = LIFECYCLE.find(action, state);
+        if (transition == null || transition.bySystem()) {
             List<String> allowed = allowedActions(state);
             throw new IllegalArgumentException("Cannot " + action + " a claim that is " + state
                     + ". Allowed from here: " + (allowed.isEmpty() ? "nothing" : String.join(", ", allowed)));
@@ -1074,7 +1105,7 @@ public class ClaimWorkflow {
             return false;
         }
         String last = stateOn(policy, event);
-        return last == null || PolicyWorkflow.ACTIVE.equals(last);
+        return last == null || PolicyWorkflow.IN_COVER.contains(last);
     }
 
     /**
@@ -1172,11 +1203,11 @@ public class ClaimWorkflow {
      * checks run at all. Null otherwise (a soft-check override with its reason is the rule working, not a flag).
      */
     static String auditFlag(InsuranceClaim claim) {
-        if (!APPROVED.equals(claim.getStatus()) && !PAID.equals(claim.getStatus())) {
+        if (!APPROVED.equals(claim.getStatus()) && !SETTLED.contains(claim.getStatus())) {
             return null;
         }
         Map<String, String> results = results(claim);
-        String done = PAID.equals(claim.getStatus()) ? "Paid" : "Approved";
+        String done = SETTLED.contains(claim.getStatus()) ? "Paid" : "Approved";
         if (results.values().stream().allMatch(r -> NOT_RUN.equals(r) || "Pending".equals(r))) {
             return done + " without checks";
         }

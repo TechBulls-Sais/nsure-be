@@ -9,6 +9,7 @@ import com.nsure.portfolio.CustomerAccount;
 import com.nsure.portfolio.InsuranceApplication;
 import com.nsure.portfolio.InsuranceClaim;
 import com.nsure.portfolio.InsurancePolicy;
+import com.nsure.portfolio.PolicyWorkflow;
 import com.nsure.security.domain.AppUser;
 import com.nsure.security.exception.NoAuthorizationException;
 import com.nsure.security.service.PlatformSecurityContext;
@@ -595,15 +596,16 @@ public class PlatformService {
                 .contains(p.getStatus())).count();
         Integer claims = jdbc.queryForObject("select count(*) from ins_claim where customer_ref = ?", Integer.class,
                 c.getRef());
-        BigDecimal exposure = policies.stream().filter(p -> "Active".equals(p.getStatus())).map(InsurancePolicy::getAmount)
+        BigDecimal exposure = policies.stream().filter(p -> PolicyWorkflow.IN_COVER.contains(p.getStatus()))
+                .map(InsurancePolicy::getAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         List<String> lines = new ArrayList<>();
         lines.add("Lapse indicator: " + (lapsedOrOff > 0 ? "ELEVATED" : "NORMAL") + " (" + lapsedOrOff + " of "
                 + policies.size() + " policies lapsed, cancelled or without cover).");
         lines.add("Claims indicator: " + (claims != null && claims >= 3 ? "REVIEW" : "NORMAL") + " (" + claims
                 + " claim(s) on record).");
-        lines.add("Exposure: " + Money.text(exposure) + " in force across " + policies.stream().filter(p -> "Active"
-                .equals(p.getStatus())).count() + " active policies.");
+        lines.add("Exposure: " + Money.text(exposure) + " in force across " + policies.stream().filter(p -> PolicyWorkflow.IN_COVER
+                .contains(p.getStatus())).count() + " active policies.");
         lines.add("These are rule-based indicators for a person to weigh. They do not accept, decline or price"
                 + " anything.");
         List<String> rules = List.of("L1 lapse ELEVATED when any policy is lapsed, cancelled or without cover: "

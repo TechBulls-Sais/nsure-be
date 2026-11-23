@@ -43,15 +43,15 @@ public class ReportDrill {
                 new String[] {"cover_start", "Cover start"}, new String[] {"sum_assured", "Sum assured"},
                 new String[] {"premium", "Premium"});
         add("policies.inforce", new Spec("Policies in force", "READ_POLICY", "active_policies", policyColumns,
-                List.of("customer"), f -> f.policies(null), policyCols + " p.status = 'Active' and"));
+                List.of("customer"), f -> f.policies(null), policyCols + " p.status in ('Active', 'Grace') and"));
         add("policies.issued", new Spec("New business issued", "READ_POLICY", "new_business", policyColumns,
                 List.of("customer"), f -> f.policies("p.cover_start_date"), policyCols + " p.cover_start_date is not null and"));
         add("policies.lapsed", new Spec("Lapsed or without cover", "READ_POLICY", "lapsed_policies", policyColumns,
                 List.of("customer"), f -> f.policies(null),
                 policyCols + " p.status in ('Lapsed', 'Active - No Cover') and"));
         add("policies.grace", new Spec("Policies in grace", "READ_POLICY", null, policyColumns, List.of("customer"),
-                f -> f.policies(null), policyCols + " p.status = 'Active' and p.next_premium_due < CURRENT_DATE and"
-                        + " p.grace_period_end >= CURRENT_DATE and"));
+                f -> f.policies(null), policyCols + " (p.status = 'Grace' or (p.status = 'Active' and p.next_premium_due < CURRENT_DATE))"
+                        + " and p.grace_period_end >= CURRENT_DATE and"));
         String claimCols = "select c.record_ref claim, c.policy_ref policy, c.customer_name customer, c.product,"
                 + " c.claim_type, c.status, c.amount claimed, c.payout_amount paid, c.lodged_at, c.paid_at from ins_claim c"
                 + " where";
@@ -64,7 +64,7 @@ public class ReportDrill {
                 f -> f.viaPolicy("c.policy_ref", null), claimCols + " c.status in ('Initiated', 'Under Review',"
                         + " 'Recommended', 'Approved', 'Payout Sent', 'Payout Failed') and"));
         add("claims.paid", new Spec("Claims paid", "READ_CLAIM", "claims_paid", claimColumns, List.of("customer"),
-                f -> f.viaPolicy("c.policy_ref", "c.paid_at"), claimCols + " c.status = 'Paid' and"));
+                f -> f.viaPolicy("c.policy_ref", "c.paid_at"), claimCols + " c.status in ('Paid', 'Closed') and"));
         List<String[]> appColumns = List.of(new String[] {"application", "Application"},
                 new String[] {"customer", "Customer"}, new String[] {"product", "Product"},
                 new String[] {"status", "Status"}, new String[] {"channel", "Channel"},
@@ -142,8 +142,8 @@ public class ReportDrill {
                 new String[] {"date_of_birth", "Date of birth"}, new String[] {"life_type", "Role"},
                 new String[] {"cover", "Cover"}), List.of("customer", "date_of_birth"), f -> f.policies(null),
                 "select p.record_ref policy, lc.full_name customer, lc.date_of_birth, lc.life_type, lc.cover_amount cover"
-                        + " from ins_policy_life_cover lc join ins_policy p on p.id = lc.policy_id where p.status ="
-                        + " 'Active' and lc.life_status = 'ACTIVE' and"));
+                        + " from ins_policy_life_cover lc join ins_policy p on p.id = lc.policy_id where p.status in"
+                        + " ('Active', 'Grace') and lc.life_status = 'ACTIVE' and"));
         add("finance.unposted", new Spec("Unposted events", "READ_FINANCE", null, List.of(
                 new String[] {"event_type", "Event"}, new String[] {"source_ref", "Reference"},
                 new String[] {"amount", "Amount"}, new String[] {"reason", "Reason"},
