@@ -199,7 +199,7 @@ class ApplicationCaptureApiTest {
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("appointment is suspended")));
         mockMvc.perform(json(post("/portfolio/applications"), "admin", body.formatted("AGT-9999")))
                 .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("not on the appointment register")));
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("is not an appointed agent or broker")));
 
         String app = JsonPath.read(mockMvc.perform(json(post("/portfolio/applications"), "admin", body.formatted("int-00001")))
                         .andExpect(status().isOk())
