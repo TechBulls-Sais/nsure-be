@@ -7,8 +7,35 @@ databaseChangeLog:
         - addColumn:
             tableName: ri_recovery
             columns:
-              - column: {name: received_amount, type: 'decimal(15,2)'}
               - column: {name: received_reference, type: varchar(60)}
               - column: {name: received_note, type: varchar(500)}
               - column: {name: received_by, type: varchar(100)}
               - column: {name: received_at, type: datetime}
+  # received_amount is also added by 080-reinsurance-settlement (from main, where it is NOT NULL DEFAULT 0). It is added
+  # here only where 080 did not add it, and is nullable either way: empty means nothing received yet.
+  - changeSet:
+      id: 087-reinsurance-recovery-received-amount
+      author: nsure
+      preConditions:
+        - onFail: MARK_RAN
+        - not:
+            - columnExists: {tableName: ri_recovery, columnName: received_amount}
+      changes:
+        - addColumn:
+            tableName: ri_recovery
+            columns:
+              - column: {name: received_amount, type: 'decimal(15,2)'}
+  - changeSet:
+      id: 087-reinsurance-recovery-received-amount-nullable
+      author: nsure
+      changes:
+        - dropDefaultValue:
+            tableName: ri_recovery
+            columnName: received_amount
+            columnDataType: decimal(15,2)
+        - dropNotNullConstraint:
+            tableName: ri_recovery
+            columnName: received_amount
+            columnDataType: decimal(15,2)
+        - sql:
+            sql: UPDATE ri_recovery SET received_amount = NULL WHERE received_amount = 0

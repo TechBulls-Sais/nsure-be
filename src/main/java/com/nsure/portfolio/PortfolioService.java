@@ -942,6 +942,8 @@ public class PortfolioService {
             for (PolicyWorkflow.BeneficiaryInput nominated : capture.beneficiaries(application)) {
                 policyWorkflow.addBeneficiary(row.getRef(), nominated, staff.getUsername());
             }
+            // NS-SH06-003: an agent or broker's sale joins their portfolio from its issue date.
+            capture.assignSale(application, row.getRef(), staff.getUsername());
             String before = application.getStatus();
             application.setStatus("Issued");
             logApplication(application, "Issued", before, "Policy offer " + row.getRef() + " awaits its first premium",

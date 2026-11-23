@@ -39,24 +39,33 @@ public class DeclarationService {
     private final ControlService controls;
     private final WorkflowHistory history;
     private final boolean exposeCode;
+    private final boolean demoCode;
 
     public DeclarationService(EntityManager em, ControlService controls, WorkflowHistory history,
-            @Value("${nsure.declaration.expose-otp:true}") boolean exposeCode) {
+            @Value("${nsure.declaration.expose-otp:true}") boolean exposeCode,
+            org.springframework.core.env.Environment environment) {
         this.em = em;
         this.controls = controls;
         this.history = history;
-        this.exposeCode = exposeCode;
+        // A demo installation uses the same fixed code as sign-in and sign-up; production never does.
+        this.demoCode = com.nsure.security.otp.OneTimeCodes.demoCodeIn(environment);
+        this.exposeCode = exposeCode || demoCode;
     }
 
     @Transactional(readOnly = true)
     public LockState lockState(CustomerAccount account) {
         DeclarationLock lock = em.find(DeclarationLock.class, account.getRef());
         int max = maxAttempts();
+        // The purchases this customer has already declared, so the portal does not ask again on another sign-in.
+        List<String> declared = em.createQuery("select distinct d.policyRef from DeclarationConsent d"
+                        + " where d.customerRef = :customer", String.class)
+                .setParameter("customer", account.getRef())
+                .getResultList();
         if (lock == null) {
-            return new LockState(false, null, max);
+            return new LockState(false, null, max, declared);
         }
         return new LockState(lock.isLocked(), lock.isLocked() ? lock.getLockedUntil() : null,
-                lock.isLocked() ? 0 : max - lock.getFailedAttempts());
+                lock.isLocked() ? 0 : max - lock.getFailedAttempts(), declared);
     }
 
     /**
@@ -73,7 +82,8 @@ public class DeclarationService {
         for (DeclarationOtp open : openCodes(account, policy)) {
             open.use();
         }
-        String code = String.format("%06d", RANDOM.nextInt(1_000_000));
+        String code = demoCode ? com.nsure.security.otp.OneTimeCodes.DEMO_CODE
+                : String.format("%06d", RANDOM.nextInt(1_000_000));
         LocalDateTime expires = LocalDateTime.now().plusSeconds(OTP_SECONDS);
         em.persist(new DeclarationOtp(account.getRef(), policy.getRef(), hash(code), expires));
         return new OtpSent(mask(account.getEmail()), expires, exposeCode ? code : null);
@@ -204,7 +214,7 @@ public class DeclarationService {
         return parts[0].charAt(0) + "***@" + parts[1];
     }
 
-    public record LockState(boolean locked, LocalDateTime lockedUntil, int attemptsLeft) {
+    public record LockState(boolean locked, LocalDateTime lockedUntil, int attemptsLeft, List<String> declaredPolicies) {
     }
 
     /** {@code devCode} is set only outside production, standing in for the SMS/e-mail delivery. */

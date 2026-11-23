@@ -41,18 +41,34 @@ public class ApplicationCapture {
     private final com.fasterxml.jackson.databind.ObjectMapper mapper;
     /** Payer/proposer relationships allowed besides the relationship types (demo default; NS-IL01-003). */
     private final List<String> extraRelationships;
+    private final org.springframework.beans.factory.ObjectProvider<com.nsure.distribution.DistributionService> distribution;
 
     public ApplicationCapture(EntityManager em, Outbox outbox, com.nsure.distribution.SalesAuthority sales,
             ProductTerms terms, com.fasterxml.jackson.databind.ObjectMapper mapper,
             @org.springframework.beans.factory.annotation.Value("${nsure.new-business.extra-payer-relationships:Employer,Guardian}")
-            String extraRelationships) {
+            String extraRelationships,
+            org.springframework.beans.factory.ObjectProvider<com.nsure.distribution.DistributionService> distribution) {
         this.em = em;
+        this.distribution = distribution;
         this.outbox = outbox;
         this.sales = sales;
         this.terms = terms;
         this.mapper = mapper;
         this.extraRelationships = java.util.Arrays.stream(extraRelationships.split(",")).map(String::trim)
                 .filter(v -> !v.isEmpty()).toList();
+    }
+
+    private boolean soldByIntermediary(InsuranceApplication app) {
+        return app.getChannel() != null && Set.of("AGENT", "BROKER").contains(app.getChannel())
+                && !blank(app.getIntermediaryCode());
+    }
+
+    /** NS-SH06-003: the policy issued from an agent or broker's application is assigned to them from today. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void assignSale(InsuranceApplication app, String policyRef, String actor) {
+        if (soldByIntermediary(app)) {
+            distribution.getObject().assignSale(policyRef, app.getIntermediaryCode(), java.time.LocalDate.now(), actor);
+        }
     }
 
     /** Copies whatever the body carries onto the application; answers are stored once it has a reference. */
@@ -121,7 +137,8 @@ public class ApplicationCapture {
                 throw new IllegalArgumentException("Channel must be one of " + String.join(", ", CHANNELS) + ".");
             }
             app.setChannel(channel);
-            app.setIntermediaryCode(clip(text(body, "intermediaryCode"), 30));
+            String code = clip(text(body, "intermediaryCode"), 30);
+            app.setIntermediaryCode(code == null ? null : code.trim().toUpperCase(Locale.ROOT));
         }
         if (body.has("occupation")) {
             app.setOccupation(clip(text(body, "occupation"), 100));
@@ -284,6 +301,12 @@ public class ApplicationCapture {
     public void requireIssuable(InsuranceApplication app, CustomerAccount customer) {
         if (DRAFT.equals(app.getStatus())) {
             throw new IllegalArgumentException(app.getRef() + " is a draft. Complete and submit it before issue.");
+        }
+        if (soldByIntermediary(app)) {
+            String why = distribution.getObject().whyCannotSell(app.getIntermediaryCode(), java.time.LocalDate.now());
+            if (why != null) {
+                throw new IllegalArgumentException(app.getRef() + " cannot be issued: " + why);
+            }
         }
         List<String> missing = missingEvidence(app, customer);
         if (!missing.isEmpty()) {

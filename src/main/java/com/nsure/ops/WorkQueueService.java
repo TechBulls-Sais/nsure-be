@@ -190,6 +190,12 @@ public class WorkQueueService {
             source("TREATY", "reinsurance", "select record_ref as ref, name as subject, reinsurer as detail, created_at"
                     + " as opened, status, created_by as maker from ri_treaty where status = 'DRAFT'",
                     List.of("APPROVE_TREATY"), Map.of("DRAFT", "Approve the treaty")),
+            // NS-SH07-006: recoveries still due from the reinsurer, disputed, or with a write-off waiting for approval.
+            source("RI_RECOVERY", "reinsurance", "select record_ref as ref, claim_ref as subject, status as detail,"
+                    + " created_at as opened, status, write_off_requested_by as maker from ri_recovery"
+                    + " where status in ('EXPECTED', 'DISPUTED', 'WRITE_OFF_PENDING')",
+                    List.of("MANAGE_REINSURANCE", "APPROVE_TREATY"), Map.of("EXPECTED", "Record the reinsurer's payment",
+                            "DISPUTED", "Resolve the dispute", "WRITE_OFF_PENDING", "Approve or reject the write-off")),
             source("TEMPLATE", "communications", "select id as ref, code as subject, channel as detail, created_at as"
                     + " opened, status, created_by as maker from com_template where status = 'DRAFT'",
                     List.of("APPROVE_TEMPLATE"), Map.of("DRAFT", "Approve the template version")),

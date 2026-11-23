@@ -39,6 +39,9 @@ class DeclarationApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.accuracy").value(true))
                 .andExpect(jsonPath("$.falseInformation").value(true));
+        // A later sign-in (another device) is told the purchase is already declared.
+        mockMvc.perform(get("/portfolio/shop/declaration").with(signedIn("bontle", "password1")))
+                .andExpect(jsonPath("$.declaredPolicies[0]").value(policy));
         // The consent log is evidence: audit.read only (spec 04 §7).
         mockMvc.perform(get("/portfolio/policies/" + policy + "/declarations").with(signedIn("compliance", "password")))
                 .andExpect(status().isOk())

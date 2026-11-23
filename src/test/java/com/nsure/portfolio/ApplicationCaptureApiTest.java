@@ -187,6 +187,36 @@ class ApplicationCaptureApiTest {
                 .andExpect(jsonPath("$.status").value("Pending Payment"));
     }
 
+    @Test
+    void anAgentsSaleIsAssignedToThemAtIssueAndASuspendedAgentCannotSell() throws Exception {
+        String customer = customer("Kefilwe Agent", "+267 71 700 003");
+        String body = "{\"customerRef\":\"" + customer + "\",\"product\":\"Term Life\",\"tier\":\"Silver\","
+                + "\"declarationAccepted\":true,\"disclosures\":{\"TOBACCO\":\"NO\",\"TREATMENT\":\"NO\"},"
+                + "\"channel\":\"AGENT\",\"intermediaryCode\":\"%s\"}";
+        // AT-SH06-02: INT-00003's appointment is suspended, and an unknown code is not an appointment at all.
+        mockMvc.perform(json(post("/portfolio/applications"), "admin", body.formatted("INT-00003")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("appointment is suspended")));
+        mockMvc.perform(json(post("/portfolio/applications"), "admin", body.formatted("AGT-9999")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("not on the appointment register")));
+
+        String app = JsonPath.read(mockMvc.perform(json(post("/portfolio/applications"), "admin", body.formatted("int-00001")))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.status").value("Ready to issue"))
+                        .andReturn().getResponse().getContentAsString(), "$.id");
+        String policy = JsonPath.read(mockMvc.perform(json(post("/portfolio/policies"), "admin", "{\"applicationRef\":\"" + app
+                                + "\",\"customerRef\":\"" + customer + "\",\"product\":\"Term Life\",\"tier\":\"Silver\"}"))
+                        .andExpect(status().isOk())
+                        .andReturn().getResponse().getContentAsString(), "$.id");
+        // NS-SH06-003: the policy is in the agent's portfolio from its issue date, so its premium earns commission.
+        mockMvc.perform(get("/distribution/assignments").param("policyRef", policy).with(signedIn("admin", "password")))
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].intermediaryRef").value("INT-00001"))
+                .andExpect(jsonPath("$[0].effectiveFrom").value(java.time.LocalDate.now().toString()))
+                .andExpect(jsonPath("$[0].open").value(true));
+    }
+
     private String customer(String name, String phone) throws Exception {
         String ref = JsonPath.read(mockMvc.perform(json(post("/portfolio/customers"), "admin", "{\"name\":\"" + name
                                 + "\",\"email\":\"" + phone.replaceAll("\\D", "") + "@example.com\",\"phone\":\"" + phone
