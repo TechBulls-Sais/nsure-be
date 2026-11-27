@@ -352,16 +352,20 @@ public class OpsService {
         return workflow();
     }
 
-    /** Adds working minutes to a start time, skipping nights, non-working days and holidays. */
+    /**
+     * Adds working minutes to a start time, skipping nights, non-working days and holidays. The remainder is kept as an
+     * exact duration: counting it in whole minutes would leave a start time's seconds (11:32:52 → 16:59:52) as a
+     * sub-minute gap before the close that never gets used, so the due time would stop at the end of the first day.
+     */
     public static LocalDateTime addWorkingMinutes(LocalDateTime start, long minutes, Map<String, Object> calendar) {
         int open = (Integer) calendar.get("workStartHour");
         int close = (Integer) calendar.get("workEndHour");
         Set<DayOfWeek> days = workingDays(calendar);
         Set<String> holidays = holidays(calendar);
         LocalDateTime t = start;
-        long left = minutes;
+        java.time.Duration left = java.time.Duration.ofMinutes(minutes);
         int guard = 0;
-        while (left > 0 && guard++ < 5000) {
+        while (left.isPositive() && guard++ < 5000) {
             LocalDate day = t.toLocalDate();
             boolean working = days.contains(day.getDayOfWeek()) && !holidays.contains(day.toString());
             LocalDateTime dayOpen = day.atTime(open, 0);
@@ -373,9 +377,10 @@ public class OpsService {
             if (t.isBefore(dayOpen)) {
                 t = dayOpen;
             }
-            long used = Math.min(java.time.Duration.between(t, dayClose).toMinutes(), left);
-            t = t.plusMinutes(used);
-            left -= used;
+            java.time.Duration available = java.time.Duration.between(t, dayClose);
+            java.time.Duration used = available.compareTo(left) < 0 ? available : left;
+            t = t.plus(used);
+            left = left.minus(used);
         }
         return t;
     }

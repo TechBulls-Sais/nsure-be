@@ -99,5 +99,10 @@ class OpsApiTest {
         // Friday 15:00 + 4 working hours = Monday 10:00.
         java.time.LocalDateTime due = OpsService.addWorkingHours(java.time.LocalDateTime.of(2026, 11, 13, 15, 0), 4, calendar);
         org.assertj.core.api.Assertions.assertThat(due).isEqualTo(java.time.LocalDateTime.of(2026, 11, 16, 10, 0));
+        // A start with seconds in working hours carries on past the first close: Monday 11:32:52 + 72 working hours
+        // (8 days of 9) = Thursday of the next week at 11:32:52, not about 17:00 the same day.
+        java.time.LocalDateTime opened = java.time.LocalDateTime.of(2026, 11, 23, 11, 32, 52, 935_911_000);
+        org.assertj.core.api.Assertions.assertThat(OpsService.addWorkingHours(opened, 72, calendar))
+                .isEqualTo(java.time.LocalDateTime.of(2026, 12, 3, 11, 32, 52, 935_911_000));
     }
 }

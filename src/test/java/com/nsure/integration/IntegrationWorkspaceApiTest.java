@@ -145,7 +145,8 @@ class IntegrationWorkspaceApiTest {
         Long delivery = deliveryId(eventId, "reinsurer.bordereau-feed");
         for (int i = 0; i < 5; i++) {
             jdbc.update("update int_event_delivery set next_attempt_at = ? where id = ?",
-                    java.time.LocalDateTime.now().minusSeconds(1), delivery);
+                    // In UTC, as Hibernate stores it (hibernate.jdbc.time_zone), so it is due on any machine's zone.
+                    java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(1), delivery);
             dispatcher.dispatch();
         }
         assertThat(jdbc.queryForObject("select status from int_event_delivery where id = ?", String.class, delivery))

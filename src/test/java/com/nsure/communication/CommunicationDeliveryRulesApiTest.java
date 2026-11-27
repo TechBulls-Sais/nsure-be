@@ -354,8 +354,10 @@ class CommunicationDeliveryRulesApiTest {
 
     /** Ends the message's backoff wait, as if the time had passed. */
     private void due(String messageRef) {
+        // Written past Hibernate, so in the UTC it stores times in (hibernate.jdbc.time_zone); the JVM's local time
+        // would land hours in the future on a machine outside UTC and the message would never be due.
         jdbc.update("update com_message set next_attempt_at = ? where record_ref = ?",
-                Timestamp.valueOf(LocalDateTime.now().minusSeconds(1)), messageRef);
+                Timestamp.valueOf(LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(1)), messageRef);
     }
 
     private void handle(String type, String aggregate, Map<String, Object> payload) {
